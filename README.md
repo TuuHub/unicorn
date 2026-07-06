@@ -1,14 +1,14 @@
-# unicron
+# unicorn
 
-> university + cron. A self-deployed campus toolkit that aggregates your courses across platforms, tracks every assessment, and lets your own AI agent query it — all on a single Cloudflare Worker, on your own free account.
+> One creature that watches your whole campus. A self-deployed toolkit that aggregates your courses across platforms, tracks every assessment, and lets your own AI agent query it — all on a single Cloudflare Worker, on your own free account.
 
 **Status:** design phase. See [docs/ADR.md](docs/ADR.md) for the architecture decisions and [docs/GLOSSARY.md](docs/GLOSSARY.md) for the vocabulary. No runtime code yet.
 
 ## What it is
 
-unicron pulls from your campus platforms (Ed Discussion and Moodle first), normalizes everything into a unified Course / Assessment / Event model, detects changes (new posts, shifted deadlines, status updates), and exposes it three ways:
+unicorn pulls from your campus platforms (Ed Discussion and Moodle first), normalizes everything into a unified Course / Assessment / Event model, detects changes (new posts, shifted deadlines, status updates), and exposes it three ways:
 
-- **MCP server** *(v1)* — connect from your own Claude / ChatGPT client; your agent does the reasoning, unicron serves the data.
+- **MCP server** *(v1)* — connect from your own Claude / ChatGPT client; your agent does the reasoning, unicorn serves the data.
 - **Web dashboard** *(later)* — read-only assessment timeline + settings.
 - **IM bot** *(later)* — proactive push (daily digest, imminent deadlines) via Telegram / Discord / email.
 
