@@ -1,0 +1,25 @@
+# Glossary — Campus Toolkit
+
+Terms as we use them in this project. When code and this file disagree, fix one of them.
+
+- **Campus Toolkit** — The aggregating project. A Cloudflare-deployed hub that ingests data from Ed Discussion and Moodle, tracks assessments, and exposes it to the user's own LLM client over MCP. Distinct from the two Python CLIs it draws on.
+- **edstem-cli / moodle-cli** — The existing sibling Python CLIs. They stay independent and keep serving the local/terminal/agent use case. The Toolkit does **not** import them; it reimplements the small subset of API calls it needs (see ADR-0002).
+- **Worker** — A single Cloudflare Worker (TypeScript). Owns cron ingestion, D1 storage, the MCP endpoint, and a small password-protected settings page. The whole product is this one deployable.
+- **Runner (local)** — *Rejected.* An earlier idea: a long-running process on the user's machine pulling LLM tasks to run against a locally-logged-in Claude/Codex. Superseded — the Worker calls subscription quota directly via custom AI SDK providers (ADR-0007), so no local process is needed. Kept here only as a historical fallback note.
+- **Ingestion** — The cron-driven pull: fetch from Ed (token auth, direct from Worker) and Moodle (session cookie, see ADR-0003), normalize, diff against last snapshot, write Events.
+- **BYOK** — Bring Your Own Key. User supplies an Anthropic/OpenAI/OpenRouter/DeepSeek/Google API key, used for server-side LLM work when a subscription token isn't available. Implemented via official Vercel AI SDK providers — free breadth, zero maintenance. (ADR-0007)
+- **Subscription token** — An OAuth/session credential from a Claude or Codex *subscription* (not an API key), stored in Worker secrets so cron jobs can call the model on the user's plan quota. Higher reward, higher fragility — see ADR-0004 risk register.
+- **AI SDK interface** — The Vercel AI SDK (`generateText` etc.). *All* job code talks only to this; providers are swappable instances behind it. Workers-native. (ADR-0007)
+- **Custom subscription provider** — A self-written AI SDK provider (`claude-subscription`, `codex-subscription`) that does OAuth refresh + official-client-mimicking fetch to use subscription quota. Protocol reference is OpenClaw; code is ours and Workers-compatible. The fragile mimicry is quarantined here — when a provider changes fingerprints, only this package changes. Community `ai-sdk-provider-claude-code`-style packages don't work: they spawn a CLI subprocess, which Workers lack. (ADR-0007)
+- **Degradation chain** — Subscription token → BYOK → skip LLM step + notify. Mechanically, this is provider-instance swapping behind the AI SDK interface. The data pipeline never fails because of an LLM outage; only the LLM step is skipped. (ADR-0004, ADR-0007)
+- **Job registry** — The open catalog of server-side agent jobs (daily digest, Ed↔assessment association, real-time post triage, study planning, …). Each entry has an enable toggle, its own schedule, a credential preference, and metered usage. None are hardcoded-on; users select. (ADR-0008)
+- **Hard cap** — User-set monthly ceiling (tokens or $). On breach, LLM jobs auto-pause + notify; ingestion keeps running. Backed by real metered usage from API responses, not static estimates. (ADR-0008)
+- **notifier** — Pluggable outbound-notification interface with built-in Telegram / Discord / email adapters. User supplies their own webhook/token. The IM-bot surface reuses it. (ADR-0010)
+- **Source adapter** — The `fetch → normalize to Course/Assessment/Event` interface every platform implements. v1 ships Ed + Moodle; Canvas/Gradescope/etc. are one adapter each, kernel unchanged. (ADR-0012)
+- **hot / archived** — Retention states. Current-term data is hot (queried + cron-pulled); past-term data is `archived` (queryable, excluded from pulls). (ADR-0011)
+- **Course (unified)** — One row in D1 representing a single real course, even when it appears in both Ed and Moodle. The Ed↔Moodle link is proposed by the user's MCP agent and confirmed by the user (ADR-0005).
+- **Assessment** — A unified tracked entity: name, course, due date, submission/completion status, `source` field. Primary source is Moodle timeline; Ed posts annotate it.
+- **Event** — A timeline row recording a *change*: new assessment, due-date shift, status change, or a relevant new Ed post. What "change detection" produces and what the user queries against.
+- **keep-alive** — A cron tick that pings Moodle to keep a once-logged-in session cookie alive, so "re-login" becomes a rare (weeks-apart) event rather than a daily chore. (ADR-0003)
+- **MCP endpoint** — The v1 face of the product. The Worker exposes an MCP server; the user connects from Claude Desktop/Code or ChatGPT. This is how "Claude or Codex account access" is satisfied for *interactive* use — the user's own client does the reasoning, so the Worker needs no LLM for querying.
+- **Settings page** — A minimal, password-protected HTML page served by the Worker for entering Ed token, per-source pull frequency, and subscription/BYOK credentials. First-run configuration path for non-technical users. (ADR-0006)
