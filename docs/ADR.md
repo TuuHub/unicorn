@@ -321,5 +321,32 @@ All three read/write the same tables; no surface owns business logic.
 
 **Consequences.**
 - Openness and usefulness stop fighting: vocabulary is open, behavior attaches to capabilities.
-- Adding a genuinely new *capability* (not just a new facet) is the only thing that touches platform code — the rare, deliberate extension point.
-- The capability set is the real kernel API surface to design carefully up front.
+- **Refined by ADR-0020:** capabilities are *not* a fixed built-in list either. A capability is a dynamic declaration binding a facet field onto one of a small fixed set of **behavior primitives**. The finite, carefully-designed kernel surface is the *primitive* set, not a capability list — capabilities stay unbounded and dynamic.
+
+---
+
+## ADR-0020 — Behavior primitives: the finite kernel surface; capabilities bind to them dynamically
+
+**Status:** Accepted (refines ADR-0019)
+
+**Context.** ADR-0019 said "the capability set is the kernel API surface to design up front." That conflated two layers. A challenge surfaced it: why can't capabilities be whatever plugins declare, dynamically? They can. The distinction:
+- **Declaration layer** — fully dynamic. A plugin declares any facet with any capabilities/fields; zero kernel change.
+- **Behavior layer** — needs code. For the platform to *do* something (remind before a time, treat a change as an event, render a calendar), something must know what a field means.
+
+The insight: the behavior layer can also be dynamic, if the kernel ships a small set of **generic behavior primitives** and a capability is a *binding* of a facet field onto a primitive — instead of one hardcoded handler per capability.
+
+**Decision.** The kernel ships **five behavior primitives**. A capability is a dynamic declaration mapping facet field(s) onto a primitive. `has-deadline`, `has-exam-date`, `has-event-start` are three declarations against the *one* temporal primitive — not three handlers.
+
+| Primitive | A field is… | Platform behavior unlocked | campus use |
+|-----------|-------------|----------------------------|------------|
+| **temporal** | a point in time | offset reminders, change-is-event, timeline/calendar render | deadlines, calendar |
+| **state** | a value in a state set | transition-is-event, notify-on-transition-to-X | submission status, read/unread (2-state) |
+| **relation** | a reference to another item | threading, grouping | forum threads, course membership |
+| **actor** | a person/entity | filter/group by actor | author (staff vs peer) |
+| **scalar** | a number | threshold alerts, trend | grade, unread count, price |
+
+**Consequences.**
+- The finite, deliberately-designed kernel surface is **these five primitives** — few, irreducible, cross-domain. Capabilities above them are unbounded and dynamic.
+- A new domain capability (e.g. `has-grade`) is usually just a declaration onto `scalar` + a threshold config — no kernel change. Kernel code changes only if a genuinely new *primitive* is ever needed (rare by construction).
+- Notification content is generic templating or AI-generated; reminder cadence is user-configurable per facet — none of it is hardcoded per capability.
+- This is the concrete "AI-native lets the schema stay loose" mechanism: primitives give structured behavior where fields bind; the LLM covers everything unbound at read time.
