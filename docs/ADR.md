@@ -1,4 +1,4 @@
-# Architecture Decision Records — Campus Toolkit
+# Architecture Decision Records — unicorn
 
 Status legend: **Accepted** = decided in the grilling session on 2026-07-06.
 
@@ -224,3 +224,22 @@ All three read/write the same tables; no surface owns business logic.
 - **Quarantine for the most sensitive (subscription tokens, Moodle password):** isolated in dedicated secrets and inside the dedicated provider packages (ADR-0007). Never logged, never echoed back, settings page is **write-only** for these fields (accepts input, never renders the stored value).
 
 **Consequences.** Leakage surface (logs, error responses, settings-page reads) is closed for the high-value credentials. Baseline stays simple.
+
+---
+
+## ADR-0014 — Repository structure: single flat repo, no workspaces
+
+**Status:** Accepted
+
+**Context.** unicorn has several conceptual parts (kernel, source adapters, surfaces, custom subscription providers). Question: split into multiple repos, a workspace monorepo, or one flat package.
+
+**Decision.** One flat repo, `TuuHub/unicorn`, single package. Kernel, adapters, and surfaces are folders, not packages. No pnpm/npm workspaces yet.
+
+**Rationale.**
+- The product is **one Cloudflare Worker, one deployable** (ADR-0001, ADR-0009). Dashboard, settings page, and IM-bot webhook are routes/handlers in the same Worker, not separate services. Multi-repo for a single deployable is pure coordination overhead for a solo dev — cross-repo version alignment, cross-repo PRs, duplicated CI — with no payoff.
+- Source adapters normalize to unicorn's own Course/Assessment/Event model (ADR-0005); they have no reuse value outside unicorn, so they don't justify package boundaries.
+- The **only** genuinely independently-reusable unit is the custom subscription providers (`claude-subscription`, `codex-subscription`, ADR-0007) — general AI SDK providers useful to anyone. When they prove out, they should become their **own top-level repos** (not sub-packages of unicorn), extractable via `git subtree split`. Pre-splitting now is paying interest on a future hypothesis.
+
+**Consequences.**
+- Simplest possible structure until a real second publishable unit exists.
+- Workspaces get adopted only when/if the subscription providers are extracted — the moment that need is real will be obvious.
