@@ -1,9 +1,16 @@
-# Glossary — Campus Toolkit
+# Glossary — unicorn
 
 Terms as we use them in this project. When code and this file disagree, fix one of them.
 
-- **Campus Toolkit** — The aggregating project. A Cloudflare-deployed hub that ingests data from Ed Discussion and Moodle, tracks assessments, and exposes it to the user's own LLM client over MCP. Distinct from the two Python CLIs it draws on.
-- **edstem-cli / moodle-cli** — The existing sibling Python CLIs. They stay independent and keep serving the local/terminal/agent use case. The Toolkit does **not** import them; it reimplements the small subset of API calls it needs (see ADR-0002).
+- **unicorn** — An AI-native information aggregation platform, Cloudflare-deployed. Plugins ingest from arbitrary sources into a generic Item + facet model; the kernel tracks, detects changes, and exposes everything to the user's own LLM client over MCP. Campus (Ed + Moodle) is the flagship plugin. (ADR-0015)
+- **Platform / kernel** — The source-agnostic core: cron ingestion, D1 storage, the Item + facet model, change detection, job registry, notifier, retention. Everything a plugin can't touch. The product *is* the kernel; plugins bring sources. (ADR-0015)
+- **Plugin** — A source integration. Declares identity, auth, fetch, mapping, and which facets it emits — **ingestion only**, no downstream logic (ADR-0018). Two tiers: declarative manifest (Tier 1) or in-repo code (Tier 2). (ADR-0017)
+- **Campus plugin** — The flagship Tier-2 code plugin bundling Ed Discussion + Moodle. Dogfoods the kernel and keeps a real pain point (assessment tracking) steering the design. Reimplements the API subset it needs in TS; does **not** import the sibling Python CLIs (ADR-0002).
+- **Item** — The generic record every plugin produces: `id, source, kind, title, timestamp, url, body, raw`. The universal base of the data model. (ADR-0016)
+- **Facet** — An optional typed structure a plugin attaches to an Item (`deadline`, `thread`, `grade`, …). Facets are the **contract** between plugins and platform features. Open vocabulary. (ADR-0016, ADR-0018)
+- **Capability** — A standard trait a facet declares (`has-deadline` with `due_at`, `has-unread`, `has-thread`, …). Platform behavior (tracking, notification, change detection) binds to *capabilities*, not facet names — so any facet declaring `has-deadline` inherits ddl reminders regardless of what it's called. Adding a new capability is the one deliberate extension point that touches kernel code. (ADR-0019)
+- **Tier 1 / Tier 2 plugin** — Tier 1 = declarative manifest (source + auth + fetch + field→Item/facet mapping) run by a generic engine; an AI agent generates the mapping from a sample response. Tier 2 = in-repo TS implementing the Plugin interface, for sources needing real logic (OAuth, sesskey, scraping). Campus is Tier 2. (ADR-0017)
+- **edstem-cli / moodle-cli** — The existing sibling Python CLIs. They stay independent and keep serving the local/terminal/agent use case. The campus plugin does **not** import them; it reimplements the small subset of API calls it needs (see ADR-0002).
 - **Worker** — A single Cloudflare Worker (TypeScript). Owns cron ingestion, D1 storage, the MCP endpoint, and a small password-protected settings page. The whole product is this one deployable.
 - **Runner (local)** — *Rejected.* An earlier idea: a long-running process on the user's machine pulling LLM tasks to run against a locally-logged-in Claude/Codex. Superseded — the Worker calls subscription quota directly via custom AI SDK providers (ADR-0007), so no local process is needed. Kept here only as a historical fallback note.
 - **Ingestion** — The cron-driven pull: fetch from Ed (token auth, direct from Worker) and Moodle (session cookie, see ADR-0003), normalize, diff against last snapshot, write Events.

@@ -129,7 +129,7 @@ Refresh failure or a rejected token auto-falls-back to a user-configured API key
 
 ## ADR-0005 — Data model: unified Course / Assessment / Event; agent-proposed cross-platform matching
 
-**Status:** Accepted
+**Status:** Accepted, then **generalized by ADR-0016**. Course/Assessment/Event are no longer the universal schema — they are facets the campus plugin declares over the generic Item model. The cross-platform matching decision below still holds *within the campus plugin*.
 
 **Context.** Multi-course, multi-platform (Ed + Moodle). Same real course appears in both with different names/ids ("COMP1234" vs "Intro to Programming").
 
@@ -203,7 +203,7 @@ All three read/write the same tables; no surface owns business logic.
 
 ## ADR-0012 — Platform extensibility: source-adapter abstraction, two sources first
 
-**Status:** Accepted
+**Status:** Accepted, then **subsumed by ADR-0017/0018**. The source-adapter idea grew into the full two-tier plugin model; "adapter" ≈ a Tier-2 code plugin. Kept for history.
 
 **Context.** "Campus toolkit" implies aggregation beyond Ed + Moodle (Canvas, Gradescope, Blackboard, email, timetables…).
 
@@ -243,3 +243,83 @@ All three read/write the same tables; no surface owns business logic.
 **Consequences.**
 - Simplest possible structure until a real second publishable unit exists.
 - Workspaces get adopted only when/if the subscription providers are extracted — the moment that need is real will be obvious.
+
+---
+
+## ADR-0015 — Product reframe: AI-native information aggregation platform; campus is the flagship plugin
+
+**Status:** Accepted (reframes ADR-0006 scope; campus remains v1's sharp edge)
+
+**Context.** The campus toolkit is really one instance of a broader thing: an AI-native information aggregation platform where sources arrive as pluggable plugins. The design center of gravity is the plugin system — "how to accept everything" (海纳百川).
+
+**Decision.** unicorn is a **plugin platform first**. Ed/Moodle become the **official flagship plugin bundle** used to dogfood the kernel. v1 still ships the campus plugin working end-to-end (keeps a real pain point pulling on the design), but the kernel API is designed for *arbitrary sources* from line one.
+
+**Rationale.** "Aggregate all information" is a gravity well that kills side projects — no concrete pain to steer design. The live version of the reframe is "platform is the product, campus is the proof": build a general ingestion kernel, prove it against a real chaos (assessment tracking). "AI-native" is not marketing — it's the mechanism (below) that lets the schema stay loose because an LLM supplies structure at read time, so the platform can sit further toward "generic" than a traditional aggregator could.
+
+**Consequences.**
+- ADR-0005 (rigid unified Course/Assessment/Event) is generalized by ADR-0016; those types become facets the campus plugin declares, not the universal schema.
+- ADR-0012 (source-adapter) is subsumed by the fuller plugin model (ADR-0017/0018).
+- Scope discipline: v1 = kernel + campus plugin, not "everything." Breadth comes from plugins added later, not from v1 boiling the ocean.
+
+---
+
+## ADR-0016 — Universal data model: hybrid generic Item + optional typed facets
+
+**Status:** Accepted (generalizes ADR-0005)
+
+**Context.** A platform that accepts everything can't force all sources into a rigid schema (Course/Assessment/Event fits campus, not email/RSS/GitHub/etc.). But a fully generic blob makes the platform unable to *do* anything — tracking, change detection, and cross-source reasoning need structure. The spectrum's tension: **more generic = less the platform can do for you.**
+
+**Decision.** Hybrid. Every record is a **generic Item** (`id, source, kind, title, timestamp, url, body, raw`). Plugins may attach **optional typed facets** (e.g. `deadline`, `thread`, `grade`). Structured features light up when a facet is present; records with no facet still store fine. The LLM supplies missing structure at read time (the AI-native lever from ADR-0015).
+
+**Consequences.**
+- 海纳百川 (generic base) and actual usefulness (facets) coexist instead of trading off.
+- ADR-0005's Course/Assessment/Event become facets the campus plugin declares — not a universal schema.
+- Facets are the contract between plugins and platform features (see ADR-0018).
+
+---
+
+## ADR-0017 — Plugin runtime: two tiers (declarative manifests + code plugins); no dynamic sandbox in v1
+
+**Status:** Accepted (subsumes ADR-0012)
+
+**Context.** What *is* a plugin technically, under single-deployable (ADR-0001), single-repo (ADR-0014), free-tier, self-deploy constraints? Rejected up front: dynamic third-party sandboxed plugins (need Workers for Platforms — paid — plus a trust/security model that is its own project; deferred to v3+), and one-Worker-per-plugin (violates single deployable).
+
+**Decision.** Two tiers, both running inside the one Worker:
+- **Tier 1 — declarative plugins (manifest).** Most sources are "hit an API, map fields to Item/facets." A manifest declares source, auth kind, fetch spec, and field→Item/facet mapping; a generic engine runs all manifests. **AI is the killer feature here:** an agent reads a sample response and generates the mapping — the user says "connect this API" and the agent writes the plugin. Covers REST/RSS/JSON APIs. Install = add a manifest, no code.
+- **Tier 2 — code plugins (in-repo TS).** For sources needing real logic (Moodle's `sesskey` dance, OAuth flows, HTML parsing). Implement the Plugin interface, compiled into the Worker, added via PR + redeploy. Campus is Tier 2.
+
+**Consequences.**
+- 海纳百川 is achieved mostly through Tier-1 declarative manifests + AI-generated mappings, not a risky dynamic sandbox.
+- Both tiers honor single-deployable and free-tier self-deploy.
+- **Deferred (v3+):** dynamic third-party plugin loading (Workers for Platforms + trust model).
+
+---
+
+## ADR-0018 — Plugin contract: ingestion + facet declaration only; downstream is facet-driven
+
+**Status:** Accepted
+
+**Context.** Does a plugin only ingest (fetch + map → Item/facets), or does it also bundle its own jobs and notification logic? This is the line that decides whether "platform" is real.
+
+**Decision.** Plugins are **ingestion-only**. A plugin declares: identity, auth, fetch, mapping, and **which facets it emits** — nothing more. Change detection, tracking, agent jobs (ADR-0008), notifications (ADR-0010), and retention (ADR-0011) all operate **generically over Items + facets** at the platform level. A plugin emitting a `deadline`-capable facet inherits ddl-reminder behavior for free, zero downstream code.
+
+**Rationale.** Facets are the contract; the platform binds behavior to facets, not to plugins. The alternative (plugins bundle jobs) recreates "每个插件各自为政" — logic duplication, the kernel stops being a kernel, and facets earn nothing.
+
+**Consequences.**
+- Adding a source is: emit the right facets → inherit all platform capabilities.
+- The kernel stays a kernel; plugins stay thin.
+
+---
+
+## ADR-0019 — Facet vocabulary: open facets, behavior bound to declared capabilities
+
+**Status:** Accepted
+
+**Context.** If facets are the plugin↔platform contract, who defines them? Closed vocabulary (platform-predefined) guarantees behavior works but forces novel sources down to generic Items — against 海纳百川. Fully open facets are infinitely extensible but a facet with no platform handler does nothing structured.
+
+**Decision.** **Open facets, with platform behavior bound to declared *capabilities*, not facet names.** A facet declares standard capabilities (e.g. `has-deadline` with a `due_at` field, `has-unread`, `has-thread`); the generic tracker / notifier / change-detector binds to any facet declaring that capability — regardless of whether it's named `deadline`, `exam`, or `renewal`. Novel facets with no standard capability still store fine; the LLM reasons over them at read time (ADR-0015 / ADR-0016).
+
+**Consequences.**
+- Openness and usefulness stop fighting: vocabulary is open, behavior attaches to capabilities.
+- Adding a genuinely new *capability* (not just a new facet) is the only thing that touches platform code — the rare, deliberate extension point.
+- The capability set is the real kernel API surface to design carefully up front.
