@@ -5,6 +5,9 @@ interface JobRow {
   enabled: number;
   model: string;
   monthly_token_cap: number;
+  schedule_hour_utc: number;
+  credential_preference: "byok";
+  current_month_usage: number;
   last_run_at: string | null;
 }
 
@@ -34,26 +37,49 @@ export class D1JobStore implements JobStore {
   constructor(private readonly db: D1Database) {}
 
   async get(id: string): Promise<AgentJob | null> {
-    const row = await this.db.prepare("SELECT * FROM agent_jobs WHERE id = ?").bind(id).first<JobRow>();
-    return row ? parseJob(row) : null;
+    const now = new Date();
+    const row = await this.db
+      .prepare(`${jobSelect()} WHERE j.id = ? GROUP BY j.id`)
+      .bind(now.toISOString().slice(0, 7), id)
+      .first<JobRow>();
+    return row ? parseJob(row, now) : null;
   }
 
   async list(): Promise<AgentJob[]> {
-    const rows = await this.db.prepare("SELECT * FROM agent_jobs ORDER BY id").all<JobRow>();
-    return rows.results.map(parseJob);
+    const now = new Date();
+    const rows = await this.db
+      .prepare(`${jobSelect()} GROUP BY j.id ORDER BY j.id`)
+      .bind(now.toISOString().slice(0, 7))
+      .all<JobRow>();
+    return rows.results.map((row) => parseJob(row, now));
   }
 
   async configure(
     id: string,
-    input: { enabled: boolean; model: string; monthlyTokenCap: number },
+    input: {
+      enabled: boolean;
+      model: string;
+      monthlyTokenCap: number;
+      scheduleHourUtc: number;
+      credentialPreference: "byok";
+    },
   ): Promise<AgentJob> {
     const result = await this.db
       .prepare(
         `UPDATE agent_jobs
-         SET enabled = ?, model = ?, monthly_token_cap = ?, updated_at = ?
+         SET enabled = ?, model = ?, monthly_token_cap = ?, schedule_hour_utc = ?,
+             credential_preference = ?, updated_at = ?
          WHERE id = ?`,
       )
-      .bind(input.enabled ? 1 : 0, input.model, input.monthlyTokenCap, new Date().toISOString(), id)
+      .bind(
+        input.enabled ? 1 : 0,
+        input.model,
+        input.monthlyTokenCap,
+        input.scheduleHourUtc,
+        input.credentialPreference,
+        new Date().toISOString(),
+        id,
+      )
       .run();
     if (result.meta.changes !== 1) {
       throw new Error(`Unknown agent job ${id}.`);
@@ -123,12 +149,26 @@ export class D1JobStore implements JobStore {
   }
 }
 
-function parseJob(row: JobRow): AgentJob {
+function jobSelect(): string {
+  return `SELECT j.*,
+           COALESCE(SUM(CASE WHEN substr(r.created_at, 1, 7) = ? THEN r.total_tokens ELSE 0 END), 0)
+             AS current_month_usage
+          FROM agent_jobs j
+          LEFT JOIN agent_job_runs r ON r.job_id = j.id`;
+}
+
+function parseJob(row: JobRow, now: Date): AgentJob {
+  const daysInMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0)).getUTCDate();
+  const projectedMonthlyTokens = Math.ceil((row.current_month_usage / now.getUTCDate()) * daysInMonth);
   return {
     id: row.id,
     enabled: row.enabled === 1,
     model: row.model,
     monthlyTokenCap: row.monthly_token_cap,
+    scheduleHourUtc: row.schedule_hour_utc,
+    credentialPreference: row.credential_preference,
+    currentMonthUsage: row.current_month_usage,
+    projectedMonthlyTokens,
     lastRunAt: row.last_run_at,
   };
 }

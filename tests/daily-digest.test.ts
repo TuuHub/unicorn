@@ -19,6 +19,29 @@ describe("DailyDigestRunner", () => {
     expect(store.setEnabled).toHaveBeenCalledWith("daily-digest", false);
   });
 
+  it("does not call the model when the remaining budget cannot cover the prompt", async () => {
+    const store = jobStore({ monthlyUsage: 9_900, monthlyTokenCap: 10_000 });
+    const generator = textGenerator();
+    const runner = new DailyDigestRunner(store, dataSource(), generator);
+
+    const result = await runner.run(new Date("2026-07-13T00:00:00.000Z"));
+
+    expect(result).toEqual({ status: "budget_exhausted" });
+    expect(generator.generate).not.toHaveBeenCalled();
+    expect(store.setEnabled).toHaveBeenCalledWith("daily-digest", false);
+  });
+
+  it("waits until the configured UTC schedule hour", async () => {
+    const store = jobStore({ monthlyUsage: 0, monthlyTokenCap: 10_000, scheduleHourUtc: 8 });
+    const generator = textGenerator();
+    const runner = new DailyDigestRunner(store, dataSource(), generator);
+
+    const result = await runner.run(new Date("2026-07-13T07:59:00.000Z"));
+
+    expect(result).toEqual({ status: "not_due" });
+    expect(generator.generate).not.toHaveBeenCalled();
+  });
+
   it("records actual usage and the generated digest", async () => {
     const store = jobStore({ monthlyUsage: 200, monthlyTokenCap: 10_000 });
     const generator = textGenerator({
@@ -45,13 +68,21 @@ describe("DailyDigestRunner", () => {
   });
 });
 
-function jobStore(overrides: { monthlyUsage: number; monthlyTokenCap: number }): JobStore & Record<string, ReturnType<typeof vi.fn>> {
+function jobStore(overrides: {
+  monthlyUsage: number;
+  monthlyTokenCap: number;
+  scheduleHourUtc?: number;
+}): JobStore & Record<string, ReturnType<typeof vi.fn>> {
   return {
     get: vi.fn().mockResolvedValue({
       id: "daily-digest",
       enabled: true,
       model: "gpt-5-mini",
       monthlyTokenCap: overrides.monthlyTokenCap,
+      scheduleHourUtc: overrides.scheduleHourUtc ?? 0,
+      credentialPreference: "byok",
+      currentMonthUsage: overrides.monthlyUsage,
+      projectedMonthlyTokens: overrides.monthlyUsage,
       lastRunAt: null,
     }),
     getMonthlyUsage: vi.fn().mockResolvedValue(overrides.monthlyUsage),

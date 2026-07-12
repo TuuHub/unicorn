@@ -16,6 +16,9 @@ export class Kernel {
       const existing = stored ? normalizeStoredItem(stored) : null;
       if (existing) {
         if (equal(existingContent(existing), input)) {
+          if (existing.archivedAt) {
+            await this.store.commit({ ...existing, archivedAt: undefined }, []);
+          }
           result.unchanged += 1;
           continue;
         }
@@ -152,41 +155,59 @@ function diffEvents(existing: StoredItem, input: ItemInput, createdAt: string): 
 }
 
 function diffCapabilities(existing: StoredItem, input: ItemInput, createdAt: string): ItemEvent[] {
-  const previousFacets = new Map(existing.facets.map((facet) => [facet.type, facet]));
+  const previous = capabilityValues(existing.facets);
+  const next = capabilityValues(input.facets);
   const events: ItemEvent[] = [];
 
-  for (const facet of input.facets) {
-    const previous = previousFacets.get(facet.type);
-    for (const capability of facet.capabilities) {
-      const previousCapability = previous?.capabilities.find(
-        (candidate) =>
-          candidate.name === capability.name &&
-          candidate.primitive === capability.primitive &&
-          candidate.field === capability.field,
-      );
-      const before = previousCapability ? previous?.data[capability.field] : undefined;
-      const after = facet.data[capability.field];
-      if (equal(before, after)) {
-        continue;
-      }
-
-      events.push({
-        id: crypto.randomUUID(),
-        type: "capability.changed",
-        source: input.source,
-        itemId: input.id,
-        createdAt,
-        primitive: capability.primitive,
-        capability: capability.name,
-        facetType: facet.type,
-        field: capability.field,
-        ...(before === undefined ? {} : { before }),
-        ...(after === undefined ? {} : { after }),
-      });
+  for (const key of [...new Set([...previous.keys(), ...next.keys()])].sort()) {
+    const before = previous.get(key);
+    const after = next.get(key);
+    if (equal(before?.value, after?.value)) {
+      continue;
     }
+
+    const binding = after ?? before!;
+    events.push({
+      id: crypto.randomUUID(),
+      type: "capability.changed",
+      source: input.source,
+      itemId: input.id,
+      createdAt,
+      primitive: binding.primitive,
+      capability: binding.capability,
+      facetType: binding.facetType,
+      field: binding.field,
+      ...(before === undefined ? {} : { before: before.value }),
+      ...(after === undefined ? {} : { after: after.value }),
+    });
   }
 
   return events;
+}
+
+interface BoundCapabilityValue {
+  primitive: ItemEvent["primitive"] & string;
+  capability: string;
+  facetType: string;
+  field: string;
+  value: JsonValue;
+}
+
+function capabilityValues(facets: Facet[]): Map<string, BoundCapabilityValue> {
+  const values = new Map<string, BoundCapabilityValue>();
+  for (const facet of facets) {
+    for (const binding of facet.capabilities) {
+      const key = `${facet.type}:${binding.name}:${binding.primitive}:${binding.field}`;
+      values.set(key, {
+        primitive: binding.primitive,
+        capability: binding.name,
+        facetType: facet.type,
+        field: binding.field,
+        value: facet.data[binding.field]!,
+      });
+    }
+  }
+  return values;
 }
 
 function unboundFacetData(facets: Facet[]): JsonValue {
@@ -200,7 +221,7 @@ function unboundFacetData(facets: Facet[]): JsonValue {
 }
 
 function existingContent(item: StoredItem): ItemInput {
-  const { createdAt: _createdAt, updatedAt: _updatedAt, ...content } = item;
+  const { archivedAt: _archivedAt, createdAt: _createdAt, updatedAt: _updatedAt, ...content } = item;
   return content;
 }
 
@@ -209,6 +230,7 @@ function normalizeStoredItem(item: StoredItem): StoredItem {
     ...normalizeItem(existingContent(item)),
     createdAt: item.createdAt,
     updatedAt: item.updatedAt,
+    ...(item.archivedAt ? { archivedAt: item.archivedAt } : {}),
   };
 }
 

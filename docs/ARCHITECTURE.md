@@ -89,6 +89,8 @@ The one thing that is small, fixed, and carefully designed (ADR-0020). Capabilit
 
 A new domain need (`has-grade`) is normally a *declaration* onto `scalar` + config — **no kernel change**. Kernel code changes only if a genuinely new primitive is ever required, which is rare by construction.
 
+v1 ships primitive validation, primitive-typed change Events, temporal queries, confirmed relations, and generic MCP access to every facet. Configurable reminder offsets, transition targets, and scalar thresholds are policy features after v1; the primitive model is their stable substrate, not a claim that every policy UI already exists.
+
 ---
 
 ## 4. The ingestion → surface lifecycle
@@ -120,8 +122,10 @@ For sources needing real logic — OAuth dances, Moodle's sesskey flow, HTML par
 
 ### The campus plugin
 The flagship Tier-2 plugin bundling Ed + Moodle. Reimplements the small API subset it needs in TS (ADR-0002) — Moodle is clean AJAX JSON (`/lib/ajax/service.php`), not scraping. It emits facets like:
-- assignment/assessment → facet with `temporal` (`due_at`) + `state` (submission status) + `scalar` (grade)
+- assignment/assessment → `temporal` (`due_at`) + `state` (submission status when explicit, otherwise `unknown`) + `scalar` (grade when the source payload exposes one)
 - forum post → facet with `relation` (thread) + `actor` (author) + `state` (read/unread)
+
+Monash's enabled timeline AJAX method currently exposes deadlines and action availability but not authoritative grades or enough information to distinguish every submitted/closed case. unicorn therefore never guesses: ambiguous submission state is `unknown`, and no grade facet is emitted without a numeric source value. Richer grade retrieval needs a supported JSON endpoint and remains outside v1.
 
 Cross-platform course matching (same course in Ed and Moodle) is proposed by the user's MCP agent and confirmed by the user (ADR-0005), now expressed as a `relation` linking Items across sources.
 
@@ -139,7 +143,7 @@ job → AI SDK interface → OpenAI-compatible BYOK provider → skip without af
 - **Subscription providers** remain an end-state experiment, not v1 code. Their unofficial protocol and account-risk surface do not belong in the stable ingestion path.
 - **Degradation** = a missing or failed model marks only the job as skipped/failed. Data freshness never depends on it.
 
-**Agent jobs** live in a registry (ADR-0008): each has an enable toggle, its own schedule, a credential preference, and metered usage. Budget is three-layer: real metering → measured projections → hard monthly cap that auto-pauses LLM jobs (never ingestion) on breach. End-state catalog: daily digest, Ed↔assessment association, real-time post triage, study planning, extensible.
+**Agent jobs** live in a registry (ADR-0008): each has an enable toggle, a UTC schedule hour, a credential preference, and metered usage. Budget is three-layer: real metering → measured current-month projections → a preflight-enforced hard monthly cap that auto-pauses and notifies on breach (never ingestion). End-state catalog: daily digest, Ed↔assessment association, real-time post triage, study planning, extensible.
 
 ---
 
@@ -191,3 +195,4 @@ The sharp, finite first cut — kernel + campus, not "everything":
 3. **The manifest and MCP surfaces are concrete.** D1 stores validated JSON/RSS manifests; MCP exposes item, upcoming, change, relation, manifest, and job tools.
 4. **Moodle session lifetime remains empirical.** The scheduler now supplies real hourly keep-alive evidence; only elapsed time can close this question.
 5. **Dynamic sandboxed code plugins and subscription-token providers remain deliberately deferred.** Both add trust or account-risk systems far larger than their v1 value.
+6. **Monash grade enrichment remains endpoint-limited.** The enabled AJAX API does not expose authoritative grades or complete submission state, so v1 preserves `unknown` rather than manufacturing certainty.

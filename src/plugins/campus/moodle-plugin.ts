@@ -1,9 +1,19 @@
-import type { Facet, ItemInput, JsonValue } from "../../kernel/types";
+import type { Facet, ItemInput } from "../../kernel/types";
 import { parseSesskey } from "../../moodle-probe";
 import type { Plugin } from "../plugin";
+import {
+  asArray,
+  asBoolean,
+  asNumber,
+  asOptionalNumber,
+  asRecord,
+  asString,
+  toJson,
+} from "../source-values";
 
 const COURSES_METHOD = "core_course_get_enrolled_courses_by_timeline_classification";
 const TIMELINE_METHOD = "core_calendar_get_action_events_by_timesort";
+const ASSESSMENT_MODULES = new Set(["assign", "choice", "lesson", "quiz", "workshop"]);
 
 export interface MoodlePluginOptions {
   baseUrl: string;
@@ -87,7 +97,9 @@ export class MoodlePlugin implements Plugin {
     const timelineData = asRecord(asRecord(envelope[1]).data);
     const courses = asArray(coursesData.courses).map((course) => this.mapCourse(asRecord(course), now));
     const assessments = asArray(timelineData.events)
-      .map((event) => this.mapAssessment(asRecord(event)))
+      .map(asRecord)
+      .filter(isAssessmentEvent)
+      .map((event) => this.mapAssessment(event))
       .filter((item): item is ItemInput => item !== null);
     return [...courses, ...assessments];
   }
@@ -130,9 +142,7 @@ export class MoodlePlugin implements Plugin {
     const course = asRecord(event.course);
     const action = asRecord(event.action);
     const courseId = asNumber(course.id);
-    const overdue = asBoolean(event.overdue);
-    const actionable = asBoolean(action.actionable);
-    const status = overdue ? "overdue" : actionable ? "actionable" : "inactive";
+    const status = submissionStatus(event, action);
     const facets: Facet[] = [
       {
         type: "deadline",
@@ -145,17 +155,17 @@ export class MoodlePlugin implements Plugin {
         capabilities: [{ name: "belongs-to-course", primitive: "relation", field: "course" }],
       },
       {
-        type: "activity-state",
+        type: "submission",
         data: { status },
-        capabilities: [{ name: "has-action-state", primitive: "state", field: "status" }],
+        capabilities: [{ name: "has-submission-status", primitive: "state", field: "status" }],
       },
     ];
-    const progress = asNumber(course.progress);
-    if (progress > 0) {
+    const grade = firstNumber(event.grade, event.gradevalue, event.grade_value, action.grade);
+    if (grade !== null) {
       facets.push({
-        type: "course-progress",
-        data: { progress },
-        capabilities: [{ name: "has-course-progress", primitive: "scalar", field: "progress" }],
+        type: "grade",
+        data: { grade },
+        capabilities: [{ name: "has-grade", primitive: "scalar", field: "grade" }],
       });
     }
 
@@ -172,26 +182,31 @@ export class MoodlePlugin implements Plugin {
   }
 }
 
-function asArray(value: unknown): unknown[] {
-  return Array.isArray(value) ? value : [];
+function isAssessmentEvent(event: Record<string, unknown>): boolean {
+  return asString(event.purpose) === "assessment" || ASSESSMENT_MODULES.has(asString(event.modulename));
 }
 
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+function submissionStatus(event: Record<string, unknown>, action: Record<string, unknown>): string {
+  const explicit =
+    asString(event.submissionstatus) ||
+    asString(event.submission_status) ||
+    asString(action.submissionstatus) ||
+    asString(action.submission_status);
+  if (explicit) {
+    return explicit;
+  }
+  if (!asBoolean(action.actionable)) {
+    return "unknown";
+  }
+  return asBoolean(event.overdue) ? "overdue" : "pending";
 }
 
-function asString(value: unknown): string {
-  return typeof value === "string" ? value : "";
-}
-
-function asNumber(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : Number(value) || 0;
-}
-
-function asBoolean(value: unknown, fallback = false): boolean {
-  return typeof value === "boolean" ? value : fallback;
-}
-
-function toJson(value: unknown): JsonValue {
-  return JSON.parse(JSON.stringify(value)) as JsonValue;
+function firstNumber(...values: unknown[]): number | null {
+  for (const value of values) {
+    const number = asOptionalNumber(value);
+    if (number !== null) {
+      return number;
+    }
+  }
+  return null;
 }

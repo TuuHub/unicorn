@@ -66,7 +66,13 @@ export interface McpRepository {
   listAgentJobs(): Promise<AgentJob[]>;
   configureAgentJob(
     id: string,
-    input: { enabled: boolean; model: string; monthlyTokenCap: number },
+    input: {
+      enabled: boolean;
+      model: string;
+      monthlyTokenCap: number;
+      scheduleHourUtc: number;
+      credentialPreference: "byok";
+    },
   ): Promise<AgentJob>;
   listAgentJobRuns(id: string, limit: number): Promise<AgentJobRun[]>;
 }
@@ -210,17 +216,27 @@ export function createUnicornMcpServer(repository: McpRepository): McpServer {
     "configure_agent_job",
     {
       annotations: WRITE,
-      description: "Enable or disable an agent job and set its model and monthly token cap.",
+      description: "Configure an agent job schedule, BYOK model, and monthly token cap.",
       inputSchema: {
         id: z.literal("daily-digest"),
         enabled: z.boolean(),
         model: z.string().trim().min(1).max(100),
         monthlyTokenCap: z.number().int().positive().max(100_000_000),
+        scheduleHourUtc: z.number().int().min(0).max(23).optional().default(0),
+        credentialPreference: z.literal("byok").optional().default("byok"),
       },
     },
-    async ({ id, enabled, model, monthlyTokenCap }) => {
+    async ({ id, enabled, model, monthlyTokenCap, scheduleHourUtc, credentialPreference }) => {
       try {
-        return jsonResult(await repository.configureAgentJob(id, { enabled, model, monthlyTokenCap }));
+        return jsonResult(
+          await repository.configureAgentJob(id, {
+            enabled,
+            model,
+            monthlyTokenCap,
+            scheduleHourUtc,
+            credentialPreference,
+          }),
+        );
       } catch (error) {
         return jsonError(error instanceof Error ? error.message : "Failed to configure agent job.");
       }

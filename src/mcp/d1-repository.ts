@@ -92,14 +92,7 @@ export class D1McpRepository implements McpRepository {
       .bind(...values)
       .all<ItemKeyRow>();
 
-    const items: StoredItem[] = [];
-    for (const row of rows.results) {
-      const item = await this.find(row.source, row.item_id);
-      if (item) {
-        items.push(item);
-      }
-    }
-    return items;
+    return this.items.findMany(rows.results.map((row) => ({ source: row.source, itemId: row.item_id })));
   }
 
   async listUpcoming(query: UpcomingQuery): Promise<UpcomingItem[]> {
@@ -230,7 +223,13 @@ export class D1McpRepository implements McpRepository {
 
   configureAgentJob(
     id: string,
-    input: { enabled: boolean; model: string; monthlyTokenCap: number },
+    input: {
+      enabled: boolean;
+      model: string;
+      monthlyTokenCap: number;
+      scheduleHourUtc: number;
+      credentialPreference: "byok";
+    },
   ): Promise<AgentJob> {
     return this.jobs.configure(id, input);
   }

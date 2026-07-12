@@ -86,6 +86,42 @@ describe("Kernel.ingest", () => {
     await expect(store.listEvents()).resolves.toHaveLength(1);
   });
 
+  it("restores an archived item when it is pulled again unchanged", async () => {
+    const store = new MemoryItemStore();
+    const kernel = new Kernel(store);
+    await kernel.ingest([deadline]);
+    await store.archive(deadline.source, deadline.id, "2026-07-13T00:00:00.000Z");
+
+    const result = await kernel.ingest([structuredClone(deadline)]);
+
+    expect(result).toEqual({ created: 0, updated: 0, unchanged: 1, events: [] });
+    await expect(store.find(deadline.source, deadline.id)).resolves.not.toHaveProperty("archivedAt");
+  });
+
+  it("records a primitive event when a capability is removed", async () => {
+    const store = new MemoryItemStore();
+    const kernel = new Kernel(store);
+    await kernel.ingest([deadline]);
+    const withoutDeadline = structuredClone(deadline);
+    withoutDeadline.facets = [];
+
+    const result = await kernel.ingest([withoutDeadline]);
+
+    expect(result.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "capability.changed",
+          primitive: "temporal",
+          capability: "has-deadline",
+          facetType: "deadline",
+          field: "dueAt",
+          before: "2026-07-20T06:00:00.000Z",
+        }),
+      ]),
+    );
+    expect(result.events.find((event) => event.type === "capability.changed")).not.toHaveProperty("after");
+  });
+
   it("treats facet and capability declaration order as insignificant", async () => {
     const store = new MemoryItemStore();
     const kernel = new Kernel(store);

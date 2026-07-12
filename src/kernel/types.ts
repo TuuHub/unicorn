@@ -30,6 +30,7 @@ export interface ItemInput {
 export interface StoredItem extends ItemInput {
   createdAt: string;
   updatedAt: string;
+  archivedAt?: string;
 }
 
 export type ItemEventType = "item.created" | "item.updated" | "capability.changed";

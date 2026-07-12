@@ -11,6 +11,7 @@ interface ItemRow {
   raw_json: string;
   created_at: string;
   updated_at: string;
+  archived_at: string | null;
 }
 
 interface FacetRow {
@@ -19,13 +20,23 @@ interface FacetRow {
   capabilities_json: string;
 }
 
+interface BulkFacetRow extends FacetRow {
+  source: string;
+  item_id: string;
+}
+
+export interface ItemKey {
+  source: string;
+  itemId: string;
+}
+
 export class D1ItemStore implements ItemStore {
   constructor(private readonly db: D1Database) {}
 
   async find(source: string, itemId: string): Promise<StoredItem | null> {
     const row = await this.db
       .prepare(
-        `SELECT source, item_id, kind, title, timestamp, url, body, raw_json, created_at, updated_at
+        `SELECT source, item_id, kind, title, timestamp, url, body, raw_json, created_at, updated_at, archived_at
          FROM items
          WHERE source = ? AND item_id = ?`,
       )
@@ -45,19 +56,56 @@ export class D1ItemStore implements ItemStore {
       .bind(source, itemId)
       .all<FacetRow>();
 
-    return {
-      id: row.item_id,
-      source: row.source,
-      kind: row.kind,
-      title: row.title,
-      timestamp: row.timestamp,
-      ...(row.url ? { url: row.url } : {}),
-      ...(row.body ? { body: row.body } : {}),
-      raw: parseJson<JsonValue>(row.raw_json),
-      facets: facets.results.map(parseFacet),
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-    };
+    return parseItem(row, facets.results);
+  }
+
+  async findMany(keys: ItemKey[]): Promise<StoredItem[]> {
+    if (keys.length === 0) {
+      return [];
+    }
+    const requested = JSON.stringify(keys);
+    const [itemRows, facetRows] = await Promise.all([
+      this.db
+        .prepare(
+          `WITH requested AS (
+             SELECT
+               CAST(key AS INTEGER) AS position,
+               json_extract(value, '$.source') AS source,
+               json_extract(value, '$.itemId') AS item_id
+             FROM json_each(?)
+           )
+           SELECT i.*
+           FROM requested r
+           JOIN items i ON i.source = r.source AND i.item_id = r.item_id
+           ORDER BY r.position`,
+        )
+        .bind(requested)
+        .all<ItemRow>(),
+      this.db
+        .prepare(
+          `WITH requested AS (
+             SELECT
+               CAST(key AS INTEGER) AS position,
+               json_extract(value, '$.source') AS source,
+               json_extract(value, '$.itemId') AS item_id
+             FROM json_each(?)
+           )
+           SELECT f.source, f.item_id, f.type, f.data_json, f.capabilities_json
+           FROM requested r
+           JOIN facets f ON f.source = r.source AND f.item_id = r.item_id
+           ORDER BY r.position, f.type`,
+        )
+        .bind(requested)
+        .all<BulkFacetRow>(),
+    ]);
+    const facetsByItem = new Map<string, FacetRow[]>();
+    for (const row of facetRows.results) {
+      const key = `${row.source}\u0000${row.item_id}`;
+      const facets = facetsByItem.get(key) ?? [];
+      facets.push(row);
+      facetsByItem.set(key, facets);
+    }
+    return itemRows.results.map((row) => parseItem(row, facetsByItem.get(`${row.source}\u0000${row.item_id}`) ?? []));
   }
 
   async commit(item: StoredItem, events: ItemEvent[]): Promise<void> {
@@ -137,6 +185,23 @@ export class D1ItemStore implements ItemStore {
 
     await this.db.batch(statements);
   }
+}
+
+function parseItem(row: ItemRow, facets: FacetRow[]): StoredItem {
+  return {
+    id: row.item_id,
+    source: row.source,
+    kind: row.kind,
+    title: row.title,
+    timestamp: row.timestamp,
+    ...(row.url ? { url: row.url } : {}),
+    ...(row.body ? { body: row.body } : {}),
+    raw: parseJson<JsonValue>(row.raw_json),
+    facets: facets.map(parseFacet),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    ...(row.archived_at ? { archivedAt: row.archived_at } : {}),
+  };
 }
 
 function parseFacet(row: FacetRow): Facet {

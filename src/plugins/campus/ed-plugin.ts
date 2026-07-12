@@ -1,5 +1,6 @@
-import type { Facet, ItemInput, JsonValue } from "../../kernel/types";
+import type { Facet, ItemInput } from "../../kernel/types";
 import type { Plugin } from "../plugin";
+import { asArray, asBoolean, asNumber, asRecord, asString, toJson } from "../source-values";
 
 export interface EdPluginOptions {
   token: string;
@@ -159,28 +160,4 @@ export class EdPlugin implements Plugin {
 
 function ensureTrailingSlash(value: string): string {
   return value.endsWith("/") ? value : `${value}/`;
-}
-
-function asArray(value: unknown): unknown[] {
-  return Array.isArray(value) ? value : [];
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
-}
-
-function asString(value: unknown): string {
-  return typeof value === "string" ? value : "";
-}
-
-function asNumber(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : Number(value) || 0;
-}
-
-function asBoolean(value: unknown): boolean {
-  return value === true;
-}
-
-function toJson(value: unknown): JsonValue {
-  return JSON.parse(JSON.stringify(value)) as JsonValue;
 }

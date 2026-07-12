@@ -32,7 +32,11 @@ describe("MoodlePlugin.pull", () => {
                   timesort: 1_774_411_200,
                   url: "https://learning.example.edu/calendar/view.php?view=day",
                   overdue: false,
-                  action: { actionable: true },
+                  modulename: "assign",
+                  purpose: "assessment",
+                  submissionstatus: "submitted",
+                  grade: 82.5,
+                  action: { actionable: false },
                   course: { id: 41031, fullname: "FIT2099 Object-Oriented Design and Implementation" },
                 },
               ],
@@ -72,6 +76,16 @@ describe("MoodlePlugin.pull", () => {
           data: { course: "course:41031" },
           capabilities: [{ name: "belongs-to-course", primitive: "relation", field: "course" }],
         }),
+        expect.objectContaining({
+          type: "submission",
+          data: { status: "submitted" },
+          capabilities: [{ name: "has-submission-status", primitive: "state", field: "status" }],
+        }),
+        expect.objectContaining({
+          type: "grade",
+          data: { grade: 82.5 },
+          capabilities: [{ name: "has-grade", primitive: "scalar", field: "grade" }],
+        }),
       ]),
     });
     expect(String(fetcher.mock.calls[1]?.[0])).toContain(
@@ -104,5 +118,56 @@ describe("MoodlePlugin.pull", () => {
     });
 
     await expect(plugin.pull()).resolves.toEqual([]);
+  });
+
+  it("does not mislabel non-assessment timeline actions or ambiguous submission state", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response('<script>M.cfg = {"sesskey":"fresh-key"};</script>'))
+      .mockResolvedValueOnce(
+        Response.json([
+          { error: false, data: { courses: [] } },
+          {
+            error: false,
+            data: {
+              events: [
+                {
+                  id: 1,
+                  name: "Read week 1 resources",
+                  timesort: 1_774_411_200,
+                  modulename: "label",
+                  purpose: "content",
+                  action: { name: "View", actionable: true },
+                  course: { id: 10 },
+                },
+                {
+                  id: 2,
+                  name: "Assignment 1",
+                  timesort: 1_774_411_200,
+                  modulename: "assign",
+                  purpose: "assessment",
+                  action: { name: "Add submission", actionable: false },
+                  course: { id: 10 },
+                },
+              ],
+            },
+          },
+        ]),
+      );
+    const plugin = new MoodlePlugin({
+      baseUrl: "https://learning.example.edu",
+      session: "session-secret",
+      fetch: fetcher,
+    });
+
+    const items = await plugin.pull();
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      id: "assessment:2",
+      facets: expect.arrayContaining([
+        expect.objectContaining({ type: "submission", data: { status: "unknown" } }),
+      ]),
+    });
   });
 });

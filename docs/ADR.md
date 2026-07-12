@@ -350,6 +350,7 @@ The insight: the behavior layer can also be dynamic, if the kernel ships a small
 - A new domain capability (e.g. `has-grade`) is usually just a declaration onto `scalar` + a threshold config — no kernel change. Kernel code changes only if a genuinely new *primitive* is ever needed (rare by construction).
 - Notification content is generic templating or AI-generated; reminder cadence is user-configurable per facet — none of it is hardcoded per capability.
 - This is the concrete "AI-native lets the schema stay loose" mechanism: primitives give structured behavior where fields bind; the LLM covers everything unbound at read time.
+- **Delivery boundary:** v1 implements validation, primitive-typed Events, temporal queries, confirmed relations, and generic facet access. Per-facet reminder cadence, transition targets, and scalar threshold policies follow after v1; they build on these primitives without changing plugin contracts.
 
 ---
 

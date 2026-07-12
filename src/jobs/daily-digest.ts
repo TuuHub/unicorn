@@ -5,6 +5,10 @@ export interface AgentJob {
   enabled: boolean;
   model: string;
   monthlyTokenCap: number;
+  scheduleHourUtc: number;
+  credentialPreference: "byok";
+  currentMonthUsage: number;
+  projectedMonthlyTokens: number;
   lastRunAt: string | null;
 }
 
@@ -44,7 +48,7 @@ export interface TextGenerator {
 }
 
 export type DigestResult =
-  | { status: "disabled" | "already_ran" | "budget_exhausted" | "no_changes" | "failed" }
+  | { status: "disabled" | "not_due" | "already_ran" | "budget_exhausted" | "no_changes" | "failed" }
   | ({ status: "completed" } & TextGeneration);
 
 export class DailyDigestRunner {
@@ -58,6 +62,9 @@ export class DailyDigestRunner {
     const job = await this.store.get("daily-digest");
     if (!job?.enabled) {
       return { status: "disabled" };
+    }
+    if (now.getUTCHours() < job.scheduleHourUtc) {
+      return { status: "not_due" };
     }
     if (job.lastRunAt?.slice(0, 10) === now.toISOString().slice(0, 10)) {
       return { status: "already_ran" };
@@ -87,13 +94,19 @@ export class DailyDigestRunner {
       return { status: "no_changes" };
     }
 
+    const prompt = buildPrompt(events, upcoming);
     const remaining = job.monthlyTokenCap - used;
+    const inputTokenCeiling = estimateInputTokenCeiling(prompt);
+    if (remaining <= inputTokenCeiling) {
+      await this.store.setEnabled(job.id, false);
+      return { status: "budget_exhausted" };
+    }
     let generated: TextGeneration;
     try {
       generated = await this.generator.generate({
         model: job.model,
-        maxOutputTokens: Math.max(1, Math.min(1_500, remaining)),
-        prompt: buildPrompt(events, upcoming),
+        maxOutputTokens: Math.min(1_500, remaining - inputTokenCeiling),
+        prompt,
       });
     } catch {
       await this.store.recordRun({
@@ -120,6 +133,10 @@ export class DailyDigestRunner {
     }
     return { status: "completed", ...generated };
   }
+}
+
+function estimateInputTokenCeiling(prompt: string): number {
+  return new TextEncoder().encode(prompt).length + 256;
 }
 
 function buildPrompt(

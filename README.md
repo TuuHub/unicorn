@@ -34,11 +34,11 @@ npm run deploy
 curl -X POST https://<your-worker>/schedule -H "Authorization: Bearer <ADMIN_TOKEN>"
 ```
 
-Use the same random value for `ADMIN_TOKEN` and `MCP_TOKEN` on a single-user deployment. `ADMIN_TOKEN` is the password for HTTP Basic user `unicorn` at `/settings` and the bearer token for `/sync`; `MCP_TOKEN` protects `/mcp`.
+Generate separate random values for `ADMIN_TOKEN` and `MCP_TOKEN`. `ADMIN_TOKEN` is the password for HTTP Basic user `unicorn` at `/settings` and the bearer token for `/sync`; `MCP_TOKEN` protects `/mcp`. Reusing them needlessly turns one leaked client credential into full operator access.
 
 MCP clients connect to `https://<your-worker>/mcp` with `Authorization: Bearer <MCP_TOKEN>`.
 
-The `daily-digest` agent job is disabled by default. To use it, set `AI_API_KEY`, choose an OpenAI-compatible `AI_BASE_URL`, then enable and budget it through the `configure_agent_job` MCP tool. Actual input/output usage is stored per run; reaching the monthly cap disables the job without stopping ingestion.
+The `daily-digest` agent job is disabled by default. To use it, set `AI_API_KEY`, choose an OpenAI-compatible `AI_BASE_URL`, then enable it through the `configure_agent_job` MCP tool with a UTC schedule hour and monthly token cap. Actual input/output usage and measured monthly projections are exposed through MCP. The runner reserves prompt and output budget before every call; reaching the cap disables the job, sends a notifier warning when configured, and never stops ingestion.
 
 ## What it is
 
