@@ -2,7 +2,7 @@
 
 > An AI-native information aggregation platform. Plugins bring the sources; unicorn ingests everything into one model, tracks what matters, and lets your own AI agent query it — all on a single Cloudflare Worker, on your own free account. Campus (Ed Discussion + Moodle) is the flagship plugin.
 
-**Status:** design phase. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the end-state picture, [docs/ADR.md](docs/ADR.md) for the decision trail, and [docs/GLOSSARY.md](docs/GLOSSARY.md) for the vocabulary. No runtime code yet.
+**Status:** design phase with a deployed [Moodle authentication spike](docs/SPIKE-0001-MOODLE-AUTH.md). See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the end-state picture, [docs/ADR.md](docs/ADR.md) for the decision trail, and [docs/GLOSSARY.md](docs/GLOSSARY.md) for the vocabulary. No product runtime yet.
 
 ## What it is
 
