@@ -1,5 +1,7 @@
 import { D1ItemStore } from "../kernel/d1-item-store";
 import type { ItemEvent, JsonValue, StoredItem } from "../kernel/types";
+import type { AgentJob } from "../jobs/daily-digest";
+import { D1JobStore, type AgentJobRun } from "../jobs/d1-job-store";
 import { D1ManifestStore, type StoredPluginManifest } from "../plugins/declarative/store";
 import type {
   EventQuery,
@@ -55,10 +57,12 @@ interface RelationRow {
 export class D1McpRepository implements McpRepository {
   private readonly items: D1ItemStore;
   private readonly manifests: D1ManifestStore;
+  private readonly jobs: D1JobStore;
 
   constructor(private readonly db: D1Database) {
     this.items = new D1ItemStore(db);
     this.manifests = new D1ManifestStore(db);
+    this.jobs = new D1JobStore(db);
   }
 
   find(source: string, itemId: string): Promise<StoredItem | null> {
@@ -218,6 +222,21 @@ export class D1McpRepository implements McpRepository {
 
   putPluginManifest(manifest: unknown, enabled: boolean): Promise<StoredPluginManifest> {
     return this.manifests.upsert(manifest, enabled);
+  }
+
+  listAgentJobs(): Promise<AgentJob[]> {
+    return this.jobs.list();
+  }
+
+  configureAgentJob(
+    id: string,
+    input: { enabled: boolean; model: string; monthlyTokenCap: number },
+  ): Promise<AgentJob> {
+    return this.jobs.configure(id, input);
+  }
+
+  listAgentJobRuns(id: string, limit: number): Promise<AgentJobRun[]> {
+    return this.jobs.listRuns(id, limit);
   }
 }
 

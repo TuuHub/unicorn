@@ -1,6 +1,9 @@
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { D1ItemStore } from "./kernel/d1-item-store";
 import { Kernel, type InvalidItemError } from "./kernel/kernel";
+import { DailyDigestRunner, type DigestResult } from "./jobs/daily-digest";
+import { D1JobStore } from "./jobs/d1-job-store";
+import { AiSdkTextGenerator, D1DigestDataSource } from "./jobs/runtime";
 import { D1McpRepository } from "./mcp/d1-repository";
 import { createUnicornMcpServer } from "./mcp/server";
 import { MoodleProbeError, probeMoodle } from "./moodle-probe";
@@ -15,12 +18,15 @@ import { D1SettingsRepository, handleSettings } from "./settings";
 
 interface Env {
   ADMIN_TOKEN: string;
+  AI_API_KEY?: string;
+  AI_BASE_URL: string;
   DB: D1Database;
   ED_API_TOKEN?: string;
   MCP_TOKEN: string;
   MOODLE_BASE_URL: string;
   MOODLE_SESSION?: string;
   NOTIFIER_URL?: string;
+  SCHEDULER: DurableObjectNamespace;
 }
 
 interface SyncSummary {
@@ -30,6 +36,7 @@ interface SyncSummary {
 
 interface CycleResult extends SyncSummary {
   archived: number;
+  digest: DigestResult | { status: "not_configured" };
   skipped: boolean;
 }
 
@@ -56,6 +63,15 @@ export default {
           notifier: Boolean(env.NOTIFIER_URL),
         },
       });
+    }
+
+    if (url.pathname === "/schedule") {
+      if (!env.ADMIN_TOKEN || request.headers.get("authorization") !== `Bearer ${env.ADMIN_TOKEN}`) {
+        return json({ error: "unauthorized" }, 401);
+      }
+      const path = request.method === "POST" ? "/start" : request.method === "DELETE" ? "/stop" : "/status";
+      const id = env.SCHEDULER.idFromName("primary");
+      return env.SCHEDULER.get(id).fetch(new Request(`https://scheduler${path}`, { method: request.method }));
     }
 
     if (url.pathname === "/mcp") {
@@ -116,13 +132,68 @@ export default {
   },
 } satisfies ExportedHandler<Env>;
 
+export class Scheduler {
+  constructor(
+    private readonly state: DurableObjectState,
+    private readonly env: Env,
+  ) {}
+
+  async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    if (request.method === "POST" && url.pathname === "/start") {
+      await this.state.storage.setAlarm(Date.now() + 5_000);
+      return json({ scheduled: true });
+    }
+    if (request.method === "DELETE" && url.pathname === "/stop") {
+      await this.state.storage.deleteAlarm();
+      return json({ scheduled: false });
+    }
+    if (request.method === "GET" && url.pathname === "/status") {
+      const nextAlarm = await this.state.storage.getAlarm();
+      return json({ scheduled: nextAlarm !== null, nextAlarm });
+    }
+    return json({ error: "not_found" }, 404);
+  }
+
+  async alarm(): Promise<void> {
+    try {
+      const cycle = await runCycle(this.env, false);
+      console.log(JSON.stringify({ event: "scheduler_cycle_completed", ...cycle }));
+    } catch {
+      console.error(JSON.stringify({ event: "scheduler_cycle_failed", code: "cycle_failed" }));
+    } finally {
+      await this.state.storage.setAlarm(Date.now() + 60 * 60 * 1000);
+    }
+  }
+}
+
 async function runCycle(env: Env, forceSync: boolean): Promise<CycleResult> {
   const settings = await new D1SettingsRepository(env.DB).get();
   const skipped = !forceSync && !settings.syncEnabled;
   const summary = skipped ? { results: [], errors: [] } : await syncSources(env);
   const archived = await runRetention(new D1RetentionRepository(env.DB), settings.retentionDays);
   await notifySync(env, settings.notificationsEnabled, summary);
-  return { ...summary, archived, skipped };
+  const digest = await runDigest(env, settings.notificationsEnabled);
+  return { ...summary, archived, digest, skipped };
+}
+
+async function runDigest(env: Env, notificationsEnabled: boolean): Promise<DigestResult | { status: "not_configured" }> {
+  if (!env.AI_API_KEY) {
+    return { status: "not_configured" };
+  }
+  const result = await new DailyDigestRunner(
+    new D1JobStore(env.DB),
+    new D1DigestDataSource(env.DB),
+    new AiSdkTextGenerator({ apiKey: env.AI_API_KEY, baseUrl: env.AI_BASE_URL }),
+  ).run();
+  if (result.status === "completed" && notificationsEnabled && env.NOTIFIER_URL) {
+    try {
+      await new DiscordNotifier(env.NOTIFIER_URL).send({ title: "unicorn daily digest", body: result.text });
+    } catch {
+      console.error(JSON.stringify({ event: "notification_failed", code: "notifier_unavailable" }));
+    }
+  }
+  return result;
 }
 
 async function syncSources(env: Env): Promise<SyncSummary> {

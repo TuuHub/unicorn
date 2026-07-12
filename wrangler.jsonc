@@ -7,7 +7,22 @@
   "observability": {
     "enabled": true
   },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "SCHEDULER",
+        "class_name": "Scheduler"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["Scheduler"]
+    }
+  ],
   "vars": {
+    "AI_BASE_URL": "https://api.openai.com/v1",
     "MOODLE_BASE_URL": "https://learning.monash.edu"
   },
   "d1_databases": [

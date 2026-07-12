@@ -1,6 +1,8 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { ItemEvent, JsonValue, StoredItem } from "../kernel/types";
+import type { AgentJob } from "../jobs/daily-digest";
+import type { AgentJobRun } from "../jobs/d1-job-store";
 import type { StoredPluginManifest } from "../plugins/declarative/store";
 
 const READ_ONLY = { destructiveHint: false, readOnlyHint: true } as const;
@@ -61,6 +63,12 @@ export interface McpRepository {
   linkItems(input: LinkItemsInput): Promise<ItemRelation>;
   listPluginManifests(): Promise<StoredPluginManifest[]>;
   putPluginManifest(manifest: unknown, enabled: boolean): Promise<StoredPluginManifest>;
+  listAgentJobs(): Promise<AgentJob[]>;
+  configureAgentJob(
+    id: string,
+    input: { enabled: boolean; model: string; monthlyTokenCap: number },
+  ): Promise<AgentJob>;
+  listAgentJobRuns(id: string, limit: number): Promise<AgentJobRun[]>;
 }
 
 export function createUnicornMcpServer(repository: McpRepository): McpServer {
@@ -187,6 +195,49 @@ export function createUnicornMcpServer(repository: McpRepository): McpServer {
         return jsonError(error instanceof Error ? error.message : "Failed to store plugin manifest.");
       }
     },
+  );
+
+  server.registerTool(
+    "list_agent_jobs",
+    {
+      annotations: READ_ONLY,
+      description: "List optional server-side agent jobs and their budget configuration.",
+    },
+    async () => jsonResult(await repository.listAgentJobs()),
+  );
+
+  server.registerTool(
+    "configure_agent_job",
+    {
+      annotations: WRITE,
+      description: "Enable or disable an agent job and set its model and monthly token cap.",
+      inputSchema: {
+        id: z.literal("daily-digest"),
+        enabled: z.boolean(),
+        model: z.string().trim().min(1).max(100),
+        monthlyTokenCap: z.number().int().positive().max(100_000_000),
+      },
+    },
+    async ({ id, enabled, model, monthlyTokenCap }) => {
+      try {
+        return jsonResult(await repository.configureAgentJob(id, { enabled, model, monthlyTokenCap }));
+      } catch (error) {
+        return jsonError(error instanceof Error ? error.message : "Failed to configure agent job.");
+      }
+    },
+  );
+
+  server.registerTool(
+    "list_agent_job_runs",
+    {
+      annotations: READ_ONLY,
+      description: "List recent outputs and actual token usage for an agent job.",
+      inputSchema: {
+        id: z.literal("daily-digest"),
+        limit: z.number().int().positive().max(100).optional().default(20),
+      },
+    },
+    async ({ id, limit }) => jsonResult(await repository.listAgentJobRuns(id, limit)),
   );
 
   return server;

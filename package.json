@@ -5,6 +5,8 @@
   "type": "module",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@ai-sdk/openai-compatible": "^3.0.7",
+    "ai": "^7.0.22",
     "fast-xml-parser": "^5.10.0",
     "zod": "^4.4.3"
   },

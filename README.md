@@ -13,6 +13,7 @@ The Worker runtime now includes:
 - Tier-1 declarative JSON and RSS/Atom plugins
 - authenticated Streamable HTTP MCP tools
 - protected settings, retention, and optional Discord notifications
+- an hourly Durable Object scheduler and an opt-in BYOK daily digest with measured token caps
 
 Production deployment: [unicorn.bunizao.workers.dev](https://unicorn.bunizao.workers.dev/health)
 
@@ -29,11 +30,15 @@ npx wrangler secret put MCP_TOKEN
 npx wrangler secret put ED_API_TOKEN       # optional
 npm run moodle:push                         # optional; reads okta-auth session
 npm run deploy
+# Start the persistent hourly scheduler with ADMIN_TOKEN:
+curl -X POST https://<your-worker>/schedule -H "Authorization: Bearer <ADMIN_TOKEN>"
 ```
 
 Use the same random value for `ADMIN_TOKEN` and `MCP_TOKEN` on a single-user deployment. `ADMIN_TOKEN` is the password for HTTP Basic user `unicorn` at `/settings` and the bearer token for `/sync`; `MCP_TOKEN` protects `/mcp`.
 
 MCP clients connect to `https://<your-worker>/mcp` with `Authorization: Bearer <MCP_TOKEN>`.
+
+The `daily-digest` agent job is disabled by default. To use it, set `AI_API_KEY`, choose an OpenAI-compatible `AI_BASE_URL`, then enable and budget it through the `configure_agent_job` MCP tool. Actual input/output usage is stored per run; reaching the monthly cap disables the job without stopping ingestion.
 
 ## What it is
 
@@ -81,6 +86,9 @@ Read the decision records in order — they're the source of truth:
 | **0017** | **Plugin runtime: two tiers (declarative manifests + code plugins)** |
 | **0018** | **Plugin contract: ingestion + facet declaration only; downstream is facet-driven** |
 | **0019** | **Facet vocabulary: open facets, behavior bound to declared capabilities** |
+| **0020** | **Five behavior primitives form the finite kernel surface** |
+| **0021** | **Durable Object alarm provides account-independent scheduling** |
+| **0022** | **Settings never self-mutate Worker Secrets** |
 
 ## Related projects
 

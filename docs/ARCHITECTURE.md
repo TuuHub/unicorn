@@ -20,7 +20,7 @@ Everything is a single Cloudflare Worker (ADR-0001, ADR-0009, ADR-0014). Not a s
                          ┌─────────────────────────────────────────────┐
                          │              ONE CLOUDFLARE WORKER            │
                          │                                              │
-  cron tick ───────────▶ │  ┌────────────┐   ┌──────────────────────┐   │
+  scheduler alarm ─────▶ │  ┌────────────┐   ┌──────────────────────┐   │
                          │  │  Plugins   │──▶│        KERNEL         │   │
   (Ed API, Moodle,       │  │ (ingest)   │   │                      │   │
    RSS, any source)      │  └────────────┘   │  normalize → Item    │   │
@@ -93,7 +93,7 @@ A new domain need (`has-grade`) is normally a *declaration* onto `scalar` + conf
 
 ## 4. The ingestion → surface lifecycle
 
-One cron tick (cadence is user-configurable per source, ADR-0006):
+One scheduler cycle (an hourly self-renewing Durable Object alarm, ADR-0021):
 
 1. **Fetch** — each enabled plugin pulls from its source. Auth per plugin (Ed token direct; Moodle session cookie + derived sesskey, ADR-0003).
 2. **Normalize** — plugin maps raw payload → Items (+ facets + capability bindings). Tier-1 plugins run a declarative manifest; Tier-2 plugins run code.
@@ -132,13 +132,12 @@ Cross-platform course matching (same course in Ed and Moodle) is proposed by the
 All job code talks only to the **Vercel AI SDK interface**. Providers are swappable instances behind it:
 
 ```
-job → AI SDK interface → [ claude-subscription | codex-subscription | official BYOK provider ] → skip + notify
-                            └─ custom providers ─┘   └── Anthropic/OpenAI/Google/OpenRouter/… ──┘
+job → AI SDK interface → OpenAI-compatible BYOK provider → skip without affecting ingestion
 ```
 
-- **BYOK** = official AI SDK providers, free breadth, zero maintenance.
-- **Subscription** = two self-written custom providers (`claude-subscription`, `codex-subscription`) doing OAuth refresh + official-client-mimicking fetch. The fragile mimicry is quarantined here; when a provider changes fingerprints, only these packages change. (These are the natural future spin-out to their own repos — ADR-0014.)
-- **Degradation chain** = provider-instance swapping. Data never depends on it.
+- **BYOK** = an OpenAI-compatible provider configured through `AI_API_KEY` and `AI_BASE_URL`.
+- **Subscription providers** remain an end-state experiment, not v1 code. Their unofficial protocol and account-risk surface do not belong in the stable ingestion path.
+- **Degradation** = a missing or failed model marks only the job as skipped/failed. Data freshness never depends on it.
 
 **Agent jobs** live in a registry (ADR-0008): each has an enable toggle, its own schedule, a credential preference, and metered usage. Budget is three-layer: real metering → measured projections → hard monthly cap that auto-pauses LLM jobs (never ingestion) on breach. End-state catalog: daily digest, Ed↔assessment association, real-time post triage, study planning, extensible.
 
@@ -148,7 +147,7 @@ job → AI SDK interface → [ claude-subscription | codex-subscription | offici
 
 D1 (SQLite) holds Items, facets, Events, the plugin registry, the job registry + usage ledger, and course/relation mappings. Secrets (tokens, cookies, keys) live in CF Secrets, not D1 (ADR-0013).
 
-Retention: current-term data is **hot** (queried + cron-pulled); past-term data is flagged **archived** (queryable, excluded from pulls). Post bodies may reduce to metadata after expiry. A single user won't pressure the 5GB free tier for years; this is about keeping queries and change-detection scoped, not about space.
+Retention: current data is **hot**; non-course Items older than the configured window are flagged **archived** and excluded from normal lists. An Item pulled again becomes hot before retention is re-evaluated. A single user won't pressure the 5GB free tier for years; this is about keeping queries and change detection scoped, not about space.
 
 ---
 
@@ -156,17 +155,17 @@ Retention: current-term data is **hot** (queried + cron-pulled); past-term data 
 
 - **Ed** — API token, used directly from the Worker.
 - **Moodle** — session cookie pushed from the user's machine after a local `okta` login; the Worker keep-alives it (a periodic dashboard GET refreshes both the session and the sesskey). Session death is rare (weeks); the user re-pushes. Optional opt-in full-auto re-login (password + TOTP in Secrets + Browser Rendering) is later.
-- **Secrets** — baseline is CF Secrets (threat model = the user's own CF account). The most sensitive items (subscription tokens, Moodle password) are quarantined: isolated secrets, never logged or echoed, settings page is **write-only** for them.
+- **Secrets** — credentials are Cloudflare Worker Secrets, set through Wrangler or deployment automation. The Worker only reports whether each binding exists; it never renders values and deliberately cannot mutate its own secrets (ADR-0022).
 
 ---
 
 ## 9. Surfaces (ADR-0009, ADR-0010)
 
 - **MCP server (v1)** — query + write-back for the user's own agent: "what's due," "what changed," propose/confirm course mappings, connect a new Tier-1 plugin. The user's Claude/ChatGPT does the reasoning; unicorn serves data. This is how "Claude/Codex account access" is satisfied for interactive use with zero chat UI to build.
-- **Web dashboard (later)** — read-only timeline + the password-protected settings page (tokens, per-source cadence, credentials, budgets).
+- **Web dashboard (later)** — read-only timeline. v1 already includes a password-protected operator settings page for non-secret behavior and connection status.
 - **IM bot (later)** — proactive push + light Q&A, over the pluggable notifier (Telegram / Discord / email).
 
-Onboarding (ADR-0006): a Deploy-to-Cloudflare button provisions Worker + D1; the settings page collects credentials; course mapping and new-source connection go through the MCP agent.
+Onboarding: Wrangler provisions the Worker and D1, secrets are pushed without entering the repository, and course mapping plus Tier-1 source installation go through the MCP agent.
 
 ---
 
@@ -177,18 +176,18 @@ The sharp, finite first cut — kernel + campus, not "everything":
 - Kernel: Item + facet model, the five primitives, change detection → Events, retention.
 - Campus plugin (Tier 2): Ed (token) + Moodle (keep-alive), emitting temporal/state/relation/actor/scalar facets.
 - Plugin engine: Tier-2 code path working; Tier-1 manifest engine at least minimally, since it's the "海纳百川" proof.
-- LLM layer via AI SDK: BYOK path first-class; one subscription provider if time permits.
+- LLM layer via AI SDK: OpenAI-compatible BYOK, with the daily digest disabled until explicitly configured.
 - Job registry with metering + hard caps; daily digest as the first job.
-- MCP surface. notifier with at least one channel. Deploy button + settings page.
+- Authenticated MCP surface, Discord notifier, operator settings page, retention, and a self-renewing scheduler alarm.
 
 **Deferred:** dashboard, IM bot, full subscription-provider breadth, Moodle full-auto re-login, dynamic third-party plugins, Ed↔assessment auto-association beyond simple relation.
 
 ---
 
-## 11. Open questions carried into build
+## 11. Build results and remaining bets
 
-1. **Moodle session lifetime under CF cron keep-alive** — the one thing only measurable empirically. Determines how often a user re-pushes the cookie. First spike before committing endpoints.
-2. **Primitive completeness** — five primitives are the bet; the first non-campus plugin is the real test of whether the set holds.
-3. **Tier-1 manifest schema** — the declarative format and how far AI-generated mappings go before a Tier-2 code plugin is needed.
-4. **MCP tool surface** — exact tools for query, write-back (mappings), and plugin connection.
-5. **Cookie-push command home** — inside `moodle-cli` or a standalone script (ADR-0003).
+1. **Moodle auth works from Workers.** `/my/` refreshes the session and yields `sesskey`; `npm run moodle:push` moves the local Okta session into the Worker without printing it.
+2. **The five primitives survived a non-campus source.** A live RSS/Atom Tier-1 plugin ingests through the same kernel without new behavior code.
+3. **The manifest and MCP surfaces are concrete.** D1 stores validated JSON/RSS manifests; MCP exposes item, upcoming, change, relation, manifest, and job tools.
+4. **Moodle session lifetime remains empirical.** The scheduler now supplies real hourly keep-alive evidence; only elapsed time can close this question.
+5. **Dynamic sandboxed code plugins and subscription-token providers remain deliberately deferred.** Both add trust or account-risk systems far larger than their v1 value.

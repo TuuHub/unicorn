@@ -350,3 +350,27 @@ The insight: the behavior layer can also be dynamic, if the kernel ships a small
 - A new domain capability (e.g. `has-grade`) is usually just a declaration onto `scalar` + a threshold config — no kernel change. Kernel code changes only if a genuinely new *primitive* is ever needed (rare by construction).
 - Notification content is generic templating or AI-generated; reminder cadence is user-configurable per facet — none of it is hardcoded per capability.
 - This is the concrete "AI-native lets the schema stay loose" mechanism: primitives give structured behavior where fields bind; the LLM covers everything unbound at read time.
+
+---
+
+## ADR-0021 — Scheduling: self-renewing Durable Object alarm
+
+**Status:** Accepted (refines ADR-0006's cron mechanism)
+
+**Context.** Cloudflare cron triggers are limited at the account level, and the deployment account already uses every slot. Deleting another product's trigger or requiring a paid plan would violate single-user self-deploy. The scheduling mechanism is not part of the plugin contract; only reliable periodic execution matters.
+
+**Decision.** A singleton `Scheduler` Durable Object owns an alarm. Starting it schedules an immediate cycle; every alarm executes the source → kernel → retention → optional job pipeline and re-arms itself for one hour later in `finally`. Protected `POST/GET/DELETE /schedule` controls and inspects it.
+
+**Consequences.** unicorn remains one Worker and runs automatically without consuming an account cron slot. Alarm state is durable and failures cannot prevent re-arming. Per-source cadence remains deferred; v1 uses one hourly cycle for every enabled source.
+
+---
+
+## ADR-0022 — Settings and secrets: status only, no self-mutation
+
+**Status:** Accepted (corrects ADR-0006/0013's settings mechanism)
+
+**Context.** A Worker cannot write its own Cloudflare Secrets without holding a high-privilege Cloudflare API token. Giving the application that token to save users one setup command would enlarge the blast radius far beyond the source credentials it protects.
+
+**Decision.** Credentials enter through Wrangler or deployment automation and remain Worker Secrets. The settings page may show only whether bindings exist; it edits non-secret D1 configuration such as retention and enable toggles. It never renders secret values and never stores credentials in D1.
+
+**Consequences.** First deploy retains a short CLI step, but the Worker never holds authority to rewrite its own deployment. Moodle session push is automated by `npm run moodle:push`, which pipes the cookie directly from `okta-auth` to Wrangler.
