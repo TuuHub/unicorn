@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-13
 
-**Status:** Worker path validated; keep-alive observation active through Codex automation
+**Status:** Complete; probe retired after the production scheduler took over
 
 ## Question
 
@@ -23,15 +23,15 @@ The deployed probe returned `authenticated: true`. The timeline contained no cur
 
 The session and probe token are Cloudflare Worker secrets. They are never stored in the repository, returned by the Worker, or written to logs.
 
-## Deployment
+## Retired deployment
 
-- Worker: `unicorn-moodle-auth-spike`
-- URL: `https://unicorn-moodle-auth-spike.bunizao.workers.dev`
-- Health check: `GET /health`
-- Authenticated manual probe: `POST /probe`
+- Worker: `unicorn-moodle-auth-spike` (deleted 2026-07-13)
+- Former URL: `https://unicorn-moodle-auth-spike.bunizao.workers.dev`
+- Former health check: `GET /health`
+- Former authenticated manual probe: `POST /probe`
 - Intended cron during validation: every five minutes
 
-The Worker includes a `scheduled` handler, but its cron trigger is not registered. The Cloudflare account has reached its five-trigger limit:
+The Worker included a `scheduled` handler, but its cron trigger was not registered. The Cloudflare account had reached its five-trigger limit:
 
 | Worker | Schedule |
 | --- | --- |
@@ -41,14 +41,14 @@ The Worker includes a `scheduled` handler, but its cron trigger is not registere
 | `site-api` | `0 * * * *` |
 | `site-api` | `*/15 * * * *` |
 
-Default deployment intentionally omits the trigger until capacity is available, so `npm run deploy` remains usable.
+The spike deployment intentionally omitted the trigger, so validation used the temporary Codex automation instead.
 
 ## Observation
 
-The local Codex automation `Watch Moodle session` calls the deployed Worker every six hours. Its probe token lives in the macOS login Keychain and is also configured as a Worker secret; it is not stored in this repository.
+The local Codex automation `Watch Moodle session` called the deployed Worker every six hours during the experiment. Its probe token lived in the macOS login Keychain and was also configured as a Worker secret; it was not stored in this repository.
 
-The automation does not refresh credentials, run an Okta login, or repair a failed session. Each successful probe therefore extends the session only through the same Worker-originated `/my/` request the eventual Cloudflare cron will use. The first monitored probe succeeded on 2026-07-13.
+The automation did not refresh credentials, run an Okta login, or repair a failed session. Each successful probe therefore extended the session only through the same Worker-originated `/my/` request the production scheduler uses. The first monitored probe succeeded on 2026-07-13.
 
-## Remaining validation
+## Closeout
 
-Continue observing until the session expires or survives long enough to accept the keep-alive assumption. A free account cron slot is still required to validate Cloudflare's trigger delivery, but it no longer blocks the session-lifetime experiment itself.
+The production `unicorn` Worker now performs the same keep-alive path through its hourly Durable Object alarm. The standalone spike Worker and its Codex automation were deleted after production verification so they could not retain copied source credentials or generate stale alerts. Session lifetime remains an operational observation on the production scheduler, not a separate deployment.
