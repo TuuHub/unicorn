@@ -10,8 +10,10 @@
   },
   "scripts": {
     "check": "tsc --noEmit && vitest run",
+    "db:migrate": "wrangler d1 migrations apply unicorn --remote",
     "deploy": "wrangler deploy",
-    "dev": "wrangler dev"
+    "dev": "wrangler dev",
+    "moodle:push": "node scripts/push-moodle-session.mjs"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260712.1",

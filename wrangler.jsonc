@@ -1,6 +1,6 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "unicorn-moodle-auth-spike",
+  "name": "unicorn",
   "main": "src/index.ts",
   "compatibility_date": "2026-07-12",
   "workers_dev": true,

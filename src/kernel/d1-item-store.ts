@@ -74,7 +74,8 @@ export class D1ItemStore implements ItemStore {
              url = excluded.url,
              body = excluded.body,
              raw_json = excluded.raw_json,
-             updated_at = excluded.updated_at`,
+             updated_at = excluded.updated_at,
+             archived_at = NULL`,
         )
         .bind(
           item.source,
