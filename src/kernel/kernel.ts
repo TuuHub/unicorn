@@ -10,8 +10,10 @@ export class Kernel {
     validateBatch(items);
     const result: IngestResult = { created: 0, updated: 0, unchanged: 0, events: [] };
 
-    for (const input of items) {
-      const existing = await this.store.find(input.source, input.id);
+    for (const rawInput of items) {
+      const input = normalizeItem(rawInput);
+      const stored = await this.store.find(input.source, input.id);
+      const existing = stored ? normalizeStoredItem(stored) : null;
       if (existing) {
         if (equal(existingContent(existing), input)) {
           result.unchanged += 1;
@@ -200,6 +202,28 @@ function unboundFacetData(facets: Facet[]): JsonValue {
 function existingContent(item: StoredItem): ItemInput {
   const { createdAt: _createdAt, updatedAt: _updatedAt, ...content } = item;
   return content;
+}
+
+function normalizeStoredItem(item: StoredItem): StoredItem {
+  return {
+    ...normalizeItem(existingContent(item)),
+    createdAt: item.createdAt,
+    updatedAt: item.updatedAt,
+  };
+}
+
+function normalizeItem(item: ItemInput): ItemInput {
+  return {
+    ...structuredClone(item),
+    facets: item.facets
+      .map((facet) => ({
+        ...structuredClone(facet),
+        capabilities: [...facet.capabilities].sort((left, right) =>
+          `${left.name}:${left.primitive}:${left.field}`.localeCompare(`${right.name}:${right.primitive}:${right.field}`),
+        ),
+      }))
+      .sort((left, right) => left.type.localeCompare(right.type)),
+  };
 }
 
 function equal(left: unknown, right: unknown): boolean {
