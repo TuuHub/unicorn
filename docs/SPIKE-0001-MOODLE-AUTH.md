@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-13
 
-**Status:** Worker path validated; scheduled execution blocked by account cron capacity
+**Status:** Worker path validated; keep-alive observation active through Codex automation
 
 ## Question
 
@@ -43,6 +43,12 @@ The Worker includes a `scheduled` handler, but its cron trigger is not registere
 
 Default deployment intentionally omits the trigger until capacity is available, so `npm run deploy` remains usable.
 
+## Observation
+
+The local Codex automation `Watch Moodle session` calls the deployed Worker every six hours. Its probe token lives in the macOS login Keychain and is also configured as a Worker secret; it is not stored in this repository.
+
+The automation does not refresh credentials, run an Okta login, or repair a failed session. Each successful probe therefore extends the session only through the same Worker-originated `/my/` request the eventual Cloudflare cron will use. The first monitored probe succeeded on 2026-07-13.
+
 ## Remaining validation
 
-Free one account cron slot or raise the account limit, register the spike schedule, and observe session validity over multiple scheduled runs. This is the only remaining part of ADR-0003's keep-alive assumption.
+Continue observing until the session expires or survives long enough to accept the keep-alive assumption. A free account cron slot is still required to validate Cloudflare's trigger delivery, but it no longer blocks the session-lifetime experiment itself.
