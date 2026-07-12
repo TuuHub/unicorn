@@ -12,6 +12,14 @@ export interface AgentJob {
   lastRunAt: string | null;
 }
 
+export interface AgentJobConfig {
+  enabled: boolean;
+  model: string;
+  monthlyTokenCap: number;
+  scheduleHourUtc: number;
+  credentialPreference: "byok";
+}
+
 export interface JobRunInput {
   jobId: string;
   status: "completed" | "failed" | "no_changes";
@@ -49,7 +57,7 @@ export interface TextGenerator {
 
 export type DigestResult =
   | { status: "disabled" | "not_due" | "already_ran" | "budget_exhausted" | "no_changes" | "failed" }
-  | ({ status: "completed" } & TextGeneration);
+  | ({ status: "completed"; budgetExhausted?: true } & TextGeneration);
 
 export class DailyDigestRunner {
   constructor(
@@ -128,10 +136,11 @@ export class DailyDigestRunner {
       totalTokens: generated.usage.totalTokens,
       createdAt: now.toISOString(),
     });
-    if (used + generated.usage.totalTokens >= job.monthlyTokenCap) {
+    const budgetExhausted = used + generated.usage.totalTokens >= job.monthlyTokenCap;
+    if (budgetExhausted) {
       await this.store.setEnabled(job.id, false);
     }
-    return { status: "completed", ...generated };
+    return { status: "completed", ...generated, ...(budgetExhausted ? { budgetExhausted: true as const } : {}) };
   }
 }
 

@@ -66,6 +66,20 @@ describe("DailyDigestRunner", () => {
       }),
     );
   });
+
+  it("reports when a completed call reaches the monthly cap", async () => {
+    const store = jobStore({ monthlyUsage: 8_000, monthlyTokenCap: 10_000 });
+    const generator = textGenerator({
+      text: "Digest",
+      usage: { inputTokens: 1_700, outputTokens: 300, totalTokens: 2_000 },
+    });
+    const runner = new DailyDigestRunner(store, dataSource(), generator);
+
+    const result = await runner.run(new Date("2026-07-13T00:00:00.000Z"));
+
+    expect(result).toMatchObject({ status: "completed", budgetExhausted: true });
+    expect(store.setEnabled).toHaveBeenCalledWith("daily-digest", false);
+  });
 });
 
 function jobStore(overrides: {

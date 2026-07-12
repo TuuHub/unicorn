@@ -1,6 +1,6 @@
 import { D1ItemStore } from "../kernel/d1-item-store";
 import type { ItemEvent, JsonValue, StoredItem } from "../kernel/types";
-import type { AgentJob } from "../jobs/daily-digest";
+import type { AgentJob, AgentJobConfig } from "../jobs/daily-digest";
 import { D1JobStore, type AgentJobRun } from "../jobs/d1-job-store";
 import { D1ManifestStore, type StoredPluginManifest } from "../plugins/declarative/store";
 import type {
@@ -223,13 +223,7 @@ export class D1McpRepository implements McpRepository {
 
   configureAgentJob(
     id: string,
-    input: {
-      enabled: boolean;
-      model: string;
-      monthlyTokenCap: number;
-      scheduleHourUtc: number;
-      credentialPreference: "byok";
-    },
+    input: AgentJobConfig,
   ): Promise<AgentJob> {
     return this.jobs.configure(id, input);
   }

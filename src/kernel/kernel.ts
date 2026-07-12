@@ -122,7 +122,7 @@ function isTimestamp(value: string): boolean {
 
 function diffEvents(existing: StoredItem, input: ItemInput, createdAt: string): ItemEvent[] {
   const events = diffCapabilities(existing, input, createdAt);
-  const changedFields: string[] = (["kind", "title", "timestamp", "url", "body"] as const).filter(
+  const changedFields: string[] = (["kind", "title", "timestamp", "url", "body", "raw"] as const).filter(
     (field) => !equal(existing[field], input[field]),
   );
 

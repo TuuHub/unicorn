@@ -149,6 +149,16 @@ describe("MoodlePlugin.pull", () => {
                   action: { name: "Add submission", actionable: false },
                   course: { id: 10 },
                 },
+                {
+                  id: 3,
+                  name: "Assignment 2",
+                  timesort: 1_774_411_200,
+                  modulename: "assign",
+                  purpose: "assessment",
+                  overdue: true,
+                  action: { name: "Add submission", actionable: true },
+                  course: { id: 10 },
+                },
               ],
             },
           },
@@ -162,9 +172,15 @@ describe("MoodlePlugin.pull", () => {
 
     const items = await plugin.pull();
 
-    expect(items).toHaveLength(1);
+    expect(items).toHaveLength(2);
     expect(items[0]).toMatchObject({
       id: "assessment:2",
+      facets: expect.arrayContaining([
+        expect.objectContaining({ type: "submission", data: { status: "unknown" } }),
+      ]),
+    });
+    expect(items[1]).toMatchObject({
+      id: "assessment:3",
       facets: expect.arrayContaining([
         expect.objectContaining({ type: "submission", data: { status: "unknown" } }),
       ]),

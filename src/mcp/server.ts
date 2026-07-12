@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { ItemEvent, JsonValue, StoredItem } from "../kernel/types";
-import type { AgentJob } from "../jobs/daily-digest";
+import type { AgentJob, AgentJobConfig } from "../jobs/daily-digest";
 import type { AgentJobRun } from "../jobs/d1-job-store";
 import type { StoredPluginManifest } from "../plugins/declarative/store";
 
@@ -66,13 +66,7 @@ export interface McpRepository {
   listAgentJobs(): Promise<AgentJob[]>;
   configureAgentJob(
     id: string,
-    input: {
-      enabled: boolean;
-      model: string;
-      monthlyTokenCap: number;
-      scheduleHourUtc: number;
-      credentialPreference: "byok";
-    },
+    input: AgentJobConfig,
   ): Promise<AgentJob>;
   listAgentJobRuns(id: string, limit: number): Promise<AgentJobRun[]>;
 }

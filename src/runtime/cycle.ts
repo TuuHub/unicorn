@@ -99,14 +99,27 @@ async function runDigest(
   }
   if (result.status === "completed") {
     await sendNotification(env.NOTIFIER_URL, "unicorn daily digest", result.text);
+    if (result.budgetExhausted) {
+      await sendBudgetExhaustedNotification(env.NOTIFIER_URL);
+    }
   } else if (result.status === "budget_exhausted") {
+    await sendBudgetExhaustedNotification(env.NOTIFIER_URL);
+  } else if (result.status === "failed") {
     await sendNotification(
       env.NOTIFIER_URL,
-      "unicorn digest paused",
-      "The daily digest reached its monthly token cap and was disabled. Ingestion is still running.",
+      "unicorn digest failed",
+      "The daily digest model call failed and was skipped. Ingestion is still running.",
     );
   }
   return result;
+}
+
+function sendBudgetExhaustedNotification(url: string): Promise<void> {
+  return sendNotification(
+    url,
+    "unicorn digest paused",
+    "The daily digest reached its monthly token cap and was disabled. Ingestion is still running.",
+  );
 }
 
 async function syncSources(env: Env): Promise<SyncSummary> {

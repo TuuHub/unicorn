@@ -122,6 +122,20 @@ describe("Kernel.ingest", () => {
     expect(result.events.find((event) => event.type === "capability.changed")).not.toHaveProperty("after");
   });
 
+  it("records an item event for a raw-only source change", async () => {
+    const store = new MemoryItemStore();
+    const kernel = new Kernel(store);
+    await kernel.ingest([deadline]);
+    const changed = structuredClone(deadline);
+    changed.raw = { id: 42, sourceRevision: 2 };
+
+    const result = await kernel.ingest([changed]);
+
+    expect(result.events).toEqual([
+      expect.objectContaining({ type: "item.updated", changedFields: ["raw"] }),
+    ]);
+  });
+
   it("treats facet and capability declaration order as insignificant", async () => {
     const store = new MemoryItemStore();
     const kernel = new Kernel(store);

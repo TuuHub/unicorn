@@ -1,4 +1,4 @@
-import type { AgentJob, JobRunInput, JobStore } from "./daily-digest";
+import type { AgentJob, AgentJobConfig, JobRunInput, JobStore } from "./daily-digest";
 
 interface JobRow {
   id: string;
@@ -56,13 +56,7 @@ export class D1JobStore implements JobStore {
 
   async configure(
     id: string,
-    input: {
-      enabled: boolean;
-      model: string;
-      monthlyTokenCap: number;
-      scheduleHourUtc: number;
-      credentialPreference: "byok";
-    },
+    input: AgentJobConfig,
   ): Promise<AgentJob> {
     const result = await this.db
       .prepare(

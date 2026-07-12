@@ -195,10 +195,7 @@ function submissionStatus(event: Record<string, unknown>, action: Record<string,
   if (explicit) {
     return explicit;
   }
-  if (!asBoolean(action.actionable)) {
-    return "unknown";
-  }
-  return asBoolean(event.overdue) ? "overdue" : "pending";
+  return "unknown";
 }
 
 function firstNumber(...values: unknown[]): number | null {

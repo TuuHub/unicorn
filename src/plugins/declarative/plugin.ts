@@ -2,6 +2,7 @@ import { XMLParser } from "fast-xml-parser";
 import { z } from "zod";
 import type { CapabilityBinding, Facet, ItemInput, JsonValue } from "../../kernel/types";
 import type { Plugin } from "../plugin";
+import { asRecord, toJson } from "../source-values";
 
 export type ValueSpec = { path: string } | { value: JsonValue };
 
@@ -209,10 +210,6 @@ function asArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [value];
 }
 
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
-}
-
 function readSpec(record: unknown, spec: ValueSpec): JsonValue | undefined {
   return "value" in spec ? spec.value : toJsonOrUndefined(readPath(record, spec.path));
 }
@@ -242,10 +239,6 @@ function optionalString(value: JsonValue | undefined): string | undefined {
     return String(value);
   }
   return undefined;
-}
-
-function toJson(value: unknown): JsonValue {
-  return JSON.parse(JSON.stringify(value)) as JsonValue;
 }
 
 function toJsonOrUndefined(value: unknown): JsonValue | undefined {
