@@ -1,7 +1,19 @@
+import { D1ItemStore } from "./kernel/d1-item-store";
+import { Kernel, type InvalidItemError } from "./kernel/kernel";
 import { MoodleProbeError, probeMoodle, type MoodleProbeEnv } from "./moodle-probe";
+import { EdPlugin } from "./plugins/campus/ed-plugin";
+import { MoodlePlugin } from "./plugins/campus/moodle-plugin";
+import type { Plugin } from "./plugins/plugin";
 
 interface Env extends MoodleProbeEnv {
+  DB: D1Database;
+  ED_API_TOKEN?: string;
   PROBE_TOKEN: string;
+}
+
+interface SyncSummary {
+  results: Array<{ plugin: string; pulled: number; created: number; updated: number; unchanged: number; events: number }>;
+  errors: Array<{ plugin: string; code: string }>;
 }
 
 function json(value: unknown, status = 200): Response {
@@ -30,17 +42,72 @@ export default {
       }
     }
 
+    if (request.method === "POST" && url.pathname === "/sync") {
+      if (request.headers.get("authorization") !== `Bearer ${env.PROBE_TOKEN}`) {
+        return json({ error: "unauthorized" }, 401);
+      }
+      const summary = await syncCampus(env);
+      return json(summary, summary.errors.length ? 207 : 200);
+    }
+
     return json({ error: "not_found" }, 404);
   },
 
   async scheduled(_controller: ScheduledController, env: Env): Promise<void> {
-    try {
-      const result = await probeMoodle(env);
-      console.log(JSON.stringify({ event: "moodle_probe_succeeded", ...result }));
-    } catch (error) {
-      const code = error instanceof MoodleProbeError ? error.code : "probe_failed";
-      console.error(JSON.stringify({ event: "moodle_probe_failed", code }));
-      throw error;
+    const summary = await syncCampus(env);
+    console.log(JSON.stringify({ event: "campus_sync_completed", ...summary }));
+    if (summary.errors.length) {
+      throw new Error(`Campus sync failed for ${summary.errors.map((error) => error.plugin).join(", ")}.`);
     }
   },
 } satisfies ExportedHandler<Env>;
+
+async function syncCampus(env: Env): Promise<SyncSummary> {
+  const plugins: Plugin[] = [
+    new MoodlePlugin({ baseUrl: env.MOODLE_BASE_URL, session: env.MOODLE_SESSION }),
+  ];
+  if (env.ED_API_TOKEN) {
+    plugins.push(new EdPlugin({ token: env.ED_API_TOKEN }));
+  }
+
+  const kernel = new Kernel(new D1ItemStore(env.DB));
+  const summary: SyncSummary = { results: [], errors: [] };
+  for (const plugin of plugins) {
+    let items;
+    try {
+      items = await plugin.pull();
+    } catch (error) {
+      const code = syncErrorCode(error);
+      console.error(JSON.stringify({ event: "plugin_sync_failed", plugin: plugin.id, stage: "pull", code }));
+      summary.errors.push({ plugin: plugin.id, code: `pull:${code}` });
+      continue;
+    }
+
+    try {
+      const result = await kernel.ingest(items);
+      summary.results.push({
+        plugin: plugin.id,
+        pulled: items.length,
+        created: result.created,
+        updated: result.updated,
+        unchanged: result.unchanged,
+        events: result.events.length,
+      });
+    } catch (error) {
+      const code = syncErrorCode(error);
+      console.error(JSON.stringify({ event: "plugin_sync_failed", plugin: plugin.id, stage: "ingest", code }));
+      summary.errors.push({ plugin: plugin.id, code: `ingest:${code}` });
+    }
+  }
+  return summary;
+}
+
+function syncErrorCode(error: unknown): string {
+  if (error instanceof MoodleProbeError) {
+    return error.code;
+  }
+  if (error && typeof error === "object" && "code" in error) {
+    return String((error as InvalidItemError).code);
+  }
+  return "sync_failed";
+}

@@ -85,4 +85,26 @@ describe("Kernel.ingest", () => {
     expect(result).toEqual({ created: 0, updated: 0, unchanged: 1, events: [] });
     await expect(store.listEvents()).resolves.toHaveLength(1);
   });
+
+  it("treats facet and capability declaration order as insignificant", async () => {
+    const store = new MemoryItemStore();
+    const kernel = new Kernel(store);
+    const item = structuredClone(deadline);
+    item.facets.push({
+      type: "course-membership",
+      data: { course: "course:41031", role: "student" },
+      capabilities: [
+        { name: "has-role", primitive: "state", field: "role" },
+        { name: "belongs-to-course", primitive: "relation", field: "course" },
+      ],
+    });
+    await kernel.ingest([item]);
+
+    const reordered = structuredClone(item);
+    reordered.facets.reverse();
+    reordered.facets[0]!.capabilities.reverse();
+    const result = await kernel.ingest([reordered]);
+
+    expect(result).toEqual({ created: 0, updated: 0, unchanged: 1, events: [] });
+  });
 });
