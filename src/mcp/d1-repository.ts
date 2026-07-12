@@ -1,5 +1,6 @@
 import { D1ItemStore } from "../kernel/d1-item-store";
 import type { ItemEvent, JsonValue, StoredItem } from "../kernel/types";
+import { D1ManifestStore, type StoredPluginManifest } from "../plugins/declarative/store";
 import type {
   EventQuery,
   ItemQuery,
@@ -53,9 +54,11 @@ interface RelationRow {
 
 export class D1McpRepository implements McpRepository {
   private readonly items: D1ItemStore;
+  private readonly manifests: D1ManifestStore;
 
   constructor(private readonly db: D1Database) {
     this.items = new D1ItemStore(db);
+    this.manifests = new D1ManifestStore(db);
   }
 
   find(source: string, itemId: string): Promise<StoredItem | null> {
@@ -207,6 +210,14 @@ export class D1McpRepository implements McpRepository {
       throw new Error("Relation was not persisted.");
     }
     return parseRelation(row);
+  }
+
+  listPluginManifests(): Promise<StoredPluginManifest[]> {
+    return this.manifests.list();
+  }
+
+  putPluginManifest(manifest: unknown, enabled: boolean): Promise<StoredPluginManifest> {
+    return this.manifests.upsert(manifest, enabled);
   }
 }
 

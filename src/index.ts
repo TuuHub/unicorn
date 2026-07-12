@@ -6,6 +6,8 @@ import { createUnicornMcpServer } from "./mcp/server";
 import { MoodleProbeError, probeMoodle, type MoodleProbeEnv } from "./moodle-probe";
 import { EdPlugin } from "./plugins/campus/ed-plugin";
 import { MoodlePlugin } from "./plugins/campus/moodle-plugin";
+import { DeclarativePlugin } from "./plugins/declarative/plugin";
+import { D1ManifestStore } from "./plugins/declarative/store";
 import type { Plugin } from "./plugins/plugin";
 
 interface Env extends MoodleProbeEnv {
@@ -36,6 +38,12 @@ export default {
       if (request.headers.get("authorization") !== `Bearer ${env.MCP_TOKEN}`) {
         return json({ error: "unauthorized" }, 401);
       }
+      if (request.method !== "POST") {
+        return new Response(JSON.stringify({ error: "method_not_allowed" }), {
+          status: 405,
+          headers: { "content-type": "application/json", allow: "POST" },
+        });
+      }
       const transport = new WebStandardStreamableHTTPServerTransport({
         enableJsonResponse: true,
         sessionIdGenerator: undefined,
@@ -63,7 +71,7 @@ export default {
       if (request.headers.get("authorization") !== `Bearer ${env.PROBE_TOKEN}`) {
         return json({ error: "unauthorized" }, 401);
       }
-      const summary = await syncCampus(env);
+      const summary = await syncSources(env);
       return json(summary, summary.errors.length ? 207 : 200);
     }
 
@@ -71,7 +79,7 @@ export default {
   },
 
   async scheduled(_controller: ScheduledController, env: Env): Promise<void> {
-    const summary = await syncCampus(env);
+    const summary = await syncSources(env);
     console.log(JSON.stringify({ event: "campus_sync_completed", ...summary }));
     if (summary.errors.length) {
       throw new Error(`Campus sync failed for ${summary.errors.map((error) => error.plugin).join(", ")}.`);
@@ -79,13 +87,16 @@ export default {
   },
 } satisfies ExportedHandler<Env>;
 
-async function syncCampus(env: Env): Promise<SyncSummary> {
+async function syncSources(env: Env): Promise<SyncSummary> {
   const plugins: Plugin[] = [
     new MoodlePlugin({ baseUrl: env.MOODLE_BASE_URL, session: env.MOODLE_SESSION }),
   ];
   if (env.ED_API_TOKEN) {
     plugins.push(new EdPlugin({ token: env.ED_API_TOKEN }));
   }
+  const manifests = await new D1ManifestStore(env.DB).list(true);
+  const bindings = env as unknown as Record<string, unknown>;
+  plugins.push(...manifests.map(({ manifest }) => new DeclarativePlugin(manifest, bindings)));
 
   const kernel = new Kernel(new D1ItemStore(env.DB));
   const summary: SyncSummary = { results: [], errors: [] };

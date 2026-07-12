@@ -5,6 +5,7 @@
   "type": "module",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "fast-xml-parser": "^5.10.0",
     "zod": "^4.4.3"
   },
   "scripts": {

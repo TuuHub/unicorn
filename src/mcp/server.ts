@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { ItemEvent, JsonValue, StoredItem } from "../kernel/types";
+import type { StoredPluginManifest } from "../plugins/declarative/store";
 
 const READ_ONLY = { destructiveHint: false, readOnlyHint: true } as const;
 const WRITE = { destructiveHint: false, readOnlyHint: false } as const;
@@ -58,6 +59,8 @@ export interface McpRepository {
   listEvents(query: EventQuery): Promise<ItemEvent[]>;
   listRelations(type?: string): Promise<ItemRelation[]>;
   linkItems(input: LinkItemsInput): Promise<ItemRelation>;
+  listPluginManifests(): Promise<StoredPluginManifest[]>;
+  putPluginManifest(manifest: unknown, enabled: boolean): Promise<StoredPluginManifest>;
 }
 
 export function createUnicornMcpServer(repository: McpRepository): McpServer {
@@ -154,6 +157,34 @@ export function createUnicornMcpServer(repository: McpRepository): McpServer {
         );
       } catch (error) {
         return jsonError(error instanceof Error ? error.message : "Failed to link items.");
+      }
+    },
+  );
+
+  server.registerTool(
+    "list_plugin_manifests",
+    {
+      annotations: READ_ONLY,
+      description: "List installed Tier-1 declarative plugin manifests.",
+    },
+    async () => jsonResult(await repository.listPluginManifests()),
+  );
+
+  server.registerTool(
+    "put_plugin_manifest",
+    {
+      annotations: WRITE,
+      description: "Validate and install or update a Tier-1 JSON or RSS plugin manifest.",
+      inputSchema: {
+        manifest: z.record(z.string(), z.unknown()),
+        enabled: z.boolean().optional().default(true),
+      },
+    },
+    async ({ manifest, enabled }) => {
+      try {
+        return jsonResult(await repository.putPluginManifest(manifest, enabled));
+      } catch (error) {
+        return jsonError(error instanceof Error ? error.message : "Failed to store plugin manifest.");
       }
     },
   );
