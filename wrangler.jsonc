@@ -9,5 +9,13 @@
   },
   "vars": {
     "MOODLE_BASE_URL": "https://learning.monash.edu"
-  }
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "unicorn",
+      "database_id": "1d643c3d-effa-4675-ad8b-2f5af97aa855",
+      "migrations_dir": "migrations"
+    }
+  ]
 }
