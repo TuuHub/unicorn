@@ -1,0 +1,173 @@
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
+import type { ItemEvent, JsonValue, StoredItem } from "../kernel/types";
+
+const READ_ONLY = { destructiveHint: false, readOnlyHint: true } as const;
+const WRITE = { destructiveHint: false, readOnlyHint: false } as const;
+
+export interface ItemQuery {
+  source?: string;
+  kind?: string;
+  limit: number;
+}
+
+export interface UpcomingQuery {
+  days: number;
+  limit: number;
+}
+
+export interface EventQuery {
+  since?: string;
+  limit: number;
+}
+
+export interface UpcomingItem {
+  source: string;
+  itemId: string;
+  title: string;
+  dueAt: string;
+  url?: string;
+  facetType: string;
+  capability: string;
+}
+
+export interface ItemRelation {
+  id: string;
+  type: string;
+  fromSource: string;
+  fromItemId: string;
+  toSource: string;
+  toItemId: string;
+  metadata: JsonValue;
+  confirmedAt: string;
+}
+
+export interface LinkItemsInput {
+  type: string;
+  fromSource: string;
+  fromItemId: string;
+  toSource: string;
+  toItemId: string;
+  metadata: JsonValue;
+}
+
+export interface McpRepository {
+  find(source: string, itemId: string): Promise<StoredItem | null>;
+  listItems(query: ItemQuery): Promise<StoredItem[]>;
+  listUpcoming(query: UpcomingQuery): Promise<UpcomingItem[]>;
+  listEvents(query: EventQuery): Promise<ItemEvent[]>;
+  listRelations(type?: string): Promise<ItemRelation[]>;
+  linkItems(input: LinkItemsInput): Promise<ItemRelation>;
+}
+
+export function createUnicornMcpServer(repository: McpRepository): McpServer {
+  const server = new McpServer({ name: "unicorn", version: "0.1.0" });
+
+  server.registerTool(
+    "list_items",
+    {
+      annotations: READ_ONLY,
+      description: "List normalized items from every enabled source.",
+      inputSchema: {
+        source: z.string().trim().min(1).optional(),
+        kind: z.string().trim().min(1).optional(),
+        limit: z.number().int().positive().max(100).optional().default(20),
+      },
+    },
+    async ({ source, kind, limit }) => jsonResult(await repository.listItems({ source, kind, limit })),
+  );
+
+  server.registerTool(
+    "get_item",
+    {
+      annotations: READ_ONLY,
+      description: "Get one normalized item with its facets and raw source payload.",
+      inputSchema: {
+        source: z.string().trim().min(1),
+        itemId: z.string().trim().min(1),
+      },
+    },
+    async ({ source, itemId }) => jsonResult(await repository.find(source, itemId)),
+  );
+
+  server.registerTool(
+    "list_upcoming",
+    {
+      annotations: READ_ONLY,
+      description: "List temporal capabilities due within a number of days.",
+      inputSchema: {
+        days: z.number().int().positive().max(365).optional().default(14),
+        limit: z.number().int().positive().max(100).optional().default(20),
+      },
+    },
+    async ({ days, limit }) => jsonResult(await repository.listUpcoming({ days, limit })),
+  );
+
+  server.registerTool(
+    "list_changes",
+    {
+      annotations: READ_ONLY,
+      description: "List item and capability change events, newest first.",
+      inputSchema: {
+        since: z.string().trim().min(1).optional(),
+        limit: z.number().int().positive().max(100).optional().default(20),
+      },
+    },
+    async ({ since, limit }) => jsonResult(await repository.listEvents({ since, limit })),
+  );
+
+  server.registerTool(
+    "list_relations",
+    {
+      annotations: READ_ONLY,
+      description: "List confirmed cross-source item relations.",
+      inputSchema: { type: z.string().trim().min(1).optional() },
+    },
+    async ({ type }) => jsonResult(await repository.listRelations(type)),
+  );
+
+  server.registerTool(
+    "link_items",
+    {
+      annotations: WRITE,
+      description: "Confirm a relation between two existing items, such as the same course across sources.",
+      inputSchema: {
+        type: z.string().trim().min(1).optional().default("same-course"),
+        fromSource: z.string().trim().min(1),
+        fromItemId: z.string().trim().min(1),
+        toSource: z.string().trim().min(1),
+        toItemId: z.string().trim().min(1),
+        metadata: z.record(z.string(), z.unknown()).optional().default({}),
+      },
+    },
+    async ({ type, fromSource, fromItemId, toSource, toItemId, metadata }) => {
+      try {
+        return jsonResult(
+          await repository.linkItems({
+            type,
+            fromSource,
+            fromItemId,
+            toSource,
+            toItemId,
+            metadata: metadata as JsonValue,
+          }),
+        );
+      } catch (error) {
+        return jsonError(error instanceof Error ? error.message : "Failed to link items.");
+      }
+    },
+  );
+
+  return server;
+}
+
+function jsonResult(payload: unknown) {
+  return { content: [{ type: "text" as const, text: JSON.stringify(payload) }] };
+}
+
+function jsonError(message: string) {
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify({ error: { message, type: "UNICORN_ERROR" } }) }],
+    isError: true,
+  };
+}

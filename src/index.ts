@@ -1,5 +1,8 @@
+import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { D1ItemStore } from "./kernel/d1-item-store";
 import { Kernel, type InvalidItemError } from "./kernel/kernel";
+import { D1McpRepository } from "./mcp/d1-repository";
+import { createUnicornMcpServer } from "./mcp/server";
 import { MoodleProbeError, probeMoodle, type MoodleProbeEnv } from "./moodle-probe";
 import { EdPlugin } from "./plugins/campus/ed-plugin";
 import { MoodlePlugin } from "./plugins/campus/moodle-plugin";
@@ -8,6 +11,7 @@ import type { Plugin } from "./plugins/plugin";
 interface Env extends MoodleProbeEnv {
   DB: D1Database;
   ED_API_TOKEN?: string;
+  MCP_TOKEN: string;
   PROBE_TOKEN: string;
 }
 
@@ -25,7 +29,20 @@ export default {
     const url = new URL(request.url);
 
     if (request.method === "GET" && url.pathname === "/health") {
-      return json({ status: "ready" });
+      return json({ status: "ready", mcp: "/mcp" });
+    }
+
+    if (url.pathname === "/mcp") {
+      if (request.headers.get("authorization") !== `Bearer ${env.MCP_TOKEN}`) {
+        return json({ error: "unauthorized" }, 401);
+      }
+      const transport = new WebStandardStreamableHTTPServerTransport({
+        enableJsonResponse: true,
+        sessionIdGenerator: undefined,
+      });
+      const server = createUnicornMcpServer(new D1McpRepository(env.DB));
+      await server.connect(transport);
+      return transport.handleRequest(request);
     }
 
     if (request.method === "POST" && url.pathname === "/probe") {
