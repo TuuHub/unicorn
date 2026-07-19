@@ -26,6 +26,12 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
 
+    if (request.method === "GET" && url.pathname === "/") {
+      // A fresh deployer opening the bare workers.dev URL should land somewhere
+      // useful, not on a JSON 404. /settings is the human surface.
+      return Response.redirect(new URL("/settings", url).toString(), 302);
+    }
+
     if (request.method === "GET" && url.pathname === "/health") {
       return json({ status: "ready", mcp: "/mcp", settings: "/settings", digest: "/digest" });
     }
