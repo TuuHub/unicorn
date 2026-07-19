@@ -86,8 +86,11 @@ export class Scheduler {
           skipped: cycle.skipped,
         }),
       );
-    } catch {
-      console.error(JSON.stringify({ event: "scheduler_cycle_failed", code: "cycle_failed" }));
+    } catch (error) {
+      // Log the message (server-side, low-sensitivity) so a first-tick schema or
+      // config failure is distinguishable from a transient network blip.
+      const message = error instanceof Error ? error.message : "unknown";
+      console.error(JSON.stringify({ event: "scheduler_cycle_failed", code: "cycle_failed", message }));
     } finally {
       await this.state.storage.setAlarm(Date.now() + 60 * 60 * 1000);
     }

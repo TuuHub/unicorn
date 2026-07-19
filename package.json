@@ -16,7 +16,8 @@
     "deploy": "wrangler deploy",
     "dev": "wrangler dev",
     "moodle:push": "node scripts/push-moodle-session.mjs",
-    "setup": "node scripts/setup.mjs"
+    "setup": "node scripts/setup.mjs",
+    "upgrade": "wrangler d1 migrations apply unicorn --remote && wrangler deploy"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260712.1",

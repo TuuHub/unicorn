@@ -28,6 +28,13 @@ function capture(command, args) {
   return result.stdout;
 }
 
+// Like capture(), but returns { stdout, stderr, ok } instead of failing — for steps
+// that have a meaningful "already exists" path.
+function tryCapture(command, args) {
+  const result = spawnSync(command, args, { encoding: "utf8" });
+  return { stdout: result.stdout ?? "", stderr: result.stderr ?? "", ok: result.status === 0 };
+}
+
 function fail(message) {
   stdout.write(`\n✗ ${message}\n`);
   process.exit(1);
@@ -64,9 +71,18 @@ async function main() {
   wrangler(["login"]);
 
   step("Creating the D1 database");
-  const createOutput = capture("npx", ["wrangler", "d1", "create", "unicorn"]);
-  stdout.write(createOutput);
-  const databaseId = extractDatabaseId(createOutput) ?? (await promptDatabaseId(rl));
+  // Idempotent: if the DB already exists this is an upgrade, so reuse it rather than
+  // aborting. `d1 create` fails on a name clash; fall back to reading the existing id.
+  const created = tryCapture("npx", ["wrangler", "d1", "create", "unicorn"]);
+  stdout.write(created.ok ? created.stdout : created.stderr);
+  let databaseId = extractDatabaseId(created.stdout);
+  if (!databaseId) {
+    const existing = tryCapture("npx", ["wrangler", "d1", "info", "unicorn", "--json"]);
+    databaseId = extractDatabaseId(existing.stdout) ?? readDatabaseId() ?? (await promptDatabaseId(rl));
+    if (!created.ok) {
+      stdout.write("  database already exists — reusing it (upgrade path)\n");
+    }
+  }
   writeDatabaseId(databaseId);
   stdout.write(`  wrote database_id ${databaseId} into wrangler.jsonc\n`);
 
@@ -126,6 +142,16 @@ function extractDatabaseId(output) {
   const match =
     /database_id\s*=\s*"([0-9a-f-]{36})"/i.exec(output) ?? /"database_id"\s*:\s*"([0-9a-f-]{36})"/i.exec(output);
   return match?.[1] ?? null;
+}
+
+// Read the id already committed to wrangler.jsonc, if any (the upgrade case where the
+// repo was cloned with a live database_id).
+function readDatabaseId() {
+  try {
+    return extractDatabaseId(readFileSync("wrangler.jsonc", "utf8"));
+  } catch {
+    return null;
+  }
 }
 
 async function promptDatabaseId(rl) {

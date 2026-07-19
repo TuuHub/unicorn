@@ -27,6 +27,21 @@ to script around the browser OAuth step. When the script asks for the Ed token o
 push, answer from what the user gave you; if you don't have those, decline (both are
 optional and can be added later with `wrangler secret put`).
 
+## Upgrading an existing deployment
+
+`npm run setup` is for a **first install**. If the Worker and its D1 already exist (you're
+pulling new code), upgrade instead — apply any new migrations, then redeploy, in that order:
+
+```bash
+npm run upgrade   # = wrangler d1 migrations apply unicorn --remote && wrangler deploy
+```
+
+Migrating before deploying matters: the new code's scheduler cycle reads tables that a
+new migration adds, so deploying first would make every hourly tick fail until the
+migration lands. The Durable Object scheduler and its alarm survive a code redeploy
+untouched. (`npm run setup` also handles the upgrade case now — it reuses an existing D1
+rather than aborting — but `npm run upgrade` is the minimal, non-interactive path.)
+
 ## Notifications (optional)
 
 The notifier fans out to every channel whose secrets are present (ADR-0010, ADR-0026):
