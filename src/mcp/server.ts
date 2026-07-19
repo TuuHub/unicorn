@@ -149,7 +149,18 @@ export function createUnicornMcpServer(repository: McpRepository, options?: { ai
         limit: z.number().int().positive().max(100).optional().default(20),
       },
     },
-    async ({ since, limit }) => jsonResult(await repository.listEvents({ since, limit })),
+    async ({ since, limit }) => {
+      const events = await repository.listEvents({ since, limit });
+      // Projection: the row UUID means nothing to a client, and before/after can be
+      // arbitrarily large source values — clip them to what a judgment needs.
+      return jsonResult(
+        events.map(({ id: _id, before, after, ...event }) => ({
+          ...event,
+          ...(before !== undefined ? { before: clipJson(before) } : {}),
+          ...(after !== undefined ? { after: clipJson(after) } : {}),
+        })),
+      );
+    },
   );
 
   server.registerTool(
@@ -381,6 +392,15 @@ export function createUnicornMcpServer(repository: McpRepository, options?: { ai
 
 function jsonResult(payload: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(payload) }] };
+}
+
+// Cap a JSON value's serialized size for list projections; strings keep their type.
+function clipJson(value: JsonValue): JsonValue {
+  if (typeof value === "string") {
+    return value.length > 160 ? `${value.slice(0, 159)}…` : value;
+  }
+  const text = JSON.stringify(value);
+  return text.length > 160 ? `${text.slice(0, 159)}…` : value;
 }
 
 function jsonError(message: string) {
