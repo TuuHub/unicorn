@@ -81,7 +81,11 @@ export function htmlResponse(body: string, status = 200): Response {
       "content-type": "text/html; charset=utf-8",
       "content-security-policy":
         "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
-      "referrer-policy": "no-referrer",
+      // "same-origin", not "no-referrer": since Chrome 85 the Origin header on
+      // same-origin form POSTs honors the referrer policy, and "no-referrer"
+      // serializes it to "null" — which would make the /settings CSRF origin
+      // check reject every real browser submission.
+      "referrer-policy": "same-origin",
       "x-content-type-options": "nosniff",
     },
   });
