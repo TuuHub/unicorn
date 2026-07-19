@@ -1,4 +1,5 @@
 import { D1JobStore, type AgentJobRun } from "./jobs/d1-job-store";
+import { escapeHtml, htmlResponse, renderPage } from "./ui";
 
 // ADR-0026: the digest is a rendered report, not a maintained surface. The HTML is
 // produced from the latest completed run at request time and served as-is — no
@@ -8,34 +9,48 @@ export async function renderDigestReport(db: D1Database): Promise<Response> {
   // hide the last digest the user actually received.
   const runs = await new D1JobStore(db).listRuns("daily-digest", 30);
   const latest = runs.find((run) => run.status === "completed" && run.output);
-  return html(page(latest));
+  return htmlResponse(page(latest));
 }
 
 function page(run: AgentJobRun | undefined): string {
   const body = run?.output
-    ? `<article>${paragraphs(run.output)}</article><p class="meta">Generated ${escapeHtml(run.createdAt)} · ${run.totalTokens} tokens</p>`
-    : `<p class="empty">No digest has been generated yet. Enable the <code>daily-digest</code> job and wait for the next scheduled run.</p>`;
-  return `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>unicorn digest</title>
-  <style>
-    :root { color-scheme: light dark; }
-    body { margin:0; background:#f8fafc; color:#121722; font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
-    main { width:min(680px,calc(100% - 32px)); margin:clamp(28px,7vw,72px) auto; }
-    h1 { font:800 clamp(30px,6vw,52px)/1 ui-rounded,"SF Pro Rounded",-apple-system,sans-serif; letter-spacing:-.05em; margin:0 0 24px; }
-    article { background:#fff; border:1px solid #cbd3df; padding:22px 24px; }
-    article p { margin:0 0 12px; }
-    .meta { color:#667085; font:600 12px ui-monospace,SFMono-Regular,Menlo,monospace; margin-top:14px; }
-    .empty { background:#fff; border:1px solid #cbd3df; padding:22px 24px; color:#667085; }
-    code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
-    @media (prefers-color-scheme: dark) { body { background:#0d1117; color:#e6edf3; } article,.empty { background:#161b22; border-color:#30363d; } }
-  </style>
-</head>
-<body><main><h1>unicorn digest</h1>${body}</main></body>
-</html>`;
+    ? `<article class="card"><div class="card-body digest-body">${paragraphs(run.output)}</div></article>
+       <p class="meta">Generated ${escapeHtml(formatTimestamp(run.createdAt))} · ${run.totalTokens.toLocaleString("en-US")}&nbsp;tokens</p>`
+    : `<div class="card"><div class="card-body empty">
+         <p><strong>No digest yet.</strong></p>
+         <p>Enable the <code>daily-digest</code> job through the <code>configure_agent_job</code> MCP tool and the next scheduled run will appear here.</p>
+       </div></div>`;
+  return renderPage({
+    title: "unicorn digest",
+    active: "/digest",
+    heading: "Daily digest",
+    subtitle: "The most recent completed digest run, rendered as-is.",
+    body: `${body}
+    <style>
+      .digest-body{padding-top:16px;font-size:15px}
+      .digest-body p{margin:0 0 12px}
+      .digest-body p:last-child{margin-bottom:0}
+      .meta{color:var(--muted);font:500 12.5px ui-monospace,SFMono-Regular,Menlo,monospace;font-variant-numeric:tabular-nums}
+      .empty{padding-top:16px;color:var(--muted)}
+      .empty p{margin:0 0 8px}
+      .empty strong{color:var(--ink)}
+    </style>`,
+  });
+}
+
+// Digest timestamps are ISO strings written by the job store; fall back to the raw
+// value if a run predates that format.
+function formatTimestamp(value: string): string {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+  return new Intl.DateTimeFormat("en-US", {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone: "UTC",
+    hour12: false,
+  }).format(parsed) + " UTC";
 }
 
 function paragraphs(text: string): string {
@@ -43,23 +58,4 @@ function paragraphs(text: string): string {
     .split(/\n{2,}/)
     .map((block) => `<p>${escapeHtml(block).replace(/\n/g, "<br>")}</p>`)
     .join("");
-}
-
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
-
-function html(body: string): Response {
-  return new Response(body, {
-    headers: {
-      "content-type": "text/html; charset=utf-8",
-      "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'",
-      "referrer-policy": "no-referrer",
-      "x-content-type-options": "nosniff",
-    },
-  });
 }
