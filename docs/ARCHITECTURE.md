@@ -192,7 +192,10 @@ The sharp, finite first cut — kernel + campus, not "everything":
 
 1. **Moodle auth works from Workers.** `/my/` refreshes the session and yields `sesskey`; `npm run moodle:push` moves the local Okta session into the Worker without printing it.
 2. **The five primitives survived a non-campus source.** A live RSS/Atom Tier-1 plugin ingests through the same kernel without new behavior code.
-3. **The manifest and MCP surfaces are concrete.** D1 stores validated JSON/RSS manifests; MCP exposes item, upcoming, change, relation, manifest, and job tools.
-4. **Moodle session lifetime remains empirical.** The scheduler now supplies real hourly keep-alive evidence; only elapsed time can close this question.
-5. **Dynamic sandboxed code plugins and subscription-token providers remain deliberately deferred.** Both add trust or account-risk systems far larger than their v1 value.
-6. **Monash grade enrichment remains endpoint-limited.** The enabled AJAX API does not expose authoritative grades or complete submission state, so v1 preserves `unknown` rather than manufacturing certainty.
+3. **The manifest and MCP surfaces are concrete.** D1 stores validated JSON/RSS manifests; MCP exposes item, upcoming, change, relation, manifest, job, and memory tools.
+4. **The resident agent's organs are built (ADR-0023/0024/0025).** A budget-capped triage job runs deterministic reflexes first and calls a model only for the ambiguous middle; a capped notes memory (`get_memory` / `update_memory`) persists judgments; every outbound message flows through a durable outbox with idempotency keys and bounded retry, so a retried cycle never double-sends.
+5. **Two push channels beyond Discord (ADR-0010).** Telegram and MailChannels email adapters resolve from whichever secrets are present; the `/digest` route serves the latest digest as a rendered HTML report (ADR-0026).
+6. **Onboarding is one command (ADR-0027).** `npm run setup` orchestrates login → D1 create → migrate → secrets → deploy → schedule; `SETUP.md` documents the same path for coding agents.
+7. **Moodle session lifetime remains empirical.** The scheduler now supplies real hourly keep-alive evidence; only elapsed time can close this question.
+8. **Dynamic sandboxed code plugins and subscription-token providers remain deliberately deferred.** Both add trust or account-risk systems far larger than their v1 value.
+9. **Monash grade enrichment remains endpoint-limited.** The enabled AJAX API does not expose authoritative grades or complete submission state, so v1 preserves `unknown` rather than manufacturing certainty.

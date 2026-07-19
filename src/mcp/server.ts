@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { ItemEvent, JsonValue, StoredItem } from "../kernel/types";
 import type { AgentJob, AgentJobConfig } from "../jobs/daily-digest";
 import type { AgentJobRun } from "../jobs/d1-job-store";
+import type { MemoryNote } from "../memory";
 import type { StoredPluginManifest } from "../plugins/declarative/store";
 
 const READ_ONLY = { destructiveHint: false, readOnlyHint: true } as const;
@@ -69,6 +70,9 @@ export interface McpRepository {
     input: AgentJobConfig,
   ): Promise<AgentJob>;
   listAgentJobRuns(id: string, limit: number): Promise<AgentJobRun[]>;
+  listMemory(): Promise<MemoryNote[]>;
+  getMemory(domain: string): Promise<MemoryNote>;
+  saveMemory(domain: string, content: string): Promise<MemoryNote>;
 }
 
 export function createUnicornMcpServer(repository: McpRepository): McpServer {
@@ -212,7 +216,7 @@ export function createUnicornMcpServer(repository: McpRepository): McpServer {
       annotations: WRITE,
       description: "Configure an agent job schedule, BYOK model, and monthly token cap.",
       inputSchema: {
-        id: z.literal("daily-digest"),
+        id: z.enum(["daily-digest", "triage"]),
         enabled: z.boolean(),
         model: z.string().trim().min(1).max(100),
         monthlyTokenCap: z.number().int().positive().max(100_000_000),
@@ -243,11 +247,56 @@ export function createUnicornMcpServer(repository: McpRepository): McpServer {
       annotations: READ_ONLY,
       description: "List recent outputs and actual token usage for an agent job.",
       inputSchema: {
-        id: z.literal("daily-digest"),
+        id: z.enum(["daily-digest", "triage"]),
         limit: z.number().int().positive().max(100).optional().default(20),
       },
     },
     async ({ id, limit }) => jsonResult(await repository.listAgentJobRuns(id, limit)),
+  );
+
+  server.registerTool(
+    "list_memory",
+    {
+      annotations: READ_ONLY,
+      description: "List the agent's remembered judgments and preferences, one note per domain.",
+    },
+    async () => jsonResult(await repository.listMemory()),
+  );
+
+  server.registerTool(
+    "get_memory",
+    {
+      annotations: READ_ONLY,
+      description: "Read one memory note in full by domain (for example 'preferences').",
+      inputSchema: { domain: z.string().trim().min(1).max(63) },
+    },
+    async ({ domain }) => {
+      try {
+        return jsonResult(await repository.getMemory(domain));
+      } catch (error) {
+        return jsonError(error instanceof Error ? error.message : "Failed to read memory.");
+      }
+    },
+  );
+
+  server.registerTool(
+    "update_memory",
+    {
+      annotations: WRITE,
+      description:
+        "Rewrite a memory note. Persist judgments the agent should remember, such as 'this course's quizzes don't count'. Capped at 4000 tokens; consolidate at the cap.",
+      inputSchema: {
+        domain: z.string().trim().min(1).max(63),
+        content: z.string().max(20_000),
+      },
+    },
+    async ({ domain, content }) => {
+      try {
+        return jsonResult(await repository.saveMemory(domain, content));
+      } catch (error) {
+        return jsonError(error instanceof Error ? error.message : "Failed to update memory.");
+      }
+    },
   );
 
   return server;

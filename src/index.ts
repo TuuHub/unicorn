@@ -1,4 +1,5 @@
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
+import { renderDigestReport } from "./digest-report";
 import { D1McpRepository } from "./mcp/d1-repository";
 import { createUnicornMcpServer } from "./mcp/server";
 import { MoodleProbeError, probeMoodle } from "./moodle-probe";
@@ -16,7 +17,11 @@ export default {
     const url = new URL(request.url);
 
     if (request.method === "GET" && url.pathname === "/health") {
-      return json({ status: "ready", mcp: "/mcp", settings: "/settings" });
+      return json({ status: "ready", mcp: "/mcp", settings: "/settings", digest: "/digest" });
+    }
+
+    if (request.method === "GET" && url.pathname === "/digest") {
+      return renderDigestReport(env.DB);
     }
 
     if (url.pathname === "/settings") {
@@ -27,7 +32,7 @@ export default {
           moodle: Boolean(env.MOODLE_SESSION),
           ed: Boolean(env.ED_API_TOKEN),
           mcp: Boolean(env.MCP_TOKEN),
-          notifier: Boolean(env.NOTIFIER_URL),
+          notifier: Boolean(env.NOTIFIER_URL || (env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_CHAT_ID) || (env.EMAIL_FROM && env.EMAIL_TO)),
         },
       });
     }

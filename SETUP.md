@@ -1,0 +1,53 @@
+# Deploying unicorn
+
+Two audiences, one path. Whether you're a human at a terminal or a coding agent told
+"deploy this," the deploy is a single command:
+
+```bash
+npm run setup
+```
+
+That runs `scripts/setup.mjs`, a linear installer (ADR-0027) that:
+
+1. checks Node ≥ 20 and installs dependencies,
+2. runs `wrangler login` (a browser window opens for OAuth — pass it through),
+3. creates the `unicorn` D1 database and writes the returned `database_id` back into `wrangler.jsonc`,
+4. applies migrations,
+5. generates random `ADMIN_TOKEN` and `MCP_TOKEN` secrets and stores them via `wrangler secret put`,
+6. optionally accepts an Ed API token and pushes a Moodle session (`npm run moodle:push`),
+7. deploys the Worker,
+8. starts the hourly scheduler with `POST /schedule`.
+
+Secrets only ever enter through Wrangler; the Worker never rewrites its own secrets (ADR-0022).
+
+## For coding agents
+
+Run `npm run setup` and let its child processes own the interactive prompts — do not try
+to script around the browser OAuth step. When the script asks for the Ed token or Moodle
+push, answer from what the user gave you; if you don't have those, decline (both are
+optional and can be added later with `wrangler secret put`).
+
+## Notifications (optional)
+
+The notifier fans out to every channel whose secrets are present (ADR-0010, ADR-0026):
+
+```bash
+npx wrangler secret put NOTIFIER_URL        # Discord webhook
+npx wrangler secret put TELEGRAM_BOT_TOKEN  # Telegram bot
+npx wrangler secret put TELEGRAM_CHAT_ID
+npx wrangler secret put EMAIL_FROM          # MailChannels relay
+npx wrangler secret put EMAIL_TO
+```
+
+All outbound messages go through a durable outbox with idempotency keys and bounded
+retry (ADR-0025), so a retried cycle never double-sends.
+
+## Agent jobs (optional)
+
+Both `daily-digest` and `triage` are disabled by default. Configure them through the MCP
+tools `configure_agent_job`, `list_agent_jobs`, and `list_agent_job_runs`, after setting
+`AI_API_KEY` and (if not OpenAI) `AI_BASE_URL`. Triage watches facet events, keeps
+deterministic reflexes (a deadline within 7 days is always important), and speaks only
+when something matters (ADR-0023). It reads your remembered judgments from the capped
+notes memory (ADR-0024), which your own MCP client edits through `get_memory` /
+`update_memory`.

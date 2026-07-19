@@ -2,6 +2,7 @@ import { D1ItemStore } from "../kernel/d1-item-store";
 import type { ItemEvent, JsonValue, StoredItem } from "../kernel/types";
 import type { AgentJob, AgentJobConfig } from "../jobs/daily-digest";
 import { D1JobStore, type AgentJobRun } from "../jobs/d1-job-store";
+import { D1MemoryStore, type MemoryNote } from "../memory";
 import { D1ManifestStore, type StoredPluginManifest } from "../plugins/declarative/store";
 import type {
   EventQuery,
@@ -58,15 +59,21 @@ export class D1McpRepository implements McpRepository {
   private readonly items: D1ItemStore;
   private readonly manifests: D1ManifestStore;
   private readonly jobs: D1JobStore;
+  private readonly memory: D1MemoryStore;
 
   constructor(private readonly db: D1Database) {
     this.items = new D1ItemStore(db);
     this.manifests = new D1ManifestStore(db);
     this.jobs = new D1JobStore(db);
+    this.memory = new D1MemoryStore(db);
   }
 
   find(source: string, itemId: string): Promise<StoredItem | null> {
     return this.items.find(source, itemId);
+  }
+
+  findMany(keys: Array<{ source: string; itemId: string }>): Promise<StoredItem[]> {
+    return this.items.findMany(keys);
   }
 
   async listItems(query: ItemQuery): Promise<StoredItem[]> {
@@ -230,6 +237,18 @@ export class D1McpRepository implements McpRepository {
 
   listAgentJobRuns(id: string, limit: number): Promise<AgentJobRun[]> {
     return this.jobs.listRuns(id, limit);
+  }
+
+  listMemory(): Promise<MemoryNote[]> {
+    return this.memory.list();
+  }
+
+  getMemory(domain: string): Promise<MemoryNote> {
+    return this.memory.get(domain);
+  }
+
+  saveMemory(domain: string, content: string): Promise<MemoryNote> {
+    return this.memory.save(domain, content);
   }
 }
 

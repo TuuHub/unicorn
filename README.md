@@ -11,13 +11,24 @@ The Worker runtime now includes:
 - D1-backed Item, facet, capability, Event, relation, settings, and manifest storage
 - Moodle and Ed Discussion Campus plugins
 - Tier-1 declarative JSON and RSS/Atom plugins
-- authenticated Streamable HTTP MCP tools
-- protected settings, retention, and optional Discord notifications
-- an hourly Durable Object scheduler and an opt-in BYOK daily digest with measured token caps
+- authenticated Streamable HTTP MCP tools, including capped agent-memory notes
+- protected settings, retention, and Discord / Telegram / email notifications through a durable outbox
+- an hourly Durable Object scheduler, a resident triage job, and an opt-in BYOK daily digest with measured token caps
 
 Production deployment: [unicorn.bunizao.workers.dev](https://unicorn.bunizao.workers.dev/health)
 
 ## Deploy
+
+One command handles the whole path (ADR-0027) — see [SETUP.md](SETUP.md) for the step list and the coding-agent notes:
+
+```bash
+npm run setup
+```
+
+It runs `wrangler login`, creates D1 and writes the `database_id` back into `wrangler.jsonc`, applies migrations, generates random `ADMIN_TOKEN`/`MCP_TOKEN` secrets, optionally pushes Ed and Moodle credentials, deploys, and starts the scheduler.
+
+<details>
+<summary>Manual path</summary>
 
 ```bash
 npm install
@@ -34,6 +45,8 @@ npm run deploy
 curl -X POST https://<your-worker>/schedule -H "Authorization: Bearer <ADMIN_TOKEN>"
 ```
 
+</details>
+
 Generate separate random values for `ADMIN_TOKEN` and `MCP_TOKEN`. `ADMIN_TOKEN` is the password for HTTP Basic user `unicorn` at `/settings` and the bearer token for `/sync`; `MCP_TOKEN` protects `/mcp`. Reusing them needlessly turns one leaked client credential into full operator access.
 
 MCP clients connect to `https://<your-worker>/mcp` with `Authorization: Bearer <MCP_TOKEN>`.
@@ -47,11 +60,11 @@ unicorn is a **plugin platform first**. Plugins ingest from any source; the kern
 On top of the kernel, unicorn is becoming a **resident secretary agent** (ADR-0023): an event-driven triage loop that watches every facet event, suppresses noise, speaks only when something matters, and remembers your corrections in a capped notes memory (ADR-0024). Two faces over one kernel (ADR-0026):
 
 - **MCP server** *(v1)* — the pull face: your own Claude / ChatGPT client consults unicorn's structured data and memory; your agent does the open-ended reasoning.
-- **IM** *(next)* — the push/converse face: proactive triage alerts and digests via Telegram / Discord / email, growing into a two-way conversational surface.
+- **IM** *(v1: push, converse next)* — proactive triage alerts and digests via Telegram / Discord / email through a durable outbox, growing into a two-way conversational surface.
 
 There is deliberately no maintained web dashboard and no daily-driver CLI — views are rendered reports (`/settings`, `/digest`) or generated on demand by your MCP client.
 
-Server-side agent jobs (triage, daily digest, planning) run on your Claude/Codex subscription quota or a BYOK key, with hard budget caps and a degradation chain so ingestion never dies when an LLM does.
+Server-side agent jobs (triage, daily digest, planning) run on your Claude/Codex subscription quota or a BYOK key, with hard budget caps and a degradation chain so ingestion never dies when an LLM does. The **resident triage job** (ADR-0023) is the v1 secretary: deterministic reflexes decide the clear cases with zero LLM, a cheap model judges only the ambiguous middle, and it remembers your corrections in a capped notes memory (ADR-0024) your MCP client can edit.
 
 ## Design principles
 
