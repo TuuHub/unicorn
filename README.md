@@ -51,7 +51,7 @@ Generate separate random values for `ADMIN_TOKEN` and `MCP_TOKEN`. `ADMIN_TOKEN`
 
 MCP clients connect to `https://<your-worker>/mcp` with `Authorization: Bearer <MCP_TOKEN>`.
 
-The `daily-digest` agent job is disabled by default. To use it, set `AI_API_KEY`, choose an OpenAI-compatible `AI_BASE_URL`, then enable it through the `configure_agent_job` MCP tool with a UTC schedule hour and monthly token cap. Actual input/output usage and measured monthly projections are exposed through MCP. The runner reserves prompt and output budget before every call; reaching the cap disables the job, sends a notifier warning when configured, and never stops ingestion.
+The `daily-digest` agent job is disabled by default. To use it, set `AI_API_KEY`, choose an OpenAI-compatible `AI_BASE_URL`, then enable it through the `configure_agent_job` MCP tool with a UTC schedule hour and monthly token cap. Actual input/output usage and measured monthly projections are exposed through MCP. The runner reserves prompt and output budget before every call; reaching the cap disables the digest until re-enabled and pauses triage's model (its zero-token deterministic reflexes keep running), sends a notifier warning when configured, and never stops ingestion.
 
 ## What it is
 

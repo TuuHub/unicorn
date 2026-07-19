@@ -118,7 +118,7 @@ describe("TriageRunner", () => {
     const notify = vi.fn().mockResolvedValue(undefined);
     const generator = {
       generate: vi.fn().mockResolvedValue({
-        text: "thread:4: ignore",
+        text: "1: ignore",
         usage: { inputTokens: 40, outputTokens: 10, totalTokens: 50 },
       }),
     } as unknown as TextGenerator;
@@ -149,10 +149,10 @@ describe("TriageRunner", () => {
     expect(generator.generate).not.toHaveBeenCalled();
   });
 
-  it("does not let a short itemId match another line's verdict (prefix collision)", async () => {
+  it("applies index verdicts positionally, ignoring unmentioned events safely", async () => {
     const store = jobStore();
     const notify = vi.fn().mockResolvedValue(undefined);
-    // Two ambiguous new threads with colliding numeric ids: "123" and "9123".
+    // Two ambiguous new threads; the model only rules on the second one.
     const events: ItemEvent[] = [
       { id: "a", type: "item.created", source: "feed", itemId: "123", createdAt: "2026-07-18T12:00:00.000Z" },
       { id: "b", type: "item.created", source: "feed", itemId: "9123", createdAt: "2026-07-18T12:00:00.000Z" },
@@ -166,10 +166,10 @@ describe("TriageRunner", () => {
           { source: "feed", itemId: "9123", title: "B", kind: "post" },
         ]),
     };
-    // Model ignores only 9123; 123 has no verdict line of its own.
+    // Model ignores only event 2 (B); event 1 has no verdict line of its own.
     const generator = {
       generate: vi.fn().mockResolvedValue({
-        text: "9123: ignore",
+        text: "2: ignore",
         usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
       }),
     } as unknown as TextGenerator;
@@ -177,7 +177,7 @@ describe("TriageRunner", () => {
 
     const result = await runner.run(NOW);
 
-    // 123 must NOT inherit 9123's ignore; it stays important (no verdict → kept).
+    // Event 1 must NOT inherit event 2's ignore; it stays important (no verdict → kept).
     expect(result.status).toBe("completed");
     expect(notify).toHaveBeenCalledOnce();
     const body = notify.mock.calls[0][1] as string;
@@ -195,7 +195,7 @@ describe("TriageRunner", () => {
     const store = jobStore();
     const generator = {
       generate: vi.fn().mockResolvedValue({
-        text: "thread:4: ignore",
+        text: "1: ignore",
         usage: { inputTokens: 40, outputTokens: 10, totalTokens: 50 },
       }),
     } as unknown as TextGenerator;
