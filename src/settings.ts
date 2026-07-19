@@ -20,6 +20,12 @@ export interface SettingsRuntime {
     mcp: boolean;
     notifier: boolean;
   };
+  // Live operational state, fetched by the route handler: whether the hourly
+  // scheduler alarm is set, and how many notifications have permanently failed.
+  status: {
+    schedulerRunning: boolean;
+    failedNotifications: number;
+  };
 }
 
 const DEFAULT_SETTINGS: AppSettings = {
@@ -62,7 +68,7 @@ export async function handleSettings(request: Request, runtime: SettingsRuntime)
 
   if (request.method === "GET") {
     const settings = await runtime.repository.get();
-    return htmlResponse(renderSettings(settings, runtime.connections, new URL(request.url).searchParams.has("saved")));
+    return htmlResponse(renderSettings(settings, runtime, new URL(request.url).searchParams.has("saved")));
   }
 
   if (request.method === "POST") {
@@ -73,7 +79,7 @@ export async function handleSettings(request: Request, runtime: SettingsRuntime)
     const form = await request.formData();
     const retentionDays = Number(form.get("retentionDays"));
     if (!Number.isInteger(retentionDays) || retentionDays < 7 || retentionDays > 3650) {
-      return htmlResponse(renderSettings(await runtime.repository.get(), runtime.connections, false, "Retention must be between 7 and 3650 days."), 400);
+      return htmlResponse(renderSettings(await runtime.repository.get(), runtime, false, "Retention must be between 7 and 3650 days."), 400);
     }
     await runtime.repository.save({
       retentionDays,
@@ -121,10 +127,11 @@ export function constantTimeEqual(left: string, right: string): boolean {
 
 function renderSettings(
   settings: AppSettings,
-  connections: SettingsRuntime["connections"],
+  runtime: Pick<SettingsRuntime, "connections" | "status">,
   saved: boolean,
   error?: string,
 ): string {
+  const { connections, status } = runtime;
   const sources = [
     ["Moodle", connections.moodle],
     ["Ed Discussion", connections.ed],
@@ -133,19 +140,35 @@ function renderSettings(
   ] as const;
   const rail = sources
     .map(
-      ([name, connected]) => `<li class="source">
-        <span class="dot ${connected ? "is-live" : "is-off"}" aria-hidden="true"></span>
+      // "Configured" (the secret exists), not "Connected" — presence of a secret
+      // says nothing about whether the credential still works upstream.
+      ([name, configured]) => `<li class="source">
+        <span class="dot ${configured ? "is-live" : "is-off"}" aria-hidden="true"></span>
         <span class="source-name" translate="no">${name}</span>
-        <span class="source-state">${connected ? "Connected" : "Not configured"}</span>
+        <span class="source-state">${configured ? "Configured" : "Not configured"}</span>
       </li>`,
     )
     .join("");
+  const schedulerRow = `<li class="source">
+        <span class="dot ${status.schedulerRunning ? "is-live" : "is-off"}" aria-hidden="true"></span>
+        <span class="source-name">Hourly scheduler</span>
+        <span class="source-state">${status.schedulerRunning ? "Running" : "Stopped"}</span>
+      </li>`;
+  const failedNotice =
+    status.failedNotifications > 0
+      ? `<p class="notice error" role="alert">${status.failedNotifications} notification${status.failedNotifications === 1 ? "" : "s"} permanently failed to deliver. Check the channel configuration, then re-save it and new messages will flow again.</p>`
+      : "";
+  const schedulerNotice = !status.schedulerRunning
+    ? `<p class="notice error" role="alert">The hourly scheduler is not running — nothing will sync. Start it with <code>curl -X POST https://&lt;your-worker&gt;/schedule -H "Authorization: Bearer &lt;ADMIN_TOKEN&gt;"</code>.</p>`
+    : "";
   const body = `
     ${saved ? '<p class="notice" role="status">Changes saved.</p>' : ""}
     ${error ? `<p class="notice error" role="alert">${error}</p>` : ""}
+    ${schedulerNotice}
+    ${failedNotice}
     <section class="card" aria-labelledby="connections-title">
-      <div class="card-head"><h2 id="connections-title">Connections</h2><p class="card-sub">Read from Worker secrets — configure with <code>wrangler secret put</code>, never stored here.</p></div>
-      <div class="card-body"><ul class="rail rows">${rail}</ul></div>
+      <div class="card-head"><h2 id="connections-title">Status</h2><p class="card-sub">Secrets are read from the Worker — configure with <code>wrangler secret put</code>, never stored here.</p></div>
+      <div class="card-body"><ul class="rail rows">${schedulerRow}${rail}</ul></div>
     </section>
     <section class="card" aria-labelledby="behavior-title">
       <div class="card-head"><h2 id="behavior-title">Behavior</h2></div>

@@ -21,10 +21,27 @@ describe("settings", () => {
     expect(response.status).toBe(200);
     expect(html).toContain('value="180"');
     expect(html).toContain("Moodle");
-    expect(html).toContain("Connected");
+    expect(html).toContain("Configured");
     expect(html).toContain("Notifier");
     expect(html).toContain("Not configured");
+    expect(html).toContain("Hourly scheduler");
+    expect(html).toContain("Running");
     expect(html).not.toContain("admin-secret");
+  });
+
+  it("warns when the scheduler is stopped or notifications have failed", async () => {
+    const stopped = {
+      ...runtime(),
+      status: { schedulerRunning: false, failedNotifications: 2 },
+    };
+    const response = await handleSettings(
+      new Request("https://unicorn.example/settings", { headers: { authorization: basic("admin-secret") } }),
+      stopped,
+    );
+    const html = await response.text();
+
+    expect(html).toContain("scheduler is not running");
+    expect(html).toContain("2 notifications permanently failed");
   });
 
   it("saves validated settings from the same origin", async () => {
@@ -65,6 +82,10 @@ function runtime(repository = repositoryStub()) {
       ed: true,
       mcp: true,
       notifier: false,
+    },
+    status: {
+      schedulerRunning: true,
+      failedNotifications: 0,
     },
   };
 }

@@ -12,6 +12,29 @@ function json(value: unknown, status = 200): Response {
   return Response.json(value, { status });
 }
 
+// Live operational state shared by /health and /settings: is the hourly scheduler
+// alarm set, and how many notifications have permanently failed. Both checks are
+// best-effort — a failure reports as degraded rather than throwing.
+async function operationalStatus(env: Env): Promise<{ schedulerRunning: boolean; failedNotifications: number }> {
+  let schedulerRunning = false;
+  try {
+    const id = env.SCHEDULER.idFromName("primary");
+    const response = await env.SCHEDULER.get(id).fetch(new Request("https://scheduler/status"));
+    const body = (await response.json()) as { scheduled?: boolean };
+    schedulerRunning = body.scheduled === true;
+  } catch {
+    schedulerRunning = false;
+  }
+  let failedNotifications = 0;
+  try {
+    const row = await env.DB.prepare("SELECT COUNT(*) AS n FROM notifications_outbox WHERE status = 'failed'").first<{ n: number }>();
+    failedNotifications = row?.n ?? 0;
+  } catch {
+    failedNotifications = 0;
+  }
+  return { schedulerRunning, failedNotifications };
+}
+
 // Bearer routes compare against the secret in constant time so a response-timing
 // oracle cannot recover the token byte by byte.
 function bearerOk(request: Request, token: string | undefined): boolean {
@@ -33,7 +56,26 @@ export default {
     }
 
     if (request.method === "GET" && url.pathname === "/health") {
-      return json({ status: "ready", mcp: "/mcp", settings: "/settings", digest: "/digest" });
+      // A real readiness check: verify D1 answers and report whether the hourly
+      // scheduler is armed, so the post-deploy curl actually proves something.
+      let database = true;
+      try {
+        await env.DB.prepare("SELECT 1").first();
+      } catch {
+        database = false;
+      }
+      const status = await operationalStatus(env);
+      return json(
+        {
+          status: database ? "ready" : "degraded",
+          database,
+          scheduler: status.schedulerRunning ? "running" : "stopped",
+          mcp: "/mcp",
+          settings: "/settings",
+          digest: "/digest",
+        },
+        database ? 200 : 503,
+      );
     }
 
     if (request.method === "GET" && url.pathname === "/digest") {
@@ -58,6 +100,7 @@ export default {
           mcp: Boolean(env.MCP_TOKEN),
           notifier: Boolean(env.NOTIFIER_URL || (env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_CHAT_ID) || (env.RESEND_API_KEY && env.EMAIL_FROM && env.EMAIL_TO)),
         },
+        status: await operationalStatus(env),
       });
     }
 
