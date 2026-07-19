@@ -1,5 +1,6 @@
 import { DailyDigestRunner, type DigestResult } from "../jobs/daily-digest";
 import { D1JobStore } from "../jobs/d1-job-store";
+import { MemoryConsolidator } from "../jobs/memory-consolidation";
 import {
   AiSdkTextGenerator,
   D1DigestDataSource,
@@ -9,6 +10,7 @@ import {
 import { TriageRunner, type TriageResult } from "../jobs/triage";
 import { D1ItemStore } from "../kernel/d1-item-store";
 import { Kernel, type InvalidItemError } from "../kernel/kernel";
+import { D1MemoryStore } from "../memory";
 import { MoodleProbeError } from "../moodle-probe";
 import { configuredChannels, type NotifierEnv } from "../notifier";
 import { enqueueBroadcast, NotificationOutbox } from "../outbox";
@@ -120,6 +122,29 @@ export async function runCycle(env: Env, forceSync: boolean): Promise<CycleResul
     console.error(JSON.stringify({ event: "digest_failed", message: errorMessage(error) }));
     return { status: "failed" };
   });
+  // Resident memory hygiene (ADR-0024): when the notes near their cap, one
+  // budget-capped model call compresses them. Best-effort; a failure only means
+  // consolidation retries next cycle.
+  const memory = await new MemoryConsolidator(
+    new D1MemoryStore(env.DB),
+    new D1JobStore(env.DB),
+    env.AI_API_KEY ? new AiSdkTextGenerator({ apiKey: env.AI_API_KEY, baseUrl: env.AI_BASE_URL }) : null,
+  )
+    .run()
+    .catch((error): { status: "failed" } => {
+      console.error(JSON.stringify({ event: "memory_consolidation_failed", message: errorMessage(error) }));
+      return { status: "failed" };
+    });
+  if (memory.status === "completed") {
+    console.log(
+      JSON.stringify({
+        event: "memory_consolidated",
+        beforeTokens: memory.beforeTokens,
+        afterTokens: memory.afterTokens,
+        totalTokens: memory.usage.totalTokens,
+      }),
+    );
+  }
 
   // Deliver last, once every enqueue for this cycle has landed. Delivery is
   // idempotent and retries on its own schedule, so a mid-cycle crash before this
