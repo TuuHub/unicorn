@@ -13,6 +13,7 @@ export interface NotifierEnv {
   NOTIFIER_URL?: string;
   TELEGRAM_BOT_TOKEN?: string;
   TELEGRAM_CHAT_ID?: string;
+  RESEND_API_KEY?: string;
   EMAIL_FROM?: string;
   EMAIL_TO?: string;
 }
@@ -96,6 +97,7 @@ export class EmailNotifier implements Notifier {
   private readonly fetcher: typeof fetch;
 
   constructor(
+    private readonly apiKey: string,
     private readonly from: string,
     private readonly to: string,
     fetcher?: typeof fetch,
@@ -103,15 +105,21 @@ export class EmailNotifier implements Notifier {
     this.fetcher = bindFetch(fetcher);
   }
 
+  // Resend, not MailChannels: MailChannels closed its free Workers relay in 2024, so
+  // that path would 401 for every new deploy. Resend works from a Worker with an API
+  // key and a verified sender domain.
   async send(notification: Notification): Promise<void> {
-    const response = await this.fetcher("https://api.mailchannels.net/tx/v1/send", {
+    const response = await this.fetcher("https://api.resend.com/emails", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${this.apiKey}`,
+      },
       body: JSON.stringify({
-        personalizations: [{ to: [{ email: this.to }] }],
-        from: { email: this.from, name: "unicorn" },
+        from: this.from,
+        to: [this.to],
         subject: notification.title,
-        content: [{ type: "text/plain", value: notification.body }],
+        text: notification.body,
       }),
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
@@ -147,7 +155,9 @@ export function resolveNotifier(
       ? new TelegramNotifier(env.TELEGRAM_BOT_TOKEN, env.TELEGRAM_CHAT_ID, fetcher)
       : null;
   }
-  return env.EMAIL_FROM && env.EMAIL_TO ? new EmailNotifier(env.EMAIL_FROM, env.EMAIL_TO, fetcher) : null;
+  return env.RESEND_API_KEY && env.EMAIL_FROM && env.EMAIL_TO
+    ? new EmailNotifier(env.RESEND_API_KEY, env.EMAIL_FROM, env.EMAIL_TO, fetcher)
+    : null;
 }
 
 // The first channel whose secrets are present. Discord first for continuity with v1
@@ -160,7 +170,7 @@ export function configuredChannels(env: NotifierEnv): NotifierChannel[] {
   if (env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_CHAT_ID) {
     channels.push("telegram");
   }
-  if (env.EMAIL_FROM && env.EMAIL_TO) {
+  if (env.RESEND_API_KEY && env.EMAIL_FROM && env.EMAIL_TO) {
     channels.push("email");
   }
   return channels;

@@ -50,7 +50,7 @@ export default {
           moodle: Boolean(env.MOODLE_SESSION),
           ed: Boolean(env.ED_API_TOKEN),
           mcp: Boolean(env.MCP_TOKEN),
-          notifier: Boolean(env.NOTIFIER_URL || (env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_CHAT_ID) || (env.EMAIL_FROM && env.EMAIL_TO)),
+          notifier: Boolean(env.NOTIFIER_URL || (env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_CHAT_ID) || (env.RESEND_API_KEY && env.EMAIL_FROM && env.EMAIL_TO)),
         },
       });
     }

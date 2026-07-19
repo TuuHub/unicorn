@@ -33,9 +33,10 @@ The notifier fans out to every channel whose secrets are present (ADR-0010, ADR-
 
 ```bash
 npx wrangler secret put NOTIFIER_URL        # Discord webhook
-npx wrangler secret put TELEGRAM_BOT_TOKEN  # Telegram bot
+npx wrangler secret put TELEGRAM_BOT_TOKEN   # Telegram bot
 npx wrangler secret put TELEGRAM_CHAT_ID
-npx wrangler secret put EMAIL_FROM          # MailChannels relay
+npx wrangler secret put RESEND_API_KEY       # Resend email (needs a verified sender domain)
+npx wrangler secret put EMAIL_FROM           # e.g. unicorn@your-domain.com
 npx wrangler secret put EMAIL_TO
 ```
 

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { DiscordNotifier, TelegramNotifier } from "../src/notifier";
+import { DiscordNotifier, EmailNotifier, resolveNotifier, TelegramNotifier } from "../src/notifier";
 
 describe("DiscordNotifier", () => {
   it("sends a compact notification without binding the fetch receiver", async () => {
@@ -48,5 +48,32 @@ describe("TelegramNotifier", () => {
     const body = JSON.parse(request.mock.calls[0][1].body) as { text: string };
     expect(body.text.length).toBeLessThanOrEqual(4096);
     expect(/\\$/.test(body.text)).toBe(false);
+  });
+});
+
+describe("EmailNotifier (Resend)", () => {
+  it("posts to the Resend API with a bearer key", async () => {
+    const request = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
+    const notifier = new EmailNotifier("re_key", "unicorn@example.com", "me@example.com", ((
+      i: RequestInfo | URL,
+      n?: RequestInit,
+    ) => request(i, n)) as typeof fetch);
+
+    await notifier.send({ title: "Digest", body: "A1 due tomorrow." });
+
+    expect(request).toHaveBeenCalledWith(
+      "https://api.resend.com/emails",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({ authorization: "Bearer re_key" }),
+      }),
+    );
+  });
+
+  it("is only configured when the Resend key and both addresses are present", () => {
+    expect(resolveNotifier({ EMAIL_FROM: "a@b.com", EMAIL_TO: "c@d.com" }, "email")).toBeNull();
+    expect(
+      resolveNotifier({ RESEND_API_KEY: "re", EMAIL_FROM: "a@b.com", EMAIL_TO: "c@d.com" }, "email"),
+    ).toBeInstanceOf(EmailNotifier);
   });
 });
