@@ -39,7 +39,7 @@ interface SyncSummary {
 
 export interface CycleResult extends SyncSummary {
   archived: number;
-  triage: TriageResult | { status: "not_configured" };
+  triage: TriageResult | { status: "not_configured" | "failed" };
   digest: DigestResult | { status: "not_configured" };
   delivered: { delivered: number; failed: number; retrying: number };
   skipped: boolean;
@@ -110,8 +110,16 @@ export async function runCycle(env: Env, forceSync: boolean): Promise<CycleResul
     // would double-ping the same items, so it degrades to errors-only.
     await enqueueSyncNotice(outbox, env, summary, triageEnabled);
   }
-  const triage = await runTriage(env, outbox, settings.notificationsEnabled);
-  const digest = await runDigest(env, outbox, settings.notificationsEnabled);
+  // A job failure must not take down the rest of the cycle: digest still runs,
+  // and — critically — the outbox still delivers whatever was already enqueued.
+  const triage = await runTriage(env, outbox, settings.notificationsEnabled).catch((error): { status: "failed" } => {
+    console.error(JSON.stringify({ event: "triage_failed", message: errorMessage(error) }));
+    return { status: "failed" };
+  });
+  const digest = await runDigest(env, outbox, settings.notificationsEnabled).catch((error): { status: "failed" } => {
+    console.error(JSON.stringify({ event: "digest_failed", message: errorMessage(error) }));
+    return { status: "failed" };
+  });
 
   // Deliver last, once every enqueue for this cycle has landed. Delivery is
   // idempotent and retries on its own schedule, so a mid-cycle crash before this
@@ -324,6 +332,10 @@ function syncErrorCode(error: unknown): string {
     return String((error as InvalidItemError).code);
   }
   return "sync_failed";
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 // A stable per-day bucket so an identical sync notice in the same hourly retry

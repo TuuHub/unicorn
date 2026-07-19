@@ -95,9 +95,14 @@ export function createUnicornMcpServer(repository: McpRepository, options?: { ai
     },
     async ({ source, kind, limit }) => {
       const items = await repository.listItems({ source, kind, limit });
-      // Strip raw payloads in list responses: a full Ed thread's raw JSON repeats
-      // the body and blows out the caller's context window at up to 100 rows.
-      return jsonResult(items.map(({ raw: _raw, ...item }) => item));
+      // Projection, not dump: strip raw payloads entirely and clip bodies (an Ed
+      // thread body is unbounded prose). get_item returns the full record.
+      return jsonResult(
+        items.map(({ raw: _raw, ...item }) => ({
+          ...item,
+          ...(item.body && item.body.length > 280 ? { body: `${item.body.slice(0, 279)}…`, bodyTruncated: true } : {}),
+        })),
+      );
     },
   );
 
