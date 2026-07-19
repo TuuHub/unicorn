@@ -162,7 +162,7 @@ Refresh failure or a rejected token auto-falls-back to a user-configured API key
 
 ## ADR-0009 — Surfaces: shared kernel, three faces
 
-**Status:** Accepted
+**Status:** Accepted, then **amended by ADR-0026** — the web-dashboard face is demoted to rendered reports and IM is upgraded to the primary conversational face; the shared-kernel principle stands. Kept for history.
 
 **Context.** End-state has three surfaces: MCP server (v1), web dashboard (v2), IM bot (v3). Risk is duplicating change-detection / dedup / push logic across them.
 
@@ -375,3 +375,114 @@ The insight: the behavior layer can also be dynamic, if the kernel ships a small
 **Decision.** Credentials enter through Wrangler or deployment automation and remain Worker Secrets. The settings page may show only whether bindings exist; it edits non-secret D1 configuration such as retention and enable toggles. It never renders secret values and never stores credentials in D1.
 
 **Consequences.** First deploy retains a short CLI step, but the Worker never holds authority to rewrite its own deployment. Moodle session push is automated by `npm run moodle:push`, which pipes the cookie directly from `okta-auth` to Wrangler.
+
+---
+
+## ADR-0023 — Product reframe: unicorn is a resident agent; the kernel is its body
+
+**Status:** Accepted (extends ADR-0015; promotes the jobs layer from periphery to product center)
+
+**Context.** With the maintained dashboard rejected and MCP reading as "just a tool server," the product looked like an accessory to someone else's agent. The missing observation: an MCP-only unicorn is passive (answers only when asked) and amnesiac (client sessions forget). Meanwhile ADR-0004/0007/0008/0021 had already built the organs of an agent — server-side LLM with a degradation chain, providers, a budget-capped job registry, a durable scheduler. The question was never "can it be an agent" but "is the agent the product."
+
+**Decision.** unicorn is a **resident secretary agent** running on the user's own free Cloudflare account. Its v1 mandate is exactly one job: **triage** — watch every facet event, suppress noise, speak only when something matters, and remember every correction. Anatomy:
+
+- **Body (thick — the moat):** plugin runtime, deterministic zero-LLM ingestion, facet model, change detection, scheduler. Generic agent frameworks cannot replicate this cheaply: their perception is browser-and-scrape; ours is structured pipelines inside free quota, including authenticated sources behind SSO (ADR-0003).
+- **Brain (thin — deliberately commodity):** an event-driven loop. Deterministic rules run first (a new deadline within 7 days is always important; no material change is dropped); a cheap model sees only the ambiguous middle; a better model handles planning/digest. Every call sits behind ADR-0008 budget caps, and the degradation chain guarantees perception survives brain death.
+- **Coalescing:** facet events are debounced in a window (~10 min) so one bulk edit becomes one triage call and at most one notification. "Never spam" is a product invariant enforced structurally, not by prompt.
+
+**Rationale.** The loop is commoditizable — any Hermes/OpenClaw-style framework rebuilds it in a weekend. The body is not. Effort distribution therefore stays roughly 9:1 body:brain, and every new feature passes the **weekend test**: if a generic framework could copy it in a weekend, keep it thin; if not, that is where unicorn invests. Because the kernel also serves external brains (ADR-0026's MCP face), unicorn degrades gracefully into "their best sensor pack" even if resident loops lose to generic frameworks — betting on the body means the brain war is won either way.
+
+**Consequences.**
+- Reasoning stays split: the resident loop performs short reflexes only; open-ended multi-step reasoning belongs to the user's own client via MCP. No server-side multi-turn agent loop.
+- Memory becomes a real design surface → ADR-0024.
+- Surfaces re-rank around the agent → ADR-0026.
+- Triage judgment quality is the product's life-line; precision work on it is roadmap, not polish.
+
+---
+
+## ADR-0024 — Agent memory: dual substrate — facts in D1, judgment in capped notes; no vectors
+
+**Status:** Accepted
+
+**Context.** An agent that remembers corrections needs memory beyond world state. Candidate substrates: relational rows, a vector store, plain notes. The deciding question is **who reads it**.
+
+**Decision.** Two substrates, split by reader:
+
+- **World state** (what is true out there): structured Items/facets/Events in D1 (ADR-0016). The reader is the machine — change detection is a SQL diff and notifications fire at exact times; that cannot cron off prose.
+- **Agent memory** (what unicorn believes about the user's world): **one markdown notes document** (optionally split by domain: preferences, per-course patterns) stored in D1, read in full on every reasoning call, rewritten by the agent after triage, and writable through an MCP tool so the user's own agent can persist judgments ("this course's quizzes don't count"). The reader is the LLM — prose is its native format, and judgments are irregular enough to resist schema.
+- **A hard token cap** on the notes (~4k). At the cap the agent must consolidate. Forced forgetting is hygiene: it keeps density high enough that reading everything every time stays the correct strategy.
+
+**Vectors are rejected** for both potential uses:
+1. *Agent memory:* retrieval is probabilistic — a judgment that fails to be retrieved re-spams the user silently, which is fatal for a never-spam secretary. The corpus is KB-scale and fits in context; retrieval where full-read is possible is strictly information loss. Wrong memories must be findable and editable — open the note, fix the line; a vector store offers neither.
+2. *Corpus search:* structured queries answer most questions (deadlines are fields, not similarity targets), keyword matching covers single-user term-scale data, and the MCP client filters candidates natively. Embeddings would also insert a model call into the zero-LLM ingestion path, violating ADR-0015's LLM-optional principle.
+
+**Reversal condition.** Vectors may return only as an optional retrieval plugin (never in the ingestion path) when the archived corpus outgrows what an agent can read **and** keyword queries demonstrably fail real questions.
+
+**Consequences.**
+- Memory is fully auditable: the user can read and edit everything the agent believes.
+- No embedding-model dependency, no index maintenance, no new budget line.
+
+---
+
+## ADR-0025 — Runtime form: event-driven serverless is load-bearing; capability ladder for heavier work
+
+**Status:** Accepted (stress-tests ADR-0001/0021 against the agent mandate)
+
+**Context.** Resident-agent frameworks are long-lived daemons on a VPS or local machine. Does the agent reframe (ADR-0023) force that form? The deciding variable is **duty cycle**: unicorn's secretary reacts for seconds per hour and idles otherwise — the textbook profile for event-driven serverless. Auditing free-tier limits against single-user load, everything (requests/day, D1 quotas, DO limits, memory) has 100×+ headroom; the single real wall is per-invocation CPU time (~10 ms on free). LLM calls are subrequest I/O and burn no CPU.
+
+**Decision.** unicorn stays a single event-driven Worker. Daemonization is rejected: it pays for an always-on machine that idles 99.9% of the time, adds ops and attack surface, and — decisively — exits the free account that is unicorn's identity (ADR-0001). "Generic frameworks cannot run in this cost structure" is the moat reading of that constraint.
+
+Long work is **step-chaining, not a process**: agentic tasks are discrete checkpoints (each LLM call is a natural breakpoint), state lives in the DO/D1, and alarms chain the steps (ADR-0021). What a Worker genuinely cannot do reduces to a real browser and a shell, handled by a **capability ladder**:
+
+1. **Free core (non-negotiable):** ingestion, triage loop, step-chained tasks, and Browser Rendering within its free daily allowance for automated re-auth (upgrades ADR-0003's full-auto option; the laptop `moodle:push` peripheral remains the zero-dependency fallback).
+2. **Paid muscle (optional plugin):** Cloudflare Containers for shell-grade work — scale-to-zero burst compute attached to a DO, not a daemon, so it does not break the form. The core never depends on it.
+3. **Relief valve:** Workers Paid raises the CPU wall from 10 ms to 30 s with zero architecture change. The free tier is design discipline; paid is a valve, never the foundation.
+
+Three engineering rules are **v1 foundations, not optimizations**, because they are how the design clears the CPU wall and stays trustworthy under retries:
+- **Per-source step-chaining.** Each source syncs in its own invocation: subrequest and CPU budgets reset, and one source's failure cannot cascade.
+- **Notification outbox.** Events flow through an outbox table and are delivered with idempotency keys and retry. A secretary that double-sends the same reminder loses trust instantly.
+- **Lazy bodies.** Hot-store metadata + facets only; fetch full bodies on demand (when triage flags an item or MCP queries it).
+
+**Reversal condition.** The daemon question reopens only if the mandate ever requires hours of *continuous* stateful work per day — in-process state that cannot be checkpointed (a live browser session, a shell environment) rather than mere task length.
+
+**Consequences.**
+- The wall's failure signal is explicit: single-step CPU kills in logs *after* chaining and lazy bodies → chain finer first, then open the valve.
+- The architecture is tier-portable: scaling up is configuration, not migration — the structural advantage over the daemon form, where outgrowing the machine means moving house.
+
+---
+
+## ADR-0026 — Surfaces: pull/push two faces around the agent; UI is output, not asset
+
+**Status:** Accepted (amends ADR-0009; ADR-0010's notifier layer is unchanged)
+
+**Context.** ADR-0009's three faces predate the agent reframe. A maintained web dashboard duplicates what any MCP client renders on demand; a daily-driver CLI duplicates what MCP clients (Claude Code included) already are. Generated views are near-free in the LLM era; maintained views are inventory that rots.
+
+**Decision.** Two faces over the kernel:
+
+- **Push / converse — IM (primary face).** Telegram/Discord via ADR-0010 notifiers, upgraded from a delivery channel to a *conversational surface*: the user talks to unicorn where the pushes arrive, and it answers with memory (ADR-0024) and world state. Webhooks fit the Worker natively — ack fast, work in the background.
+- **Pull — MCP.** Reframed from "the product" to "the port where other brains consult unicorn": the user's own Claude/agents pull structured, compact, filtered tool responses. Tool design *is* the context engineering — tools return projections, never dumps.
+
+Web is demoted to **rendered reports**: `/settings` (exists, ADR-0022) plus `/digest` — HTML written at digest time, served as-is, linked from notifications. Zero framework, zero client state: an output artifact, not a surface.
+
+Explicitly not built: a maintained dashboard; a daily-driver CLI (the setup installer is excluded — ADR-0027); ACP support (an agent-to-client protocol is coherent now that unicorn *is* an agent, but it is deferred until an editor-facing use case exists — MCP + IM cover every current consumer).
+
+**Consequences.**
+- Every MCP-speaking agent — and transitively every ACP-speaking client those agents plug into — becomes a unicorn interface for free; protocol-ecosystem growth accrues to the kernel.
+- ADR-0009's core ("adding a surface is adding a face") stands; only the roster changed.
+
+---
+
+## ADR-0027 — Onboarding: one in-repo setup script, shared by humans and agents
+
+**Status:** Accepted (completes ADR-0006's onboarding sketch; upholds ADR-0022's no-self-mutation)
+
+**Context.** Self-deploy is currently a README command list (login, D1 create, jsonc edit, migrate, secrets, session push, deploy, schedule start). Every manual step is an abandonment point. There are two audiences: humans in a terminal, and coding agents (Claude Code) told "deploy this."
+
+**Decision.** One **in-repo installer**: `npm run setup` — a single linear Node script orchestrating: prerequisite checks → `wrangler login` → `d1 create` (capture `database_id`, write it back to `wrangler.jsonc`) → migrations → generate random `ADMIN_TOKEN`/`MCP_TOKEN` and feed `wrangler secret put` → optional `moodle:push` → deploy → `POST /schedule`. Wrangler runs as a child process with inherited stdio, so its own interactive flows (browser OAuth) pass through untouched — no PTY tricks solving a problem that does not exist. A `SETUP.md` documents the same path for agents: the cloning user says "deploy me" and the agent runs the same script. One path, two audiences.
+
+Rejected for now: a published `npx create-unicorn` package. Deploy already requires the cloned repo (migrations, `wrangler.jsonc`), and publishing adds template-download machinery for zero current external users. Revisit when a real second deployer exists — it is an hour of wrapping then.
+
+**Consequences.**
+- Onboarding collapses to `git clone` + one command (+ the unavoidable browser OAuth).
+- The installer is disposable glue, not a maintained surface — it does not violate ADR-0026's no-CLI stance.
+- Secrets still enter only through Wrangler (ADR-0022 upheld).

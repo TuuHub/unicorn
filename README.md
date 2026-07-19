@@ -44,17 +44,19 @@ The `daily-digest` agent job is disabled by default. To use it, set `AI_API_KEY`
 
 unicorn is a **plugin platform first**. Plugins ingest from any source; the kernel normalizes everything into a **generic Item + optional typed facets** model, detects changes, and drives all downstream behavior (tracking, jobs, notifications) generically off those facets. The **campus plugin** (Ed + Moodle) is the flagship that dogfoods the kernel — it's how v1 keeps a real pain point (tracking assessments across platforms) pulling on the design.
 
-Three surfaces, all thin faces over one kernel:
+On top of the kernel, unicorn is becoming a **resident secretary agent** (ADR-0023): an event-driven triage loop that watches every facet event, suppresses noise, speaks only when something matters, and remembers your corrections in a capped notes memory (ADR-0024). Two faces over one kernel (ADR-0026):
 
-- **MCP server** *(v1)* — connect from your own Claude / ChatGPT client; your agent does the reasoning, unicorn serves the data.
-- **Web dashboard** *(later)* — read-only timeline + settings.
-- **IM bot** *(later)* — proactive push (daily digest, imminent deadlines) via Telegram / Discord / email.
+- **MCP server** *(v1)* — the pull face: your own Claude / ChatGPT client consults unicorn's structured data and memory; your agent does the open-ended reasoning.
+- **IM** *(next)* — the push/converse face: proactive triage alerts and digests via Telegram / Discord / email, growing into a two-way conversational surface.
 
-Optional server-side agent jobs (daily digest, triage, planning) run on your Claude/Codex subscription quota or a BYOK key, with hard budget caps and a degradation chain so ingestion never dies when an LLM does.
+There is deliberately no maintained web dashboard and no daily-driver CLI — views are rendered reports (`/settings`, `/digest`) or generated on demand by your MCP client.
+
+Server-side agent jobs (triage, daily digest, planning) run on your Claude/Codex subscription quota or a BYOK key, with hard budget caps and a degradation chain so ingestion never dies when an LLM does.
 
 ## Design principles
 
 - **Plugin platform, campus as proof.** The kernel is designed for arbitrary sources; Ed/Moodle is the flagship plugin, not the product's ceiling.
+- **Thick body, thin brain.** The kernel (deterministic perception, facets, scheduling) is the moat; the resident triage loop stays thin and commodity. Every feature passes the weekend test: if a generic agent framework could copy it in a weekend, keep it thin.
 - **Hybrid data model.** Generic Item base means 海纳百川; optional capability-typed facets mean the platform can actually *do* things (deadline tracking, unread, threads). The LLM supplies missing structure at read time — that's what "AI-native" means here.
 - **Facets are the contract.** Plugins only ingest + declare which facets they emit. Change detection, jobs, notifications, and retention bind to facet *capabilities*, not to plugins — so a new source that emits a `has-deadline` facet inherits ddl tracking for free.
 - **Two plugin tiers.** Declarative manifests (AI generates the field mapping from a sample response) for the many API/RSS sources; in-repo code plugins for the few needing real logic (campus).
@@ -89,6 +91,11 @@ Read the decision records in order — they're the source of truth:
 | **0020** | **Five behavior primitives form the finite kernel surface** |
 | **0021** | **Durable Object alarm provides account-independent scheduling** |
 | **0022** | **Settings never self-mutate Worker Secrets** |
+| **0023** | **Reframe: unicorn is a resident agent; thick body, thin brain** |
+| **0024** | **Agent memory: facts in D1, judgment in capped notes; no vectors** |
+| **0025** | **Event-driven serverless is load-bearing; capability ladder for heavy work** |
+| **0026** | **Surfaces: IM push/converse + MCP pull; UI is output, not asset** |
+| **0027** | **Onboarding: one in-repo setup script shared by humans and agents** |
 
 ## Related projects
 
