@@ -48,7 +48,9 @@ export class DiscordNotifier implements Notifier {
     const response = await this.fetcher(this.webhookUrl, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ content }),
+      // allowed_mentions:{parse:[]} disarms @everyone/@here/role pings, so ingested
+      // post text rendered into the message can't trigger a mass notification.
+      body: JSON.stringify({ content, allowed_mentions: { parse: [] } }),
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
     if (!response.ok) {

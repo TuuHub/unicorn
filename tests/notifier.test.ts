@@ -18,7 +18,7 @@ describe("DiscordNotifier", () => {
       "https://discord.example/webhook",
       expect.objectContaining({
         method: "POST",
-        body: JSON.stringify({ content: "**Sync complete**\nMoodle created 2 items." }),
+        body: JSON.stringify({ content: "**Sync complete**\nMoodle created 2 items.", allowed_mentions: { parse: [] } }),
       }),
     );
   });

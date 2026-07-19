@@ -48,6 +48,15 @@ function fakeDb(rows: Stored[]) {
             });
             return { meta: { changes: 1 } };
           }
+          if (sql.startsWith("UPDATE notifications_outbox SET next_attempt_at = ? WHERE id = ? AND status = 'pending' AND next_attempt_at = ?")) {
+            const [lease, id, expected] = this.args as [string, string, string];
+            const row = rows.find((candidate) => candidate.id === id);
+            if (row && row.status === "pending" && row.next_attempt_at === expected) {
+              row.next_attempt_at = lease;
+              return { meta: { changes: 1 } };
+            }
+            return { meta: { changes: 0 } };
+          }
           if (sql.includes("status = 'delivered'")) {
             const [, id] = this.args as string[];
             update(rows, id, { status: "delivered", last_error: null });
@@ -82,10 +91,13 @@ function fakeDb(rows: Stored[]) {
         },
         async all<T>() {
           const [nowIso] = this.args as string[];
+          // Return snapshots, as D1 does — a concurrent claim must not retroactively
+          // change what an already-returned result set observed.
           return {
             results: rows
               .filter((row) => row.status === "pending" && row.next_attempt_at <= nowIso)
-              .slice(0, 50) as unknown as T[],
+              .slice(0, 50)
+              .map((row) => ({ ...row })) as unknown as T[],
           };
         },
       };
@@ -149,6 +161,34 @@ describe("NotificationOutbox", () => {
 
     expect(result).toEqual({ delivered: 0, failed: 1, retrying: 0 });
     expect(rows[0]?.status).toBe("failed");
+  });
+
+  it("claims a row so two concurrent deliveries send it only once", async () => {
+    const rows: Stored[] = [];
+    let inFlight = 0;
+    let maxConcurrent = 0;
+    const fetcher = vi.fn().mockImplementation(async () => {
+      inFlight += 1;
+      maxConcurrent = Math.max(maxConcurrent, inFlight);
+      await Promise.resolve();
+      inFlight -= 1;
+      return new Response(null, { status: 204 });
+    });
+    const db = fakeDb(rows);
+    const outbox = new NotificationOutbox(db, () => new Date("2026-07-19T00:00:00.000Z"));
+    await outbox.enqueue({ idempotencyKey: "k:discord", channel: "discord", title: "t", body: "b" });
+
+    // Two overlapping cycles (hourly alarm + manual /sync) on the same DB.
+    const env = { NOTIFIER_URL: "https://discord.example/webhook" };
+    const [a, b] = await Promise.all([
+      outbox.deliver(env, fetcher as typeof fetch),
+      outbox.deliver(env, fetcher as typeof fetch),
+    ]);
+
+    expect(a.delivered + b.delivered).toBe(1);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(maxConcurrent).toBe(1);
+    expect(rows[0]?.status).toBe("delivered");
   });
 
   it("prunes settled rows past the retention window but keeps pending ones", async () => {

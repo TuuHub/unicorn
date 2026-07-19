@@ -144,16 +144,21 @@ async function runDigest(
   if (!env.AI_API_KEY) {
     return { status: "not_configured" };
   }
+  // One clock read drives both the runner's `already_ran` day gate and the
+  // idempotency key below, so a run that straddles UTC midnight can't gate on one day
+  // and key on the next (which would let ON CONFLICT drop the next day's real digest).
+  const now = new Date();
+  const key = now.toISOString().slice(0, 10);
   const result = await new DailyDigestRunner(
     new D1JobStore(env.DB),
     new D1DigestDataSource(env.DB),
     new AiSdkTextGenerator({ apiKey: env.AI_API_KEY, baseUrl: env.AI_BASE_URL }),
-  ).run();
+  ).run(now);
   if (!notificationsEnabled) {
     return result;
   }
   if (result.status === "completed") {
-    await enqueueBroadcast(outbox, env, `digest:${dayKey()}`, "unicorn daily digest", result.text);
+    await enqueueBroadcast(outbox, env, `digest:${key}`, "unicorn daily digest", result.text);
     if (result.budgetExhausted) {
       await enqueueBudgetExhausted(outbox, env);
     }
@@ -163,7 +168,7 @@ async function runDigest(
     await enqueueBroadcast(
       outbox,
       env,
-      `digest-failed:${dayKey()}`,
+      `digest-failed:${key}`,
       "unicorn digest failed",
       "The daily digest model call failed and was skipped. Ingestion is still running.",
     );

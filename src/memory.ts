@@ -8,9 +8,35 @@ export interface MemoryNote {
 // reasoning call. The cap keeps density high enough that full-read stays correct.
 export const MEMORY_TOKEN_CAP = 4_000;
 
-// Rough token estimate without a tokenizer dependency: ~4 characters per token.
+// Rough token estimate without a tokenizer dependency. Latin text averages ~4 chars
+// per token, but CJK and other wide scripts run closer to ~1.5 chars per token, so a
+// flat length/4 would let a note 4x over the real cap through. Count wide codepoints
+// at a heavier rate so the cap holds across scripts.
 export function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 4);
+  let narrow = 0;
+  let wide = 0;
+  for (const char of text) {
+    if (isWide(char.codePointAt(0)!)) {
+      wide += 1;
+    } else {
+      narrow += 1;
+    }
+  }
+  return Math.ceil(narrow / 4 + wide / 1.5);
+}
+
+// CJK, Hangul, kana, and fullwidth ranges — the scripts where one character is
+// roughly one token.
+function isWide(codePoint: number): boolean {
+  return (
+    (codePoint >= 0x1100 && codePoint <= 0x11ff) || // Hangul Jamo
+    (codePoint >= 0x2e80 && codePoint <= 0x9fff) || // CJK radicals through Unified
+    (codePoint >= 0xa960 && codePoint <= 0xa97f) || // Hangul Jamo Extended-A
+    (codePoint >= 0xac00 && codePoint <= 0xd7ff) || // Hangul Syllables
+    (codePoint >= 0xf900 && codePoint <= 0xfaff) || // CJK Compatibility Ideographs
+    (codePoint >= 0xff00 && codePoint <= 0xffef) || // Halfwidth/Fullwidth Forms
+    (codePoint >= 0x20000 && codePoint <= 0x3ffff) // CJK Extension B+
+  );
 }
 
 export class MemoryCapExceededError extends Error {

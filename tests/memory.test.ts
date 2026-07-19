@@ -30,8 +30,14 @@ describe("D1MemoryStore", () => {
 });
 
 describe("estimateTokens", () => {
-  it("approximates four characters per token", () => {
+  it("approximates four characters per token for Latin text", () => {
     expect(estimateTokens("12345678")).toBe(2);
+  });
+
+  it("counts CJK characters far more heavily than length/4 so the cap holds", () => {
+    // 8 Han characters would be 2 tokens under a naive length/4; real tokenizers put
+    // this near one-token-per-character, so the estimate must be much higher.
+    expect(estimateTokens("课程作业截止日期")).toBeGreaterThanOrEqual(5);
   });
 });
 
