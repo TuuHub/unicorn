@@ -4,7 +4,9 @@ import { D1JobStore, type AgentJobRun } from "./jobs/d1-job-store";
 // produced from the latest completed run at request time and served as-is — no
 // framework, no client state, linkable from a notification.
 export async function renderDigestReport(db: D1Database): Promise<Response> {
-  const runs = await new D1JobStore(db).listRuns("daily-digest", 1);
+  // Scan recent runs, not just the latest: a later no_changes or failed run must not
+  // hide the last digest the user actually received.
+  const runs = await new D1JobStore(db).listRuns("daily-digest", 30);
   const latest = runs.find((run) => run.status === "completed" && run.output);
   return html(page(latest));
 }

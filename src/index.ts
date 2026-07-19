@@ -4,12 +4,22 @@ import { D1McpRepository } from "./mcp/d1-repository";
 import { createUnicornMcpServer } from "./mcp/server";
 import { MoodleProbeError, probeMoodle } from "./moodle-probe";
 import { runCycle, type Env } from "./runtime/cycle";
-import { D1SettingsRepository, handleSettings } from "./settings";
+import { constantTimeEqual, D1SettingsRepository, handleSettings, isBasicAuthorized } from "./settings";
 
 export { Scheduler } from "./runtime/cycle";
 
 function json(value: unknown, status = 200): Response {
   return Response.json(value, { status });
+}
+
+// Bearer routes compare against the secret in constant time so a response-timing
+// oracle cannot recover the token byte by byte.
+function bearerOk(request: Request, token: string | undefined): boolean {
+  const header = request.headers.get("authorization");
+  if (!token || !header?.startsWith("Bearer ")) {
+    return false;
+  }
+  return constantTimeEqual(header.slice(7), token);
 }
 
 export default {
@@ -21,6 +31,14 @@ export default {
     }
 
     if (request.method === "GET" && url.pathname === "/digest") {
+      // The digest is personal academic data; gate it behind the same Basic auth as
+      // /settings rather than serving it on a guessable public workers.dev URL.
+      if (!isBasicAuthorized(request.headers.get("authorization"), env.ADMIN_TOKEN)) {
+        return new Response("Authentication required.", {
+          status: 401,
+          headers: { "www-authenticate": 'Basic realm="unicorn digest", charset="UTF-8"' },
+        });
+      }
       return renderDigestReport(env.DB);
     }
 
@@ -38,7 +56,7 @@ export default {
     }
 
     if (url.pathname === "/schedule") {
-      if (!env.ADMIN_TOKEN || request.headers.get("authorization") !== `Bearer ${env.ADMIN_TOKEN}`) {
+      if (!bearerOk(request, env.ADMIN_TOKEN)) {
         return json({ error: "unauthorized" }, 401);
       }
       const path = request.method === "POST" ? "/start" : request.method === "DELETE" ? "/stop" : "/status";
@@ -47,7 +65,7 @@ export default {
     }
 
     if (url.pathname === "/mcp") {
-      if (!env.MCP_TOKEN || request.headers.get("authorization") !== `Bearer ${env.MCP_TOKEN}`) {
+      if (!bearerOk(request, env.MCP_TOKEN)) {
         return json({ error: "unauthorized" }, 401);
       }
       if (request.method !== "POST") {
@@ -66,7 +84,7 @@ export default {
     }
 
     if (request.method === "POST" && url.pathname === "/probe") {
-      if (!env.ADMIN_TOKEN || request.headers.get("authorization") !== `Bearer ${env.ADMIN_TOKEN}`) {
+      if (!bearerOk(request, env.ADMIN_TOKEN)) {
         return json({ error: "unauthorized" }, 401);
       }
 
@@ -85,7 +103,7 @@ export default {
     }
 
     if (request.method === "POST" && url.pathname === "/sync") {
-      if (!env.ADMIN_TOKEN || request.headers.get("authorization") !== `Bearer ${env.ADMIN_TOKEN}`) {
+      if (!bearerOk(request, env.ADMIN_TOKEN)) {
         return json({ error: "unauthorized" }, 401);
       }
       const cycle = await runCycle(env, true);

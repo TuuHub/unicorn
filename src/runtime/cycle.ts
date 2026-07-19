@@ -14,7 +14,7 @@ import { configuredChannels, type NotifierEnv } from "../notifier";
 import { enqueueBroadcast, NotificationOutbox } from "../outbox";
 import { EdPlugin } from "../plugins/campus/ed-plugin";
 import { MoodlePlugin } from "../plugins/campus/moodle-plugin";
-import { DeclarativePlugin } from "../plugins/declarative/plugin";
+import { DeclarativePlugin, pluginBindings } from "../plugins/declarative/plugin";
 import { D1ManifestStore } from "../plugins/declarative/store";
 import type { Plugin } from "../plugins/plugin";
 import { D1RetentionRepository, runRetention } from "../retention";
@@ -71,7 +71,21 @@ export class Scheduler {
   async alarm(): Promise<void> {
     try {
       const cycle = await runCycle(this.env, false);
-      console.log(JSON.stringify({ event: "scheduler_cycle_completed", ...cycle }));
+      // Log counts only, never the digest prose or triage reasons — observability
+      // logs are long-lived and this is personal academic content.
+      console.log(
+        JSON.stringify({
+          event: "scheduler_cycle_completed",
+          plugins: cycle.results.length,
+          events: cycle.results.reduce((total, result) => total + result.events, 0),
+          errors: cycle.errors.length,
+          archived: cycle.archived,
+          triage: cycle.triage.status,
+          digest: cycle.digest.status,
+          delivered: cycle.delivered,
+          skipped: cycle.skipped,
+        }),
+      );
     } catch {
       console.error(JSON.stringify({ event: "scheduler_cycle_failed", code: "cycle_failed" }));
     } finally {
@@ -112,7 +126,9 @@ async function runTriage(
     env.AI_API_KEY ? new AiSdkTextGenerator({ apiKey: env.AI_API_KEY, baseUrl: env.AI_BASE_URL }) : null,
     async (title, body) => {
       if (notificationsEnabled) {
-        await enqueueBroadcast(outbox, env, `triage:${hash(body)}`, title, body);
+        // Day-bucket the key so a retried cycle within the day dedupes, but a
+        // genuinely recurring identical alert on a later day still sends.
+        await enqueueBroadcast(outbox, env, `triage:${dayKey()}:${hash(body)}`, title, body);
       }
     },
   );
@@ -173,7 +189,7 @@ async function syncSources(env: Env): Promise<SyncSummary> {
     plugins.push(new EdPlugin({ token: env.ED_API_TOKEN }));
   }
   const manifests = await new D1ManifestStore(env.DB).list(true);
-  const bindings = env as unknown as Record<string, unknown>;
+  const bindings = pluginBindings(env as unknown as Record<string, unknown>);
   plugins.push(...manifests.map(({ manifest }) => new DeclarativePlugin(manifest, bindings)));
 
   const kernel = new Kernel(new D1ItemStore(env.DB));

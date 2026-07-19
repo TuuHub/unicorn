@@ -6,6 +6,30 @@ import { asRecord, toJson } from "../source-values";
 
 export type ValueSpec = { path: string } | { value: JsonValue };
 
+// Declarative-plugin auth may only reference secrets in a dedicated namespace, never
+// arbitrary Worker env. A manifest is attacker-reachable (an AI generates it, or the
+// MCP client installs one), so binding it to the whole env would let one malicious
+// manifest exfiltrate ADMIN_TOKEN / MOODLE_SESSION / AI_API_KEY to its own URL. The
+// namespace is the allowlist: only PLUGIN_SECRET_* bindings are ever resolvable.
+export const PLUGIN_SECRET_PREFIX = "PLUGIN_SECRET_";
+
+function pluginSecretBinding() {
+  return z
+    .string()
+    .trim()
+    .regex(
+      new RegExp(`^${PLUGIN_SECRET_PREFIX}[A-Z0-9_]{1,64}$`),
+      `Plugin auth binding must name a ${PLUGIN_SECRET_PREFIX}* secret.`,
+    );
+}
+
+// Only PLUGIN_SECRET_* entries of the Worker env are exposed to declarative plugins.
+export function pluginBindings(env: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(env).filter(([name]) => name.startsWith(PLUGIN_SECRET_PREFIX)),
+  );
+}
+
 export type ManifestAuth =
   | { type: "bearer"; binding: string }
   | { type: "header"; name: string; binding: string }
@@ -56,9 +80,9 @@ const manifestSchema = z.object({
   itemsPath: z.string().trim().min(1).optional(),
   auth: z
     .union([
-      z.object({ type: z.literal("bearer"), binding: z.string().trim().min(1) }),
-      z.object({ type: z.literal("header"), name: z.string().trim().min(1), binding: z.string().trim().min(1) }),
-      z.object({ type: z.literal("query"), name: z.string().trim().min(1), binding: z.string().trim().min(1) }),
+      z.object({ type: z.literal("bearer"), binding: pluginSecretBinding() }),
+      z.object({ type: z.literal("header"), name: z.string().trim().min(1), binding: pluginSecretBinding() }),
+      z.object({ type: z.literal("query"), name: z.string().trim().min(1), binding: pluginSecretBinding() }),
     ])
     .optional(),
   mapping: z.object({

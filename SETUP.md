@@ -42,6 +42,20 @@ npx wrangler secret put EMAIL_TO
 All outbound messages go through a durable outbox with idempotency keys and bounded
 retry (ADR-0025), so a retried cycle never double-sends.
 
+## Declarative plugin secrets
+
+Tier-1 declarative plugins (ADR-0017) can authenticate against their source, but a
+manifest is attacker-reachable (an AI generates it, or your MCP client installs one).
+So a manifest's `auth.binding` may only name a secret in the dedicated `PLUGIN_SECRET_*`
+namespace — never `ADMIN_TOKEN`, `MOODLE_SESSION`, or any other Worker secret. Provision
+a plugin's credential like:
+
+```bash
+npx wrangler secret put PLUGIN_SECRET_MYFEED
+```
+
+and reference it as `{ "auth": { "type": "bearer", "binding": "PLUGIN_SECRET_MYFEED" } }`.
+
 ## Agent jobs (optional)
 
 Both `daily-digest` and `triage` are disabled by default. Configure them through the MCP

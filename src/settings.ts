@@ -51,7 +51,7 @@ export class D1SettingsRepository implements SettingsRepository {
 }
 
 export async function handleSettings(request: Request, runtime: SettingsRuntime): Promise<Response> {
-  if (!isAuthorized(request.headers.get("authorization"), runtime.adminToken)) {
+  if (!isBasicAuthorized(request.headers.get("authorization"), runtime.adminToken)) {
     return new Response("Authentication required.", {
       status: 401,
       headers: { "www-authenticate": 'Basic realm="unicorn settings", charset="UTF-8"' },
@@ -95,7 +95,7 @@ function parseSettings(value: unknown): AppSettings {
   };
 }
 
-function isAuthorized(header: string | null, token: string): boolean {
+export function isBasicAuthorized(header: string | null, token: string): boolean {
   if (!header?.startsWith("Basic ") || !token) {
     return false;
   }
@@ -108,7 +108,7 @@ function isAuthorized(header: string | null, token: string): boolean {
   }
 }
 
-function constantTimeEqual(left: string, right: string): boolean {
+export function constantTimeEqual(left: string, right: string): boolean {
   let difference = left.length ^ right.length;
   const length = Math.max(left.length, right.length);
   for (let index = 0; index < length; index += 1) {

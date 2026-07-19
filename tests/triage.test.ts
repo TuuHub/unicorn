@@ -33,17 +33,15 @@ describe("classify (deterministic reflexes)", () => {
     expect(classify(event, NOW).importance).toBe("ignore");
   });
 
-  it("flags a new item with an imminent deadline as important", () => {
+  it("leaves item.created ambiguous at the classify stage (the runner promotes imminent deadlines)", () => {
     const event: ItemEvent = {
       id: "e3",
       type: "item.created",
       source: "campus-moodle",
       itemId: "assessment:3",
       createdAt: NOW.toISOString(),
-      primitive: "temporal",
-      after: "2026-07-22T00:00:00.000Z",
     };
-    expect(classify(event, NOW).importance).toBe("important");
+    expect(classify(event, NOW).importance).toBe("ambiguous");
   });
 
   it("leaves an ordinary new item ambiguous for the model", () => {
@@ -102,6 +100,25 @@ describe("TriageRunner", () => {
     expect(notify).not.toHaveBeenCalled();
   });
 
+  it("promotes a new item whose item deadline is within 7 days without the model", async () => {
+    const store = jobStore();
+    const notify = vi.fn().mockResolvedValue(undefined);
+    const generator = { generate: vi.fn() } as unknown as TextGenerator;
+    const data: TriageDataSource = {
+      listRecentEvents: vi.fn().mockResolvedValue([newAssessment()]),
+      describeItems: vi.fn().mockResolvedValue([
+        { source: "campus-moodle", itemId: "assessment:3", title: "Assignment 3", kind: "assessment", dueAt: "2026-07-22T00:00:00.000Z" },
+      ]),
+    };
+    const runner = new TriageRunner(store, data, memory(""), generator, notify);
+
+    const result = await runner.run(NOW);
+
+    expect(result.status).toBe("completed");
+    expect(notify).toHaveBeenCalledOnce();
+    expect(generator.generate).not.toHaveBeenCalled();
+  });
+
   it("does not run when disabled", async () => {
     const store = jobStore({ enabled: false });
     const runner = new TriageRunner(store, dataSource([temporalChange()]), memory(""), null, vi.fn());
@@ -128,6 +145,16 @@ function newThread(): ItemEvent {
     type: "item.created",
     source: "campus-ed",
     itemId: "thread:4",
+    createdAt: "2026-07-18T12:00:00.000Z",
+  };
+}
+
+function newAssessment(): ItemEvent {
+  return {
+    id: "e3",
+    type: "item.created",
+    source: "campus-moodle",
+    itemId: "assessment:3",
     createdAt: "2026-07-18T12:00:00.000Z",
   };
 }

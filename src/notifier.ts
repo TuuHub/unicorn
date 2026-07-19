@@ -19,6 +19,12 @@ export interface NotifierEnv {
 
 const REQUEST_TIMEOUT_MS = 10_000;
 
+// Each channel rejects messages over a hard length limit, which would otherwise make
+// a long digest deterministically fail and burn every retry. Truncate to fit.
+function truncate(value: string, limit: number): string {
+  return value.length <= limit ? value : `${value.slice(0, limit - 1)}…`;
+}
+
 function bindFetch(fetcher?: typeof fetch): typeof fetch {
   if (fetcher) {
     return (input, init) => fetcher(input, init);
@@ -37,10 +43,12 @@ export class DiscordNotifier implements Notifier {
   }
 
   async send(notification: Notification): Promise<void> {
+    // Discord caps a message at 2000 characters.
+    const content = truncate(`**${notification.title}**\n${notification.body}`, 2000);
     const response = await this.fetcher(this.webhookUrl, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ content: `**${notification.title}**\n${notification.body}` }),
+      body: JSON.stringify({ content }),
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
     if (!response.ok) {
@@ -61,12 +69,17 @@ export class TelegramNotifier implements Notifier {
   }
 
   async send(notification: Notification): Promise<void> {
+    // Telegram caps a message at 4096 characters; escape then truncate the assembled
+    // MarkdownV2 text so a trailing half-escaped sequence can't break parsing.
+    const text = stripDanglingEscape(
+      truncate(`*${escapeMarkdown(notification.title)}*\n${escapeMarkdown(notification.body)}`, 4096),
+    );
     const response = await this.fetcher(`https://api.telegram.org/bot${this.botToken}/sendMessage`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         chat_id: this.chatId,
-        text: `*${escapeMarkdown(notification.title)}*\n${escapeMarkdown(notification.body)}`,
+        text,
         parse_mode: "MarkdownV2",
       }),
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
@@ -110,6 +123,13 @@ export class EmailNotifier implements Notifier {
 // containing course codes or brackets don't reject the whole message.
 function escapeMarkdown(value: string): string {
   return value.replace(/[_*[\]()~`>#+\-=|{}.!\\]/g, (character) => `\\${character}`);
+}
+
+// Drop a dangling escape backslash left by truncating in the middle of a `\X` pair,
+// which would otherwise be an invalid trailing escape MarkdownV2 rejects.
+function stripDanglingEscape(value: string): string {
+  const match = /\\+$/.exec(value);
+  return match && match[0].length % 2 === 1 ? value.slice(0, -1) : value;
 }
 
 export function resolveNotifier(
