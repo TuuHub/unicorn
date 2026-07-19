@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { D1MemoryStore, estimateTokens, MemoryCapExceededError, MEMORY_TOKEN_CAP } from "../src/memory";
+import { D1MemoryStore, estimateTokens, MemoryCapExceededError, MemoryConflictError, MEMORY_TOKEN_CAP } from "../src/memory";
 
 describe("D1MemoryStore", () => {
   it("returns an empty note for an unknown domain", async () => {
@@ -12,6 +12,22 @@ describe("D1MemoryStore", () => {
     const store = new D1MemoryStore(fakeDb(null));
     const oversized = "x".repeat((MEMORY_TOKEN_CAP + 10) * 4);
     await expect(store.save("preferences", oversized)).rejects.toBeInstanceOf(MemoryCapExceededError);
+  });
+
+  it("enforces the cap across all domains combined, not per note", async () => {
+    // Another domain already holds ~3000 tokens; a 2000-token write must fail even
+    // though it is under the per-note cap, because every domain is read per call.
+    const existing = [{ domain: "per-course", content: "x".repeat(3000 * 4), updated_at: "2026-07-01T00:00:00.000Z" }];
+    const store = new D1MemoryStore(fakeDb(null, undefined, existing));
+    await expect(store.save("preferences", "y".repeat(2000 * 4))).rejects.toThrow(/total cap/);
+  });
+
+  it("rejects a stale rewrite when ifUnmodifiedSince does not match", async () => {
+    const row = { domain: "preferences", content: "old", updated_at: "2026-07-19T10:00:00.000Z" };
+    const store = new D1MemoryStore(fakeDb(row));
+    await expect(store.save("preferences", "new", "2026-07-19T09:00:00.000Z")).rejects.toBeInstanceOf(
+      MemoryConflictError,
+    );
   });
 
   it("rejects a domain that is not a kebab-case slug", async () => {
@@ -41,7 +57,11 @@ describe("estimateTokens", () => {
   });
 });
 
-function fakeDb(row: unknown, run = vi.fn().mockResolvedValue({ meta: { changes: 1 } })) {
+function fakeDb(
+  row: unknown,
+  run = vi.fn().mockResolvedValue({ meta: { changes: 1 } }),
+  listRows: unknown[] = [],
+) {
   return {
     prepare() {
       return {
@@ -49,7 +69,7 @@ function fakeDb(row: unknown, run = vi.fn().mockResolvedValue({ meta: { changes:
           return this;
         },
         first: vi.fn().mockResolvedValue(row),
-        all: vi.fn().mockResolvedValue({ results: [] }),
+        all: vi.fn().mockResolvedValue({ results: listRows }),
         run,
       };
     },

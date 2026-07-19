@@ -114,7 +114,7 @@ export class D1JobStore implements JobStore {
         ),
       this.db
         .prepare("UPDATE agent_jobs SET last_run_at = ?, updated_at = ? WHERE id = ?")
-        .bind(run.createdAt, run.createdAt, run.jobId),
+        .bind(run.watermark ?? run.createdAt, run.createdAt, run.jobId),
     ]);
   }
 

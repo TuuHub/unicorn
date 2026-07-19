@@ -159,6 +159,16 @@ export class D1McpRepository implements McpRepository {
     return rows.results.map(parseEvent);
   }
 
+  // Oldest-first window used by the triage runner so an over-cap backlog is
+  // consumed in order and the watermark can chain across cycles.
+  async listEventsAscending(since: string, limit: number): Promise<ItemEvent[]> {
+    const rows = await this.db
+      .prepare("SELECT * FROM events WHERE created_at >= ? ORDER BY created_at ASC LIMIT ?")
+      .bind(since, limit)
+      .all<EventRow>();
+    return rows.results.map(parseEvent);
+  }
+
   async listRelations(type?: string): Promise<ItemRelation[]> {
     const rows = type
       ? await this.db
@@ -254,8 +264,8 @@ export class D1McpRepository implements McpRepository {
     return this.memory.get(domain);
   }
 
-  saveMemory(domain: string, content: string): Promise<MemoryNote> {
-    return this.memory.save(domain, content);
+  saveMemory(domain: string, content: string, expectedUpdatedAt?: string): Promise<MemoryNote> {
+    return this.memory.save(domain, content, expectedUpdatedAt);
   }
 
   async getSyncStatus(): Promise<JsonValue | null> {

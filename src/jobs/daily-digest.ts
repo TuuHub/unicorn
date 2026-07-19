@@ -1,4 +1,5 @@
 import type { ItemEvent } from "../kernel/types";
+import { estimateTokens } from "../memory";
 
 export interface AgentJob {
   id: string;
@@ -28,6 +29,10 @@ export interface JobRunInput {
   outputTokens: number;
   totalTokens: number;
   createdAt: string;
+  // Where the job's since-window should resume. Defaults to createdAt; triage sets
+  // it to the newest processed event when a window overflows its cap so the next
+  // cycle continues from there instead of dropping the overflow.
+  watermark?: string;
 }
 
 export interface JobStore {
@@ -148,19 +153,37 @@ export class DailyDigestRunner {
   }
 }
 
+// Reserve input budget with the shared CJK-aware token estimate plus headroom.
+// The previous byte-count reservation overstated Latin prompts ~4x, which both
+// tripped the budget gate far too early and crushed maxOutputTokens.
 function estimateInputTokenCeiling(prompt: string): number {
-  return new TextEncoder().encode(prompt).length + 256;
+  return estimateTokens(prompt) + 256;
 }
 
 function buildPrompt(
   events: ItemEvent[],
   upcoming: Array<{ title: string; dueAt: string; source: string }>,
 ): string {
+  // Compact projections, not raw rows: event UUIDs are meaningless to the model and
+  // before/after payloads can be arbitrarily large, so both are stripped or clipped.
+  const changes = events.map((event) => ({
+    item: event.itemId,
+    source: event.source,
+    type: event.type,
+    ...(event.capability ? { capability: event.capability } : {}),
+    ...(event.changedFields?.length ? { fields: event.changedFields.filter((field) => field !== "raw") } : {}),
+    ...(event.after !== undefined ? { after: clipValue(event.after) } : {}),
+  }));
   return [
     "Write a compact daily digest from the following structured data.",
     "Prioritize deadlines and material changes. Do not invent facts.",
     "Use plain text with short bullets.",
-    `Changes: ${JSON.stringify(events)}`,
+    `Changes: ${JSON.stringify(changes)}`,
     `Upcoming: ${JSON.stringify(upcoming)}`,
   ].join("\n");
+}
+
+function clipValue(value: unknown): string {
+  const text = typeof value === "string" ? value : JSON.stringify(value);
+  return text.length > 120 ? `${text.slice(0, 119)}…` : text;
 }

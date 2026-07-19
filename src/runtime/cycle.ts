@@ -172,15 +172,15 @@ async function runTriage(
     },
   );
   const result = await runner.run();
-  // Triage disables itself at the monthly cap; without this notice the secretary
-  // would die silently and the user would only notice days later.
-  if (notificationsEnabled && (result.status === "budget_exhausted" || ("budgetExhausted" in result && result.budgetExhausted))) {
+  // The model budget crossing the cap is worth one notice: reflexes keep running,
+  // but ambiguous events are kept un-judged until next month.
+  if (notificationsEnabled && result.status === "completed" && result.budgetExhausted) {
     await enqueueBroadcast(
       outbox,
       env,
       `triage-paused:${dayKey()}`,
-      "unicorn triage paused",
-      "Triage reached its monthly token cap and was disabled. Ingestion is still running. Re-enable it with the configure_agent_job MCP tool (a higher cap or next month).",
+      "unicorn triage model paused",
+      "Triage reached its monthly token cap. Deterministic alerts keep working, but ambiguous changes are no longer model-filtered (you may see more notifications). Raise the cap with the configure_agent_job MCP tool or wait for next month.",
     );
   }
   return result;

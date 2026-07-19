@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { ItemEvent, JsonValue, StoredItem } from "../kernel/types";
 import type { AgentJob, AgentJobConfig } from "../jobs/daily-digest";
 import type { AgentJobRun } from "../jobs/d1-job-store";
-import type { MemoryNote } from "../memory";
+import { estimateTokens, MEMORY_TOKEN_CAP, type MemoryNote } from "../memory";
 import type { StoredPluginManifest } from "../plugins/declarative/store";
 
 const READ_ONLY = { destructiveHint: false, readOnlyHint: true } as const;
@@ -73,7 +73,7 @@ export interface McpRepository {
   listAgentJobRuns(id: string, limit: number): Promise<AgentJobRun[]>;
   listMemory(): Promise<MemoryNote[]>;
   getMemory(domain: string): Promise<MemoryNote>;
-  saveMemory(domain: string, content: string): Promise<MemoryNote>;
+  saveMemory(domain: string, content: string, expectedUpdatedAt?: string): Promise<MemoryNote>;
   getSyncStatus(): Promise<JsonValue | null>;
 }
 
@@ -269,13 +269,26 @@ export function createUnicornMcpServer(repository: McpRepository, options?: { ai
     "list_agent_job_runs",
     {
       annotations: READ_ONLY,
-      description: "List recent outputs and actual token usage for an agent job.",
+      description:
+        "List recent runs for an agent job: status, token usage, and a clipped output preview. Set fullOutput to true to include complete outputs (a digest run can be long).",
       inputSchema: {
         id: z.enum(["daily-digest", "triage"]),
         limit: z.number().int().positive().max(100).optional().default(20),
+        fullOutput: z.boolean().optional().default(false),
       },
     },
-    async ({ id, limit }) => jsonResult(await repository.listAgentJobRuns(id, limit)),
+    async ({ id, limit, fullOutput }) => {
+      const runs = await repository.listAgentJobRuns(id, limit);
+      if (fullOutput) {
+        return jsonResult(runs);
+      }
+      return jsonResult(
+        runs.map((run) => ({
+          ...run,
+          ...(run.output && run.output.length > 300 ? { output: `${run.output.slice(0, 299)}…`, outputTruncated: true } : {}),
+        })),
+      );
+    },
   );
 
   server.registerTool(
@@ -300,21 +313,36 @@ export function createUnicornMcpServer(repository: McpRepository, options?: { ai
     "list_memory",
     {
       annotations: READ_ONLY,
-      description: "List the agent's remembered judgments and preferences, one note per domain.",
+      description:
+        "List memory note summaries: domain, last update, token usage against the 4000-token cap, and a short preview. Use get_memory to read a note in full.",
     },
-    async () => jsonResult(await repository.listMemory()),
+    async () => {
+      const notes = await repository.listMemory();
+      // Projection, not dump (ADR-0026): full notes can be 4k tokens each; the
+      // caller only needs enough to decide which domain to open.
+      return jsonResult(
+        notes.map((note) => ({
+          domain: note.domain,
+          updatedAt: note.updatedAt,
+          tokens: estimateTokens(note.content),
+          tokenCap: MEMORY_TOKEN_CAP,
+          preview: note.content.length > 200 ? `${note.content.slice(0, 199)}…` : note.content,
+        })),
+      );
+    },
   );
 
   server.registerTool(
     "get_memory",
     {
       annotations: READ_ONLY,
-      description: "Read one memory note in full by domain (for example 'preferences').",
+      description: "Read one memory note in full by domain (for example 'preferences'). Includes token usage against the 4000-token cap.",
       inputSchema: { domain: z.string().trim().min(1).max(63) },
     },
     async ({ domain }) => {
       try {
-        return jsonResult(await repository.getMemory(domain));
+        const note = await repository.getMemory(domain);
+        return jsonResult({ ...note, tokens: estimateTokens(note.content), tokenCap: MEMORY_TOKEN_CAP });
       } catch (error) {
         return jsonError(error instanceof Error ? error.message : "Failed to read memory.");
       }
@@ -326,15 +354,17 @@ export function createUnicornMcpServer(repository: McpRepository, options?: { ai
     {
       annotations: WRITE,
       description:
-        "Rewrite a memory note. Persist judgments the agent should remember, such as 'this course's quizzes don't count'. Capped at 4000 tokens; consolidate at the cap.",
+        "Rewrite a memory note in full (no partial patch — read it with get_memory first, then write the merged result). Pass ifUnmodifiedSince from get_memory's updatedAt to fail safely instead of clobbering a concurrent edit. Save empty content to delete a domain. The 4000-token cap covers ALL domains combined (every note is read in full on each triage call); at the cap, consolidate: merge duplicates, drop judgments about ended courses, keep one line per rule.",
       inputSchema: {
         domain: z.string().trim().min(1).max(63),
         content: z.string().max(20_000),
+        ifUnmodifiedSince: z.string().trim().min(1).optional(),
       },
     },
-    async ({ domain, content }) => {
+    async ({ domain, content, ifUnmodifiedSince }) => {
       try {
-        return jsonResult(await repository.saveMemory(domain, content));
+        const note = await repository.saveMemory(domain, content, ifUnmodifiedSince);
+        return jsonResult({ ...note, tokens: estimateTokens(note.content), tokenCap: MEMORY_TOKEN_CAP });
       } catch (error) {
         return jsonError(error instanceof Error ? error.message : "Failed to update memory.");
       }

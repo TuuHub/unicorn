@@ -190,6 +190,45 @@ describe("TriageRunner", () => {
     const runner = new TriageRunner(store, dataSource([temporalChange()]), memory(""), null, vi.fn());
     await expect(runner.run(NOW)).resolves.toEqual({ status: "disabled" });
   });
+
+  it("gives the judge model item titles, not raw event JSON", async () => {
+    const store = jobStore();
+    const generator = {
+      generate: vi.fn().mockResolvedValue({
+        text: "thread:4: ignore",
+        usage: { inputTokens: 40, outputTokens: 10, totalTokens: 50 },
+      }),
+    } as unknown as TextGenerator;
+    const runner = new TriageRunner(store, dataSource([newThread()]), memory(""), generator, vi.fn());
+
+    await runner.run(NOW);
+
+    const prompt = (generator.generate as ReturnType<typeof vi.fn>).mock.calls[0][0].prompt as string;
+    expect(prompt).toContain("Title thread:4");
+    expect(prompt).not.toContain('"createdAt"');
+  });
+
+  it("chains the watermark when the event window overflows the cap", async () => {
+    const store = jobStore();
+    // Simulate a capped window: exactly MAX_EVENTS (1000) events, oldest first.
+    const events: ItemEvent[] = Array.from({ length: 1000 }, (_, index) => ({
+      id: `e${index}`,
+      type: "capability.changed",
+      source: "campus-moodle",
+      itemId: `assessment:${index}`,
+      createdAt: new Date(Date.parse("2026-07-18T00:00:00.000Z") + index * 1000).toISOString(),
+      primitive: "temporal",
+      capability: "has-deadline",
+      after: "2026-07-25T00:00:00.000Z",
+    }));
+    const runner = new TriageRunner(store, dataSource(events), memory(""), null, vi.fn());
+
+    await runner.run(NOW);
+
+    const recorded = (store.recordRun as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    // Watermark must stop at the newest processed event, not jump to now.
+    expect(recorded.watermark).toBe(events[events.length - 1]!.createdAt);
+  });
 });
 
 function temporalChange(): ItemEvent {

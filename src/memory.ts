@@ -40,16 +40,29 @@ function isWide(codePoint: number): boolean {
 }
 
 export class MemoryCapExceededError extends Error {
-  constructor(readonly tokens: number) {
-    super(`Memory note is ${tokens} tokens, over the ${MEMORY_TOKEN_CAP} cap. Consolidate before saving.`);
+  constructor(readonly tokens: number, scope: "note" | "total" = "note") {
+    super(
+      scope === "note"
+        ? `Memory note is ${tokens} tokens, over the ${MEMORY_TOKEN_CAP} cap. Consolidate: merge duplicate judgments, drop rules about ended courses, keep one line per rule.`
+        : `All memory notes together would be ${tokens} tokens, over the ${MEMORY_TOKEN_CAP} total cap (every domain is read in full on each reasoning call). Consolidate or delete a domain by saving it with empty content.`,
+    );
     this.name = "MemoryCapExceededError";
+  }
+}
+
+export class MemoryConflictError extends Error {
+  constructor(readonly currentUpdatedAt: string) {
+    super(
+      `Memory note changed since it was read (now ${currentUpdatedAt}). Re-read with get_memory, merge, and retry.`,
+    );
+    this.name = "MemoryConflictError";
   }
 }
 
 export interface MemoryStore {
   get(domain: string): Promise<MemoryNote>;
   list(): Promise<MemoryNote[]>;
-  save(domain: string, content: string): Promise<MemoryNote>;
+  save(domain: string, content: string, expectedUpdatedAt?: string): Promise<MemoryNote>;
 }
 
 interface MemoryRow {
@@ -83,13 +96,34 @@ export class D1MemoryStore implements MemoryStore {
     return rows.results.map((row) => ({ domain: row.domain, content: row.content, updatedAt: row.updated_at }));
   }
 
-  async save(domain: string, content: string): Promise<MemoryNote> {
+  async save(domain: string, content: string, expectedUpdatedAt?: string): Promise<MemoryNote> {
+    const key = normalizeDomain(domain);
+    // ADR-0024's cap is on what a reasoning call reads — and every domain is read in
+    // full each call — so the cap must hold across ALL notes, not per note.
     const tokens = estimateTokens(content);
     if (tokens > MEMORY_TOKEN_CAP) {
       throw new MemoryCapExceededError(tokens);
     }
-    const key = normalizeDomain(domain);
+    const others = (await this.list()).filter((note) => note.domain !== key);
+    const total = tokens + others.reduce((sum, note) => sum + estimateTokens(note.content), 0);
+    if (total > MEMORY_TOKEN_CAP) {
+      throw new MemoryCapExceededError(total, "total");
+    }
     const updatedAt = this.now().toISOString();
+    // Optimistic concurrency: a full-rewrite from a client that read stale content
+    // must not silently clobber a newer note.
+    if (expectedUpdatedAt !== undefined) {
+      const current = await this.get(key);
+      if (current.updatedAt !== expectedUpdatedAt) {
+        throw new MemoryConflictError(current.updatedAt);
+      }
+    }
+    // Saving empty content removes the domain entirely — the documented way to
+    // retire a note (e.g. an ended course) and reclaim cap budget.
+    if (content.trim() === "") {
+      await this.db.prepare("DELETE FROM agent_notes WHERE domain = ?").bind(key).run();
+      return { domain: key, content: "", updatedAt };
+    }
     await this.db
       .prepare(
         `INSERT INTO agent_notes (domain, content, updated_at)
