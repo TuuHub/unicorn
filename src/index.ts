@@ -127,7 +127,7 @@ export default {
         enableJsonResponse: true,
         sessionIdGenerator: undefined,
       });
-      const server = createUnicornMcpServer(new D1McpRepository(env.DB));
+      const server = createUnicornMcpServer(new D1McpRepository(env.DB), { aiConfigured: Boolean(env.AI_API_KEY) });
       await server.connect(transport);
       return transport.handleRequest(request);
     }

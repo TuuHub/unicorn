@@ -73,10 +73,12 @@ export interface McpRepository {
   listMemory(): Promise<MemoryNote[]>;
   getMemory(domain: string): Promise<MemoryNote>;
   saveMemory(domain: string, content: string): Promise<MemoryNote>;
+  getSyncStatus(): Promise<JsonValue | null>;
 }
 
-export function createUnicornMcpServer(repository: McpRepository): McpServer {
+export function createUnicornMcpServer(repository: McpRepository, options?: { aiConfigured?: boolean }): McpServer {
   const server = new McpServer({ name: "unicorn", version: "0.1.0" });
+  const aiConfigured = options?.aiConfigured ?? true;
 
   server.registerTool(
     "list_items",
@@ -225,6 +227,13 @@ export function createUnicornMcpServer(repository: McpRepository): McpServer {
       },
     },
     async ({ id, enabled, model, monthlyTokenCap, scheduleHourUtc, credentialPreference }) => {
+      // Enabling an LLM job with no key configured "succeeds" and then silently
+      // never runs — reject it here with the fix instead.
+      if (enabled && !aiConfigured) {
+        return jsonError(
+          `Cannot enable ${id}: no AI key is configured on the Worker. Run 'wrangler secret put AI_API_KEY' (and set AI_BASE_URL if not using OpenAI), redeploy, then retry.`,
+        );
+      }
       try {
         return jsonResult(
           await repository.configureAgentJob(id, {
@@ -252,6 +261,24 @@ export function createUnicornMcpServer(repository: McpRepository): McpServer {
       },
     },
     async ({ id, limit }) => jsonResult(await repository.listAgentJobRuns(id, limit)),
+  );
+
+  server.registerTool(
+    "get_sync_status",
+    {
+      annotations: READ_ONLY,
+      description:
+        "Summary of the most recent ingestion cycle: when it ran, per-plugin pull/ingest counts, errors, and delivery results. Use this first when data looks stale or missing.",
+    },
+    async () => {
+      const status = await repository.getSyncStatus();
+      return jsonResult(
+        status ?? {
+          message:
+            "No sync cycle has run yet. Start the hourly scheduler (POST /schedule with ADMIN_TOKEN) or trigger one manually (POST /sync).",
+        },
+      );
+    },
   );
 
   server.registerTool(

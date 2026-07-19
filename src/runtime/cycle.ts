@@ -115,7 +115,39 @@ export async function runCycle(env: Env, forceSync: boolean): Promise<CycleResul
   // line just means the next cycle drains the outbox.
   const delivered = await outbox.deliver(env);
   await outbox.prune(settings.retentionDays);
-  return { ...summary, archived, triage, digest, delivered, skipped };
+  const cycle: CycleResult = { ...summary, archived, triage, digest, delivered, skipped };
+  await recordCycle(env.DB, cycle);
+  return cycle;
+}
+
+// Persist a compact summary of the last cycle so /settings and the MCP
+// get_sync_status tool can answer "did the last sync work, and when?" without
+// digging through observability logs. Best-effort: a write failure never
+// breaks the cycle itself.
+async function recordCycle(db: D1Database, cycle: CycleResult): Promise<void> {
+  const summary = {
+    at: new Date().toISOString(),
+    skipped: cycle.skipped,
+    results: cycle.results,
+    errors: cycle.errors,
+    archived: cycle.archived,
+    triage: cycle.triage.status,
+    digest: cycle.digest.status,
+    delivered: cycle.delivered,
+  };
+  try {
+    await db
+      .prepare(
+        `INSERT INTO settings (key, value_json, updated_at)
+         VALUES ('last_cycle', ?, ?)
+         ON CONFLICT (key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`,
+      )
+      .bind(JSON.stringify(summary), summary.at)
+      .run();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "unknown";
+    console.error(JSON.stringify({ event: "cycle_record_failed", message }));
+  }
 }
 
 async function runTriage(
@@ -136,7 +168,19 @@ async function runTriage(
       }
     },
   );
-  return runner.run();
+  const result = await runner.run();
+  // Triage disables itself at the monthly cap; without this notice the secretary
+  // would die silently and the user would only notice days later.
+  if (notificationsEnabled && (result.status === "budget_exhausted" || ("budgetExhausted" in result && result.budgetExhausted))) {
+    await enqueueBroadcast(
+      outbox,
+      env,
+      `triage-paused:${dayKey()}`,
+      "unicorn triage paused",
+      "Triage reached its monthly token cap and was disabled. Ingestion is still running. Re-enable it with the configure_agent_job MCP tool (a higher cap or next month).",
+    );
+  }
+  return result;
 }
 
 async function runDigest(

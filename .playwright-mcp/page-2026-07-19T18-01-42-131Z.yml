@@ -1,0 +1,52 @@
+- main [ref=f7e2]:
+  - generic [ref=f7e3]:
+    - generic [ref=f7e4]: unicorn
+    - navigation [ref=f7e5]:
+      - link "Settings" [ref=f7e6] [cursor=pointer]:
+        - /url: /settings
+      - link "Digest" [ref=f7e7] [cursor=pointer]:
+        - /url: /digest
+  - heading "Settings" [level=1] [ref=f7e8]
+  - paragraph [ref=f7e9]: Non-secret behavior for this Worker. Changes apply from the next cycle.
+  - region [ref=f7e10]:
+    - generic [ref=f7e11]:
+      - heading "Connections" [level=2] [ref=f7e12]
+      - paragraph [ref=f7e13]:
+        - text: Read from Worker secrets — configure with
+        - code [ref=f7e14]: wrangler secret put
+        - text: ", never stored here."
+    - list [ref=f7e16]:
+      - listitem [ref=f7e17]:
+        - generic [ref=f7e19]: Moodle
+        - generic [ref=f7e20]: Not configured
+      - listitem [ref=f7e21]:
+        - generic [ref=f7e23]: Ed Discussion
+        - generic [ref=f7e24]: Not configured
+      - listitem [ref=f7e25]:
+        - generic [ref=f7e27]: MCP
+        - generic [ref=f7e28]: Connected
+      - listitem [ref=f7e29]:
+        - generic [ref=f7e31]: Notifier
+        - generic [ref=f7e32]: Not configured
+  - region [ref=f7e33]:
+    - heading "Behavior" [level=2] [ref=f7e35]
+    - generic [ref=f7e37]:
+      - generic [ref=f7e38]:
+        - generic [ref=f7e39]:
+          - generic [ref=f7e40]:
+            - text: Hot retention window
+            - paragraph [ref=f7e41]: Days before non-course items move to the archive.
+          - generic [ref=f7e42]:
+            - spinbutton "Hot retention window" [ref=f7e43]: "180"
+            - generic [ref=f7e44]: days
+        - generic [ref=f7e45]:
+          - generic [ref=f7e46]:
+            - text: Source synchronization
+            - paragraph [ref=f7e47]: Pull every enabled source on the hourly cycle.
+          - checkbox "Source synchronization" [checked] [ref=f7e48] [cursor=pointer]
+        - generic [ref=f7e49]:
+          - generic [ref=f7e50]:
+            - text: Notifications
+            - paragraph [ref=f7e51]: Deliver triage alerts and digests to configured channels.
+          - checkbox "Notifications" [checked] [ref=f7e52] [cursor=pointer]
+      - button "Save changes" [ref=f7e54] [cursor=pointer]

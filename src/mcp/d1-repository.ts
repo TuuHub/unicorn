@@ -250,6 +250,13 @@ export class D1McpRepository implements McpRepository {
   saveMemory(domain: string, content: string): Promise<MemoryNote> {
     return this.memory.save(domain, content);
   }
+
+  async getSyncStatus(): Promise<JsonValue | null> {
+    const row = await this.db
+      .prepare("SELECT value_json FROM settings WHERE key = 'last_cycle'")
+      .first<{ value_json: string }>();
+    return row ? (JSON.parse(row.value_json) as JsonValue) : null;
+  }
 }
 
 function parseEvent(row: EventRow): ItemEvent {
