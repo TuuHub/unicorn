@@ -58,6 +58,21 @@ npx wrangler secret put EMAIL_TO
 All outbound messages go through a durable outbox with idempotency keys and bounded
 retry (ADR-0025), so a retried cycle never double-sends.
 
+### Talking back to the bot (Telegram)
+
+With Telegram configured, replies to the bot become triage memory ("FIT2099 quizzes
+don't count", "stop pinging me about tutorial threads") — applied from the next cycle.
+Register the webhook once:
+
+```bash
+npx wrangler secret put TELEGRAM_WEBHOOK_SECRET   # any random string
+curl "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook" \
+  -d "url=https://<your-worker>/telegram" \
+  -d "secret_token=<TELEGRAM_WEBHOOK_SECRET>"
+```
+
+`/memory` in the chat shows what the bot has remembered; the MCP memory tools edit it.
+
 ## Declarative plugin secrets
 
 Tier-1 declarative plugins (ADR-0017) can authenticate against their source, but a

@@ -5,6 +5,7 @@ import { createUnicornMcpServer } from "./mcp/server";
 import { MoodleProbeError, probeMoodle } from "./moodle-probe";
 import { runCycle, type Env } from "./runtime/cycle";
 import { constantTimeEqual, D1SettingsRepository, handleSettings, isBasicAuthorized } from "./settings";
+import { handleTelegramWebhook } from "./telegram";
 
 export { Scheduler } from "./runtime/cycle";
 
@@ -76,6 +77,12 @@ export default {
         },
         database ? 200 : 503,
       );
+    }
+
+    if (request.method === "POST" && url.pathname === "/telegram") {
+      // The IM converse face (ADR-0026): user replies become memory corrections.
+      // Auth is Telegram's secret_token header, checked inside the handler.
+      return handleTelegramWebhook(request, env);
     }
 
     if (request.method === "GET" && url.pathname === "/digest") {

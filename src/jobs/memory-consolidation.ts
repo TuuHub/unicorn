@@ -126,6 +126,7 @@ function buildConsolidationPrompt(notes: MemoryNote[]): string {
   return [
     "You maintain the memory notes of a triage secretary. They exceed their size budget.",
     "Rewrite them tighter: merge duplicate judgments, drop obsolete rules (ended courses, past deadlines), keep one line per rule.",
+    'The "## corrections" section is raw dated user feedback; distill each entry into a concise rule and drop the date.',
     "Preserve every distinct current judgment and keep the user's wording where possible.",
     "Do NOT invent, reinterpret, or add anything.",
     `Keep the exact section structure — one "## <domain>" header per section, same domains.`,

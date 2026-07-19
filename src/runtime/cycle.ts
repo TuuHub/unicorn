@@ -32,6 +32,7 @@ export interface Env extends NotifierEnv {
   MOODLE_BASE_URL: string;
   MOODLE_SESSION?: string;
   SCHEDULER: DurableObjectNamespace;
+  TELEGRAM_WEBHOOK_SECRET?: string;
 }
 
 interface SyncSummary {
