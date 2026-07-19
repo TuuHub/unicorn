@@ -119,6 +119,17 @@ export class NotificationOutbox {
             .bind(attempts, error, id);
     return statement.run();
   }
+
+  // Drop delivered/failed rows past the retention window so the table can't grow
+  // unbounded. Pending rows are never pruned — they still owe a delivery.
+  async prune(retentionDays: number): Promise<number> {
+    const cutoff = new Date(this.now().getTime() - retentionDays * 24 * 60 * 60 * 1000).toISOString();
+    const result = await this.db
+      .prepare("DELETE FROM notifications_outbox WHERE status != 'pending' AND created_at < ?")
+      .bind(cutoff)
+      .run();
+    return result.meta.changes;
+  }
 }
 
 // Enqueue one message per configured channel, so every face receives it. The

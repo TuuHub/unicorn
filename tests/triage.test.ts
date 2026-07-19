@@ -119,6 +119,42 @@ describe("TriageRunner", () => {
     expect(generator.generate).not.toHaveBeenCalled();
   });
 
+  it("does not let a short itemId match another line's verdict (prefix collision)", async () => {
+    const store = jobStore();
+    const notify = vi.fn().mockResolvedValue(undefined);
+    // Two ambiguous new threads with colliding numeric ids: "123" and "9123".
+    const events: ItemEvent[] = [
+      { id: "a", type: "item.created", source: "feed", itemId: "123", createdAt: "2026-07-18T12:00:00.000Z" },
+      { id: "b", type: "item.created", source: "feed", itemId: "9123", createdAt: "2026-07-18T12:00:00.000Z" },
+    ];
+    const data: TriageDataSource = {
+      listRecentEvents: vi.fn().mockResolvedValue(events),
+      describeItems: vi
+        .fn()
+        .mockResolvedValue([
+          { source: "feed", itemId: "123", title: "A", kind: "post" },
+          { source: "feed", itemId: "9123", title: "B", kind: "post" },
+        ]),
+    };
+    // Model ignores only 9123; 123 has no verdict line of its own.
+    const generator = {
+      generate: vi.fn().mockResolvedValue({
+        text: "9123: ignore",
+        usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+      }),
+    } as unknown as TextGenerator;
+    const runner = new TriageRunner(store, data, memory(""), generator, notify);
+
+    const result = await runner.run(NOW);
+
+    // 123 must NOT inherit 9123's ignore; it stays important (no verdict → kept).
+    expect(result.status).toBe("completed");
+    expect(notify).toHaveBeenCalledOnce();
+    const body = notify.mock.calls[0][1] as string;
+    expect(body).toContain("A");
+    expect(body).not.toContain("• B");
+  });
+
   it("does not run when disabled", async () => {
     const store = jobStore({ enabled: false });
     const runner = new TriageRunner(store, dataSource([temporalChange()]), memory(""), null, vi.fn());

@@ -13,6 +13,7 @@ interface Stored {
   next_attempt_at: string;
   last_error: string | null;
   delivered_at: string | null;
+  created_at: string;
 }
 
 // A tiny in-memory D1 double covering exactly the statements the outbox issues.
@@ -43,8 +44,8 @@ function fakeDb(rows: Stored[]) {
               next_attempt_at: nextAttempt,
               last_error: null,
               delivered_at: null,
+              created_at: createdAt,
             });
-            void createdAt;
             return { meta: { changes: 1 } };
           }
           if (sql.includes("status = 'delivered'")) {
@@ -66,6 +67,16 @@ function fakeDb(rows: Stored[]) {
             const [attempts, nextAttempt, error, id] = this.args as [number, string, string, string];
             update(rows, id, { attempts, next_attempt_at: nextAttempt, last_error: error });
             return { meta: { changes: 1 } };
+          }
+          if (sql.startsWith("DELETE FROM notifications_outbox")) {
+            const [cutoff] = this.args as [string];
+            const before = rows.length;
+            for (let index = rows.length - 1; index >= 0; index -= 1) {
+              if (rows[index]!.status !== "pending" && rows[index]!.created_at < cutoff) {
+                rows.splice(index, 1);
+              }
+            }
+            return { meta: { changes: before - rows.length } };
           }
           return { meta: { changes: 0 } };
         },
@@ -138,5 +149,20 @@ describe("NotificationOutbox", () => {
 
     expect(result).toEqual({ delivered: 0, failed: 1, retrying: 0 });
     expect(rows[0]?.status).toBe("failed");
+  });
+
+  it("prunes settled rows past the retention window but keeps pending ones", async () => {
+    const rows: Stored[] = [];
+    const outbox = new NotificationOutbox(fakeDb(rows), () => new Date("2026-07-19T00:00:00.000Z"));
+    await outbox.enqueue({ idempotencyKey: "old-delivered", channel: "discord", title: "t", body: "b" });
+    await outbox.enqueue({ idempotencyKey: "old-pending", channel: "discord", title: "t", body: "b" });
+    rows[0]!.status = "delivered";
+    rows[0]!.created_at = "2026-01-01T00:00:00.000Z";
+    rows[1]!.created_at = "2026-01-01T00:00:00.000Z";
+
+    const pruned = await outbox.prune(30);
+
+    expect(pruned).toBe(1);
+    expect(rows.map((row) => row.idempotency_key)).toEqual(["old-pending"]);
   });
 });

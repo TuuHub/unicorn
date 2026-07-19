@@ -111,6 +111,7 @@ export async function runCycle(env: Env, forceSync: boolean): Promise<CycleResul
   // idempotent and retries on its own schedule, so a mid-cycle crash before this
   // line just means the next cycle drains the outbox.
   const delivered = await outbox.deliver(env);
+  await outbox.prune(settings.retentionDays);
   return { ...summary, archived, triage, digest, delivered, skipped };
 }
 
