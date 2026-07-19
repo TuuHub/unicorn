@@ -116,10 +116,14 @@ export class DailyDigestRunner {
         maxOutputTokens: Math.min(1_500, remaining - inputTokenCeiling),
         prompt,
       });
-    } catch {
+    } catch (error) {
+      // Persist the failure cause in the run row (surfaced by list_agent_job_runs)
+      // so a broken key/model/base-url is diagnosable without log spelunking.
+      const message = error instanceof Error ? error.message : String(error);
       await this.store.recordRun({
         jobId: job.id,
         status: "failed",
+        output: `model call failed: ${message.slice(0, 500)}`,
         inputTokens: 0,
         outputTokens: 0,
         totalTokens: 0,

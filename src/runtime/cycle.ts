@@ -104,8 +104,11 @@ export async function runCycle(env: Env, forceSync: boolean): Promise<CycleResul
   const archived = await runRetention(new D1RetentionRepository(env.DB), settings.retentionDays);
 
   const outbox = new NotificationOutbox(env.DB);
+  const triageEnabled = await isJobEnabled(env.DB, "triage");
   if (settings.notificationsEnabled) {
-    await enqueueSyncNotice(outbox, env, summary);
+    // When triage is on it owns change notifications; the generic sync notice
+    // would double-ping the same items, so it degrades to errors-only.
+    await enqueueSyncNotice(outbox, env, summary, triageEnabled);
   }
   const triage = await runTriage(env, outbox, settings.notificationsEnabled);
   const digest = await runDigest(env, outbox, settings.notificationsEnabled);
@@ -277,17 +280,20 @@ async function syncSources(env: Env): Promise<SyncSummary> {
   return summary;
 }
 
-async function enqueueSyncNotice(outbox: NotificationOutbox, env: Env, summary: SyncSummary): Promise<void> {
+async function enqueueSyncNotice(outbox: NotificationOutbox, env: Env, summary: SyncSummary, triageEnabled: boolean): Promise<void> {
   if (configuredChannels(env).length === 0) {
     return;
   }
   const eventCount = summary.results.reduce((total, result) => total + result.events, 0);
-  if (eventCount === 0 && summary.errors.length === 0) {
+  const changesWorthNoting = !triageEnabled && eventCount > 0;
+  if (!changesWorthNoting && summary.errors.length === 0) {
     return;
   }
-  const lines = summary.results
-    .filter((result) => result.events > 0)
-    .map((result) => `${result.plugin}: ${result.events} change${result.events === 1 ? "" : "s"}`);
+  const lines = changesWorthNoting
+    ? summary.results
+        .filter((result) => result.events > 0)
+        .map((result) => `${result.plugin}: ${result.events} change${result.events === 1 ? "" : "s"}`)
+    : [];
   lines.push(...summary.errors.map((error) => `${error.plugin}: ${error.code}`));
   const body = lines.join("\n");
   await enqueueBroadcast(
@@ -297,6 +303,17 @@ async function enqueueSyncNotice(outbox: NotificationOutbox, env: Env, summary: 
     summary.errors.length ? "unicorn sync needs attention" : "unicorn found changes",
     body,
   );
+}
+
+// Whether an agent job is currently enabled; used to avoid double-notifying when
+// triage owns the change stream. Best-effort — a read failure means "not enabled".
+async function isJobEnabled(db: D1Database, id: string): Promise<boolean> {
+  try {
+    const row = await db.prepare("SELECT enabled FROM agent_jobs WHERE id = ?").bind(id).first<{ enabled: number }>();
+    return row?.enabled === 1;
+  } catch {
+    return false;
+  }
 }
 
 function syncErrorCode(error: unknown): string {

@@ -54,6 +54,36 @@ describe("classify (deterministic reflexes)", () => {
     };
     expect(classify(event, NOW).importance).toBe("ambiguous");
   });
+
+  it("ignores engagement counter drift but keeps substantive scalars with detail", () => {
+    const counter: ItemEvent = {
+      id: "e5",
+      type: "capability.changed",
+      source: "campus-ed",
+      itemId: "thread:5",
+      createdAt: NOW.toISOString(),
+      primitive: "scalar",
+      capability: "has-view-count",
+      before: 10,
+      after: 11,
+    };
+    expect(classify(counter, NOW).importance).toBe("ignore");
+
+    const grade: ItemEvent = {
+      id: "e6",
+      type: "capability.changed",
+      source: "campus-moodle",
+      itemId: "assessment:6",
+      createdAt: NOW.toISOString(),
+      primitive: "scalar",
+      capability: "has-grade",
+      before: null,
+      after: "85.00",
+    };
+    const decision = classify(grade, NOW);
+    expect(decision.importance).toBe("important");
+    expect(decision.reason).toBe("grade changed to 85.00");
+  });
 });
 
 describe("TriageRunner", () => {

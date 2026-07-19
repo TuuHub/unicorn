@@ -28,7 +28,7 @@ describe("unicorn MCP server", () => {
 
     const result = await client.callTool({ name: "list_upcoming", arguments: { days: 14, limit: 10 } });
 
-    expect(repository.listUpcoming).toHaveBeenCalledWith({ days: 14, limit: 10 });
+    expect(repository.listUpcoming).toHaveBeenCalledWith({ days: 14, includeOverdue: false, limit: 10 });
     expect(readToolJson(result)).toEqual([
       expect.objectContaining({ itemId: "assessment:99", title: "Assignment 3" }),
     ]);

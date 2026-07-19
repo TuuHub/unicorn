@@ -103,6 +103,9 @@ export class D1McpRepository implements McpRepository {
   }
 
   async listUpcoming(query: UpcomingQuery): Promise<UpcomingItem[]> {
+    // With includeOverdue the window opens 30 days back so a missed deadline is
+    // still visible; otherwise it starts at now.
+    const windowStart = query.includeOverdue ? "julianday('now', '-30 days')" : "julianday('now')";
     const rows = await this.db
       .prepare(
         `SELECT
@@ -121,7 +124,7 @@ export class D1McpRepository implements McpRepository {
          JOIN json_each(f.capabilities_json) binding
          WHERE i.archived_at IS NULL
            AND json_extract(binding.value, '$.primitive') = 'temporal'
-           AND julianday(due_at) BETWEEN julianday('now') AND julianday('now', '+' || ? || ' days')
+           AND julianday(due_at) BETWEEN ${windowStart} AND julianday('now', '+' || ? || ' days')
          ORDER BY julianday(due_at), i.title
          LIMIT ?`,
       )
@@ -173,7 +176,11 @@ export class D1McpRepository implements McpRepository {
       this.find(normalized.toSource, normalized.toItemId),
     ]);
     if (!from || !to) {
-      throw new Error("Both linked items must exist.");
+      const missing = [
+        ...(from ? [] : [`${normalized.fromSource}/${normalized.fromItemId}`]),
+        ...(to ? [] : [`${normalized.toSource}/${normalized.toItemId}`]),
+      ];
+      throw new Error(`Cannot link: item${missing.length > 1 ? "s" : ""} not found: ${missing.join(", ")}. Check source and itemId with list_items.`);
     }
     const confirmedAt = new Date().toISOString();
     const id = crypto.randomUUID();

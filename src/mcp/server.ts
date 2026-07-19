@@ -17,6 +17,7 @@ export interface ItemQuery {
 
 export interface UpcomingQuery {
   days: number;
+  includeOverdue?: boolean;
   limit: number;
 }
 
@@ -84,14 +85,20 @@ export function createUnicornMcpServer(repository: McpRepository, options?: { ai
     "list_items",
     {
       annotations: READ_ONLY,
-      description: "List normalized items from every enabled source.",
+      description:
+        "List normalized items from every enabled source, newest first. Returns summaries without the raw source payload — use get_item for the full record. Built-in sources: 'campus-moodle' (kinds: course, assessment), 'campus-ed' (kinds: course, thread); declarative plugins use their manifest id. An unknown source or kind returns an empty list.",
       inputSchema: {
         source: z.string().trim().min(1).optional(),
         kind: z.string().trim().min(1).optional(),
         limit: z.number().int().positive().max(100).optional().default(20),
       },
     },
-    async ({ source, kind, limit }) => jsonResult(await repository.listItems({ source, kind, limit })),
+    async ({ source, kind, limit }) => {
+      const items = await repository.listItems({ source, kind, limit });
+      // Strip raw payloads in list responses: a full Ed thread's raw JSON repeats
+      // the body and blows out the caller's context window at up to 100 rows.
+      return jsonResult(items.map(({ raw: _raw, ...item }) => item));
+    },
   );
 
   server.registerTool(
@@ -111,22 +118,29 @@ export function createUnicornMcpServer(repository: McpRepository, options?: { ai
     "list_upcoming",
     {
       annotations: READ_ONLY,
-      description: "List temporal capabilities due within a number of days.",
+      description:
+        "List items with due dates (assessments, deadlines) from now until `days` ahead. Set includeOverdue to also see recently missed deadlines (up to 30 days back).",
       inputSchema: {
         days: z.number().int().positive().max(365).optional().default(14),
+        includeOverdue: z.boolean().optional().default(false),
         limit: z.number().int().positive().max(100).optional().default(20),
       },
     },
-    async ({ days, limit }) => jsonResult(await repository.listUpcoming({ days, limit })),
+    async ({ days, includeOverdue, limit }) => jsonResult(await repository.listUpcoming({ days, includeOverdue, limit })),
   );
 
   server.registerTool(
     "list_changes",
     {
       annotations: READ_ONLY,
-      description: "List item and capability change events, newest first.",
+      description:
+        "List item and capability change events, newest first. `since` must be an ISO 8601 UTC timestamp (e.g. 2026-07-01T00:00:00Z); other formats silently match nothing.",
       inputSchema: {
-        since: z.string().trim().min(1).optional(),
+        since: z
+          .string()
+          .trim()
+          .regex(/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2})?(\.\d+)?(Z|[+-]\d{2}:\d{2})?)?$/, "since must be an ISO 8601 timestamp, e.g. 2026-07-01T00:00:00Z")
+          .optional(),
         limit: z.number().int().positive().max(100).optional().default(20),
       },
     },
@@ -216,7 +230,8 @@ export function createUnicornMcpServer(repository: McpRepository, options?: { ai
     "configure_agent_job",
     {
       annotations: WRITE,
-      description: "Configure an agent job schedule, BYOK model, and monthly token cap.",
+      description:
+        "Configure an agent job's BYOK model and monthly token cap, and enable or disable it. scheduleHourUtc applies to daily-digest only (the UTC hour after which it may run once per day); triage runs every cycle and ignores it.",
       inputSchema: {
         id: z.enum(["daily-digest", "triage"]),
         enabled: z.boolean(),
