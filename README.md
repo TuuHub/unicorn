@@ -14,7 +14,7 @@ The Worker runtime now includes:
 - authenticated Streamable HTTP MCP tools, including capped agent-memory notes
 - protected settings, retention, and Discord / Telegram / email notifications through a durable outbox
 - a Pi-backed resident agent over authenticated HTTP and Telegram, with D1 conversation history and per-conversation Durable Object serialization
-- an hourly Durable Object scheduler, a resident triage job, and opt-in BYOK model jobs with measured token caps
+- an hourly Durable Object scheduler, a resident triage job, and opt-in model jobs backed by Workers AI or BYOK with measured token caps
 
 Production deployment: [unicorn.bunizao.workers.dev](https://unicorn.bunizao.workers.dev/health)
 
@@ -52,7 +52,7 @@ Generate separate random values for `ADMIN_TOKEN` and `MCP_TOKEN`. `ADMIN_TOKEN`
 
 MCP clients connect to `https://<your-worker>/mcp` with `Authorization: Bearer <MCP_TOKEN>`.
 
-The `resident-agent`, `daily-digest`, and `triage` jobs are disabled by default. To use them, set `AI_API_KEY`, choose an OpenAI-compatible `AI_BASE_URL`, then enable each through the `configure_agent_job` MCP tool with its model and monthly token cap. Actual input/output usage and measured monthly projections are exposed through MCP. Reaching a cap rejects new resident turns or pauses the scheduled model path without ever stopping ingestion.
+The `resident-agent`, `daily-digest`, and `triage` jobs are disabled by default. The built-in Cloudflare Workers AI binding needs no model secret; enable a job through the `configure_agent_job` MCP tool with a Workers AI model such as `@cf/meta/llama-3.3-70b-instruct-fp8-fast` and a monthly token cap. Setting `AI_API_KEY` and an optional OpenAI-compatible `AI_BASE_URL` overrides Workers AI for BYOK deployments. Actual input/output usage and measured monthly projections are exposed through MCP. Reaching a cap rejects new resident turns or pauses the scheduled model path without ever stopping ingestion.
 
 The resident HTTP surface uses the operator token:
 
@@ -76,7 +76,7 @@ On top of the kernel, unicorn is becoming a **resident secretary agent** (ADR-00
 
 There is deliberately no maintained web dashboard and no daily-driver CLI — views are rendered reports (`/settings`, `/digest`) or generated on demand by your MCP client.
 
-Server-side agent jobs (triage, daily digest, planning) run on your Claude/Codex subscription quota or a BYOK key, with hard budget caps and a degradation chain so ingestion never dies when an LLM does. The **resident triage job** (ADR-0023) is the v1 secretary: deterministic reflexes decide the clear cases with zero LLM, a cheap model judges only the ambiguous middle, and it remembers your corrections in a capped notes memory (ADR-0024) your MCP client can edit.
+Server-side agent jobs (triage, daily digest, planning) run on the native Workers AI binding by default or an optional BYOK provider, with hard budget caps and a degradation chain so ingestion never dies when an LLM does. The **resident triage job** (ADR-0023) is the v1 secretary: deterministic reflexes decide the clear cases with zero LLM, a cheap model judges only the ambiguous middle, and it remembers your corrections in a capped notes memory (ADR-0024) your MCP client can edit.
 
 ## Design principles
 

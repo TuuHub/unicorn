@@ -72,7 +72,8 @@ There is no arbitrary fetch, SQL, shell, code execution, source synchronization,
 ## Reliability and cost
 
 - The `resident-agent` job has its own enable flag, model, monthly token cap, and measured run ledger.
-- A turn is rejected before inference when the job is disabled, no model credentials exist, or the monthly cap is exhausted.
+- A turn is rejected before inference when the job is disabled, no model runtime exists, or the monthly cap is exhausted.
+- The native Workers AI binding is the zero-secret default. An `AI_API_KEY` plus optional `AI_BASE_URL` overrides it for OpenAI-compatible BYOK deployments.
 - Provider errors, aborts, empty responses, tool-loop limits, and persistence failures are explicit failures; none are rendered as a successful answer.
 - A model failure never affects ingestion, deterministic triage, retention, scheduling, MCP, or notification delivery.
 - Model calls have a hard timeout and bounded output. Tool execution is sequential and the turn count is capped.
@@ -83,7 +84,7 @@ There is no arbitrary fetch, SQL, shell, code execution, source synchronization,
 - Telegram continues to verify the webhook secret and owner chat id before reading message content.
 - Prompts receive compact projections, not unrestricted raw rows. `get_item` is available only for a specifically requested item.
 - Logs contain counts and error codes, never prompts, answers, memory contents, source bodies, credentials, or Telegram text.
-- Secrets stay in Cloudflare Worker Secrets and are never persisted in D1.
+- BYOK and Telegram secrets stay in Cloudflare Worker Secrets and are never persisted in D1. Native Workers AI uses a binding, not a model credential.
 
 ## Acceptance criteria
 

@@ -2,7 +2,7 @@ import { D1JobStore } from "../jobs/d1-job-store";
 import { D1McpRepository } from "../mcp/d1-repository";
 import type { Env } from "../runtime/cycle";
 import { D1AgentConversationStore } from "./d1-conversation-store";
-import { OpenAiCompatiblePiRuntime } from "./pi-model";
+import { createPiModelRuntime } from "./pi-model";
 import { PiResidentAgent, ResidentAgentError, type AgentTurn } from "./resident-agent";
 
 export class AgentSession {
@@ -58,9 +58,7 @@ export class AgentSession {
       conversations: new D1AgentConversationStore(this.env.DB),
       jobs: new D1JobStore(this.env.DB),
       repository: new D1McpRepository(this.env.DB),
-      runtime: this.env.AI_API_KEY
-        ? new OpenAiCompatiblePiRuntime({ apiKey: this.env.AI_API_KEY, baseUrl: this.env.AI_BASE_URL })
-        : null,
+      runtime: createPiModelRuntime(this.env),
     });
   }
 

@@ -133,13 +133,14 @@ Cross-platform course matching (same course in Ed and Moodle) is proposed by the
 
 ## 6. LLM layer (ADR-0004, ADR-0007, ADR-0008)
 
-All job code talks only to the **Vercel AI SDK interface**. Providers are swappable instances behind it:
+All job code talks only to the narrow **Pi runtime / `TextGenerator` interfaces**. Providers are swappable instances behind them:
 
 ```
-job → AI SDK interface → OpenAI-compatible BYOK provider → skip without affecting ingestion
+job → Pi runtime → Workers AI binding (default) or OpenAI-compatible BYOK → skip without affecting ingestion
 ```
 
-- **BYOK** = an OpenAI-compatible provider configured through `AI_API_KEY` and `AI_BASE_URL`.
+- **Workers AI** = the zero-secret default model runtime, invoked through the native `AI` binding.
+- **BYOK** = an optional OpenAI-compatible provider configured through `AI_API_KEY` and `AI_BASE_URL`; it overrides Workers AI.
 - **Subscription providers** remain an end-state experiment, not v1 code. Their unofficial protocol and account-risk surface do not belong in the stable ingestion path.
 - **Degradation** = a missing or failed model marks only the job as skipped/failed. Data freshness never depends on it.
 

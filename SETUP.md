@@ -93,7 +93,9 @@ and reference it as `{ "auth": { "type": "bearer", "binding": "PLUGIN_SECRET_MYF
 ## Agent jobs (optional)
 
 `resident-agent`, `daily-digest`, and `triage` are disabled by default. Configure them through the MCP
-tools `configure_agent_job`, `list_agent_jobs`, and `list_agent_job_runs`, after setting
+tools `configure_agent_job`, `list_agent_jobs`, and `list_agent_job_runs`. The native
+Workers AI binding needs no model secret; use a model id such as
+`@cf/meta/llama-3.3-70b-instruct-fp8-fast`. To override it with a BYOK provider, set
 `AI_API_KEY` and (if not OpenAI) `AI_BASE_URL`. Triage watches facet events, keeps
 deterministic reflexes (a deadline within 7 days is always important), and speaks only
 when something matters (ADR-0023). It reads your remembered judgments from the capped

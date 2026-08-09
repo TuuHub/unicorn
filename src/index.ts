@@ -1,5 +1,6 @@
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { AgentSession } from "./agent/session";
+import { piModelConfigured } from "./agent/pi-model";
 import { normalizeConversationId } from "./agent/resident-agent";
 import { renderDigestReport } from "./digest-report";
 import { D1JobStore } from "./jobs/d1-job-store";
@@ -87,7 +88,7 @@ export default {
           mcp: "/mcp",
           agent: {
             endpoint: "/agent",
-            configured: Boolean(env.AI_API_KEY),
+            configured: piModelConfigured(env),
             enabled: status.residentAgentEnabled,
           },
           settings: "/settings",
@@ -169,7 +170,7 @@ export default {
           moodle: Boolean(env.MOODLE_SESSION),
           ed: Boolean(env.ED_API_TOKEN),
           mcp: Boolean(env.MCP_TOKEN),
-          agent: Boolean(env.AI_API_KEY),
+          agent: piModelConfigured(env),
           notifier: Boolean(env.NOTIFIER_URL || (env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_CHAT_ID) || (env.RESEND_API_KEY && env.EMAIL_FROM && env.EMAIL_TO)),
         },
         status: await operationalStatus(env),
@@ -199,7 +200,7 @@ export default {
         enableJsonResponse: true,
         sessionIdGenerator: undefined,
       });
-      const server = createUnicornMcpServer(new D1McpRepository(env.DB), { aiConfigured: Boolean(env.AI_API_KEY) });
+      const server = createUnicornMcpServer(new D1McpRepository(env.DB), { aiConfigured: piModelConfigured(env) });
       await server.connect(transport);
       return transport.handleRequest(request);
     }

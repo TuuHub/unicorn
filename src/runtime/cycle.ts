@@ -16,10 +16,15 @@ import { D1ManifestStore } from "../plugins/declarative/store";
 import type { Plugin } from "../plugins/plugin";
 import { D1RetentionRepository, runRetention } from "../retention";
 import { D1SettingsRepository } from "../settings";
-import { OpenAiCompatiblePiRuntime, PiTextGenerator } from "../agent/pi-model";
+import {
+  createPiModelRuntime,
+  PiTextGenerator,
+  type WorkersAiBinding,
+} from "../agent/pi-model";
 
 export interface Env extends NotifierEnv {
   ADMIN_TOKEN: string;
+  AI?: WorkersAiBinding;
   AI_API_KEY?: string;
   AI_BASE_URL: string;
   DB: D1Database;
@@ -222,7 +227,7 @@ async function runDigest(
   outbox: NotificationOutbox,
   notificationsEnabled: boolean,
 ): Promise<DigestResult | { status: "not_configured" }> {
-  if (!env.AI_API_KEY) {
+  if (!createPiModelRuntime(env)) {
     return { status: "not_configured" };
   }
   // One clock read drives both the runner's `already_ran` day gate and the
@@ -258,12 +263,8 @@ async function runDigest(
 }
 
 function createTextGenerator(env: Env): PiTextGenerator | null {
-  if (!env.AI_API_KEY) {
-    return null;
-  }
-  return new PiTextGenerator(
-    new OpenAiCompatiblePiRuntime({ apiKey: env.AI_API_KEY, baseUrl: env.AI_BASE_URL }),
-  );
+  const runtime = createPiModelRuntime(env);
+  return runtime ? new PiTextGenerator(runtime) : null;
 }
 
 function enqueueBudgetExhausted(outbox: NotificationOutbox, env: Env): Promise<void> {

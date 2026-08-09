@@ -497,6 +497,8 @@ Rejected for now: a published `npx create-unicorn` package. Deploy already requi
 
 **Decision.** unicorn uses `@earendil-works/pi-ai` for model transport and `@earendil-works/pi-agent-core` for bounded conversational tool loops. Pi is the brain implementation, not the Unicorn kernel. The external `ResidentAgent` interface contains only `run(turn)` and `reset(conversationId)`; Pi contexts, messages, tools, provider events, and replay details stay inside that module.
 
+The production-default provider is the native Cloudflare Workers AI binding. A small fetch adapter translates its non-streaming text/tool response into the OpenAI event stream already consumed by Pi, so no Cloudflare account token is stored inside the Worker. An explicit `AI_API_KEY` and optional `AI_BASE_URL` take precedence for BYOK deployments. Provider selection remains behind the same runtime seam.
+
 The resident loop is deliberately narrower than a general-purpose agent:
 
 - Read-only Unicorn tools expose compact D1 projections for items, upcoming deadlines, changes, memory, and sync status.
@@ -513,4 +515,5 @@ The existing `TextGenerator` interface stays as the one-shot seam for digest, tr
 - ADR-0023 now permits bounded multi-turn reasoning for direct user conversations; scheduled triage stays a deterministic-first one-shot judge.
 - ADR-0026's Telegram converse face becomes real without weakening MCP as the port for external brains.
 - `nodejs_compat` becomes part of the Worker runtime contract and must be verified by Wrangler dry-run and production smoke tests.
+- Workers AI becomes a first-class Worker binding; no model secret is required for the default edge deployment.
 - Pi version changes are explicit upgrades, not floating dependency updates, because message and event semantics sit on a persistence seam.

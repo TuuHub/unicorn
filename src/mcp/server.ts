@@ -247,7 +247,7 @@ export function createUnicornMcpServer(repository: McpRepository, options?: { ai
     {
       annotations: WRITE,
       description:
-        "Configure an agent job's BYOK model and monthly token cap, and enable or disable it. scheduleHourUtc applies to daily-digest only (the UTC hour after which it may run once per day); triage and resident-agent ignore it.",
+        "Configure an agent job's model and monthly token cap, and enable or disable it. Use an @cf/... model for the default Workers AI binding; AI_API_KEY overrides it for BYOK. scheduleHourUtc applies to daily-digest only (the UTC hour after which it may run once per day); triage and resident-agent ignore it.",
       inputSchema: {
         id: z.enum(["daily-digest", "triage", "resident-agent"]),
         enabled: z.boolean(),
@@ -258,11 +258,11 @@ export function createUnicornMcpServer(repository: McpRepository, options?: { ai
       },
     },
     async ({ id, enabled, model, monthlyTokenCap, scheduleHourUtc, credentialPreference }) => {
-      // Enabling an LLM job with no key configured "succeeds" and then silently
+      // Enabling an LLM job with no runtime configured "succeeds" and then silently
       // never runs — reject it here with the fix instead.
       if (enabled && !aiConfigured) {
         return jsonError(
-          `Cannot enable ${id}: no AI key is configured on the Worker. Run 'wrangler secret put AI_API_KEY' (and set AI_BASE_URL if not using OpenAI), redeploy, then retry.`,
+          `Cannot enable ${id}: no model runtime is configured. Add the Workers AI binding or run 'wrangler secret put AI_API_KEY' (and set AI_BASE_URL if not using OpenAI), redeploy, then retry.`,
         );
       }
       try {
