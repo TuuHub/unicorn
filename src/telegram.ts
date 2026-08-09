@@ -50,10 +50,13 @@ export async function handleTelegramWebhook(
   }
 
   const chatId = update.message?.chat?.id;
+  // Check ownership before touching message content. Other chats are silently
+  // acknowledged so Telegram never retries them.
+  if (chatId === undefined || String(chatId) !== env.TELEGRAM_CHAT_ID) {
+    return new Response(null, { status: 200 });
+  }
   const text = update.message?.text?.trim();
-  // Single-user product: silently ack anything that is not the owner's text
-  // message (other chats, edits, stickers) so Telegram never retries it.
-  if (chatId === undefined || String(chatId) !== env.TELEGRAM_CHAT_ID || !text) {
+  if (!text) {
     return new Response(null, { status: 200 });
   }
 

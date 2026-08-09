@@ -1,6 +1,5 @@
 import type { Message } from "@earendil-works/pi-ai";
-import type { JobRunInput } from "../jobs/daily-digest";
-import type { AgentConversationStore, AgentTurnResult } from "./resident-agent";
+import type { AgentConversationStore, AgentTurnCommit, AgentTurnResult } from "./resident-agent";
 
 interface MessageRow {
   message_json: string;
@@ -41,13 +40,7 @@ export class D1AgentConversationStore implements AgentConversationStore {
     return row ? (JSON.parse(row.result_json) as AgentTurnResult) : null;
   }
 
-  async commitTurn(input: {
-    conversationId: string;
-    messages: Message[];
-    idempotencyKey?: string;
-    result: AgentTurnResult;
-    run: JobRunInput;
-  }): Promise<void> {
+  async commitTurn(input: AgentTurnCommit): Promise<void> {
     const now = input.run.createdAt;
     const statements: D1PreparedStatement[] = [
       this.db

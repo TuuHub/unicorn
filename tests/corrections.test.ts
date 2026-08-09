@@ -85,6 +85,41 @@ describe("handleTelegramWebhook", () => {
     expect(body.text).toContain("Noted");
   });
 
+  it("explains every Telegram command through /help", async () => {
+    const response = await handleTelegramWebhook(webhookRequest("/help", "hook-secret"), env(fakeDb()));
+
+    const body = (await response.json()) as { text: string };
+    expect(body.text).toContain("/remember <text>");
+    expect(body.text).toContain("/memory");
+    expect(body.text).toContain("/reset");
+  });
+
+  it("shows the correction note through /memory", async () => {
+    const response = await handleTelegramWebhook(webhookRequest("/memory", "hook-secret"), env(fakeDb()));
+
+    const body = (await response.json()) as { text: string };
+    expect(body.text).toBe("No corrections remembered yet.");
+  });
+
+  it("forwards /reset only to the current conversation", async () => {
+    const fetch = vi.fn().mockResolvedValue(Response.json({ conversationId: "telegram:42", reset: true }));
+    const runtime = {
+      ...env(fakeDb()),
+      AGENT_SESSIONS: {
+        idFromName: vi.fn().mockReturnValue({ name: "telegram:42" }),
+        get: vi.fn().mockReturnValue({ fetch }),
+      } as unknown as DurableObjectNamespace,
+    };
+
+    const response = await handleTelegramWebhook(webhookRequest("/reset", "hook-secret"), runtime);
+
+    const body = (await response.json()) as { text: string };
+    expect(body.text).toBe("Conversation history cleared.");
+    const forwarded = fetch.mock.calls[0]?.[0] as Request;
+    expect(forwarded.method).toBe("DELETE");
+    expect(new URL(forwarded.url).searchParams.get("conversationId")).toBe("telegram:42");
+  });
+
   it("routes an owner question through the resident conversation", async () => {
     const runtime = { ...env(fakeDb()), AGENT_SESSIONS: agentNamespace("Assignment 3 is due tomorrow.") };
 

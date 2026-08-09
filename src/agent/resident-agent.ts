@@ -35,14 +35,16 @@ export interface ResidentAgent {
 export interface AgentConversationStore {
   loadMessages(conversationId: string, limit?: number): Promise<Message[]>;
   getTurnResult(conversationId: string, idempotencyKey: string): Promise<AgentTurnResult | null>;
-  commitTurn(input: {
-    conversationId: string;
-    messages: Message[];
-    idempotencyKey?: string;
-    result: AgentTurnResult;
-    run: JobRunInput;
-  }): Promise<void>;
+  commitTurn(input: AgentTurnCommit): Promise<void>;
   reset(conversationId: string): Promise<void>;
+}
+
+export interface AgentTurnCommit {
+  conversationId: string;
+  messages: Message[];
+  idempotencyKey?: string;
+  result: AgentTurnResult;
+  run: JobRunInput;
 }
 
 export type ResidentAgentErrorCode =
@@ -269,7 +271,7 @@ function normalizeTurn(turn: AgentTurn): Required<Pick<AgentTurn, "conversationI
   return { conversationId, message, ...(idempotencyKey ? { idempotencyKey } : {}) };
 }
 
-function normalizeConversationId(value: string): string {
+export function normalizeConversationId(value: unknown): string {
   const conversationId = typeof value === "string" ? value.trim() : "";
   if (!/^[A-Za-z0-9:_-]{1,100}$/.test(conversationId)) {
     throw new ResidentAgentError("invalid_turn", "Conversation id contains unsupported characters.");

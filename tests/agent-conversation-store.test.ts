@@ -48,4 +48,28 @@ describe("D1AgentConversationStore", () => {
     expect(preparedSql.some((sql) => sql.includes("INSERT INTO agent_turn_results"))).toBe(true);
     expect(preparedSql.some((sql) => sql.includes("INSERT INTO agent_job_runs"))).toBe(true);
   });
+
+  it("resets only conversation history and idempotency rows", async () => {
+    const batch = vi.fn().mockResolvedValue([]);
+    const preparedSql: string[] = [];
+    const db = {
+      prepare(sql: string) {
+        preparedSql.push(sql);
+        return {
+          bind(...values: unknown[]) {
+            return { sql, values };
+          },
+        };
+      },
+      batch,
+    } as unknown as D1Database;
+
+    await new D1AgentConversationStore(db).reset("operator");
+
+    expect(batch).toHaveBeenCalledOnce();
+    expect(preparedSql).toHaveLength(3);
+    expect(preparedSql.every((sql) => /agent_(turn_results|messages|conversations)/.test(sql))).toBe(true);
+    expect(preparedSql.join(" ")).not.toContain("items");
+    expect(preparedSql.join(" ")).not.toContain("agent_notes");
+  });
 });

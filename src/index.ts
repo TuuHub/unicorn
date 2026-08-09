@@ -1,5 +1,6 @@
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { AgentSession } from "./agent/session";
+import { normalizeConversationId } from "./agent/resident-agent";
 import { renderDigestReport } from "./digest-report";
 import { D1JobStore } from "./jobs/d1-job-store";
 import { D1McpRepository } from "./mcp/d1-repository";
@@ -113,8 +114,8 @@ export default {
         } catch {
           return json({ error: "invalid_turn" }, 400);
         }
-        const conversationId = typeof body.conversationId === "string" ? body.conversationId.trim() : "operator";
-        if (!validConversationId(conversationId)) {
+        const conversationId = parseConversationId(body.conversationId ?? "operator");
+        if (!conversationId) {
           return json({ error: "invalid_turn" }, 400);
         }
         const id = env.AGENT_SESSIONS.idFromName(conversationId);
@@ -131,8 +132,8 @@ export default {
         );
       }
       if (request.method === "DELETE") {
-        const conversationId = (url.searchParams.get("conversationId") ?? "operator").trim();
-        if (!validConversationId(conversationId)) {
+        const conversationId = parseConversationId(url.searchParams.get("conversationId") ?? "operator");
+        if (!conversationId) {
           return json({ error: "invalid_turn" }, 400);
         }
         const id = env.AGENT_SESSIONS.idFromName(conversationId);
@@ -234,6 +235,10 @@ export default {
   },
 } satisfies ExportedHandler<Env>;
 
-function validConversationId(value: string): boolean {
-  return /^[A-Za-z0-9:_-]{1,100}$/.test(value);
+function parseConversationId(value: unknown): string | null {
+  try {
+    return normalizeConversationId(value);
+  } catch {
+    return null;
+  }
 }

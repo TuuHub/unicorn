@@ -78,15 +78,21 @@ function agentErrorResponse(error: unknown): Response {
   if (!(error instanceof ResidentAgentError)) {
     return Response.json({ error: "internal_error" }, { status: 500 });
   }
-  const status =
-    error.code === "invalid_turn"
-      ? 400
-      : error.code === "budget_exhausted"
-        ? 429
-        : error.code === "timed_out"
-          ? 504
-          : error.code === "provider_failed" || error.code === "loop_exhausted"
-            ? 502
-            : 503;
-  return Response.json({ error: error.code }, { status });
+  return Response.json({ error: error.code }, { status: agentErrorStatus(error.code) });
+}
+
+function agentErrorStatus(code: ResidentAgentError["code"]): number {
+  switch (code) {
+    case "invalid_turn":
+      return 400;
+    case "budget_exhausted":
+      return 429;
+    case "provider_failed":
+    case "loop_exhausted":
+      return 502;
+    case "timed_out":
+      return 504;
+    default:
+      return 503;
+  }
 }

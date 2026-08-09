@@ -42,6 +42,24 @@ describe("/agent", () => {
     });
   });
 
+  it("normalizes the conversation id before selecting its Durable Object", async () => {
+    const runtime = environment();
+    await worker.fetch(
+      new Request("https://unicorn.example/agent", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer admin-secret",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ conversationId: " operator ", message: "Hello" }),
+      }),
+      runtime.env,
+      executionContext(),
+    );
+
+    expect(runtime.idFromName).toHaveBeenCalledWith("operator");
+  });
+
   it("routes conversation reset without deleting world state", async () => {
     const runtime = environment();
     const response = await worker.fetch(

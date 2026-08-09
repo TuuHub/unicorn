@@ -9,6 +9,7 @@ import {
   PiResidentAgent,
   ResidentAgentError,
   type AgentConversationStore,
+  type AgentTurnCommit,
   type AgentTurnResult,
 } from "../src/agent/resident-agent";
 import type { PiModelRuntime } from "../src/agent/pi-model";
@@ -28,13 +29,7 @@ class MemoryConversationStore implements AgentConversationStore {
     return Promise.resolve(this.results.get(`${conversationId}\0${idempotencyKey}`) ?? null);
   }
 
-  commitTurn(input: {
-    conversationId: string;
-    messages: Message[];
-    idempotencyKey?: string;
-    result: AgentTurnResult;
-    run: JobRunInput;
-  }): Promise<void> {
+  commitTurn(input: AgentTurnCommit): Promise<void> {
     this.messages.set(input.conversationId, [
       ...(this.messages.get(input.conversationId) ?? []),
       ...input.messages,
