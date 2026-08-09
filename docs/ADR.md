@@ -486,3 +486,31 @@ Rejected for now: a published `npx create-unicorn` package. Deploy already requi
 - Onboarding collapses to `git clone` + one command (+ the unavoidable browser OAuth).
 - The installer is disposable glue, not a maintained surface — it does not violate ADR-0026's no-CLI stance.
 - Secrets still enter only through Wrangler (ADR-0022 upheld).
+
+---
+
+## ADR-0028 — Resident brain: Pi behind a narrow runtime seam
+
+**Status:** Accepted (supersedes ADR-0007's Vercel AI SDK choice and amends ADR-0023's prohibition on server-side multi-turn loops)
+
+**Context.** ADR-0023 correctly kept the resident brain thin, but its blanket rejection of a server-side multi-turn loop also blocked the conversational IM surface promised by ADR-0026. The existing one-shot `TextGenerator` is enough for digest and triage; it is not enough to answer a follow-up question, call several Unicorn tools, stop safely, resume with history, or expose one consistent loop to HTTP and Telegram. Cloudflare OS now runs `pi-agent-core` inside Workers, removing the runtime-compatibility uncertainty while leaving persistence and product policy to the host.
+
+**Decision.** unicorn uses `@earendil-works/pi-ai` for model transport and `@earendil-works/pi-agent-core` for bounded conversational tool loops. Pi is the brain implementation, not the Unicorn kernel. The external `ResidentAgent` interface contains only `run(turn)` and `reset(conversationId)`; Pi contexts, messages, tools, provider events, and replay details stay inside that module.
+
+The resident loop is deliberately narrower than a general-purpose agent:
+
+- Read-only Unicorn tools expose compact D1 projections for items, upcoming deadlines, changes, memory, and sync status.
+- No arbitrary network, SQL, shell, code execution, plugin installation, settings mutation, or source-side write is available.
+- Durable Object routing serializes turns per conversation; D1 stores messages, idempotent turn results, and measured job usage.
+- A bounded recent-history window is replayed. Old rows remain auditable without entering every prompt.
+- Provider failure, timeout, budget exhaustion, and loop exhaustion are explicit domain failures. Ingestion remains independent.
+
+The existing `TextGenerator` interface stays as the one-shot seam for digest, triage, and memory consolidation, with a Pi adapter replacing the AI SDK adapter. This keeps those deep modules unchanged and prevents Pi types from spreading through the codebase.
+
+**Consequences.**
+
+- ADR-0007's provider implementation changes from Vercel AI SDK to Pi, while its provider-isolation intent remains.
+- ADR-0023 now permits bounded multi-turn reasoning for direct user conversations; scheduled triage stays a deterministic-first one-shot judge.
+- ADR-0026's Telegram converse face becomes real without weakening MCP as the port for external brains.
+- `nodejs_compat` becomes part of the Worker runtime contract and must be verified by Wrangler dry-run and production smoke tests.
+- Pi version changes are explicit upgrades, not floating dependency updates, because message and event semantics sit on a persistence seam.
