@@ -169,7 +169,7 @@ function workersAiFetch(ai: WorkersAiBinding, modelId: string): typeof fetch {
   return async (input, init) => {
     const request = new Request(input, init);
     const payload = (await request.json()) as Record<string, unknown>;
-    const result = await ai.run(modelId, workersAiInput(payload), { signal: request.signal });
+    const result = await ai.run(modelId, workersAiInput(modelId, payload), { signal: request.signal });
     return new Response(workersAiSse(modelId, result), {
       headers: {
         "content-type": "text/event-stream",
@@ -179,7 +179,10 @@ function workersAiFetch(ai: WorkersAiBinding, modelId: string): typeof fetch {
   };
 }
 
-function workersAiInput(payload: Record<string, unknown>): Record<string, unknown> {
+function workersAiInput(modelId: string, payload: Record<string, unknown>): Record<string, unknown> {
+  if (modelId.startsWith("@cf/openai/gpt-oss-")) {
+    return workersAiChatCompletionsInput(payload);
+  }
   const supported = [
     "messages",
     "tools",
@@ -189,14 +192,156 @@ function workersAiInput(payload: Record<string, unknown>): Record<string, unknow
     "presence_penalty",
     "response_format",
   ];
-  const input = Object.fromEntries(supported.flatMap((key) => (payload[key] === undefined ? [] : [[key, payload[key]]])));
+  const input: Record<string, unknown> = Object.fromEntries(
+    supported.flatMap((key) => (payload[key] === undefined ? [] : [[key, payload[key]]])),
+  );
+  if (input.messages !== undefined) {
+    input.messages = normalizeWorkersAiMessages(input.messages);
+  }
+  if (input.tools !== undefined) {
+    input.tools = normalizeWorkersAiTools(input.tools);
+  }
   const maxTokens = payload.max_tokens ?? payload.max_completion_tokens;
   return maxTokens === undefined ? input : { ...input, max_tokens: maxTokens };
 }
 
+function workersAiChatCompletionsInput(payload: Record<string, unknown>): Record<string, unknown> {
+  const supported = [
+    "messages",
+    "tools",
+    "max_tokens",
+    "max_completion_tokens",
+    "temperature",
+    "top_p",
+    "frequency_penalty",
+    "presence_penalty",
+    "response_format",
+    "tool_choice",
+    "parallel_tool_calls",
+    "reasoning_effort",
+  ];
+  const input: Record<string, unknown> = Object.fromEntries(
+    supported.flatMap((key) => (payload[key] === undefined ? [] : [[key, payload[key]]])),
+  );
+  if (input.messages !== undefined) {
+    input.messages = normalizeWorkersAiMessages(input.messages, true);
+  }
+  return input;
+}
+
+function normalizeWorkersAiMessages(value: unknown, preserveOpenAiToolHistory = false): unknown {
+  if (!Array.isArray(value)) {
+    return value;
+  }
+  const toolNames = new Map<string, string>();
+  return value.map((entry) => {
+    if (!entry || typeof entry !== "object") {
+      return entry;
+    }
+    const message = entry as Record<string, unknown>;
+    if (Array.isArray(message.tool_calls)) {
+      for (const entry of message.tool_calls) {
+        if (!entry || typeof entry !== "object") {
+          continue;
+        }
+        const call = entry as Record<string, unknown>;
+        const fn = call.function && typeof call.function === "object"
+          ? call.function as Record<string, unknown>
+          : null;
+        if (typeof call.id === "string" && typeof fn?.name === "string") {
+          toolNames.set(call.id, fn.name);
+        }
+      }
+    }
+    const toolName = message.role === "tool" && typeof message.tool_call_id === "string"
+      ? toolNames.get(message.tool_call_id)
+      : undefined;
+    if (preserveOpenAiToolHistory) {
+      return { ...message, content: workersAiTextContent(message.content) };
+    }
+    const { tool_calls: _toolCalls, tool_call_id: _toolCallId, ...nativeMessage } = message;
+    return {
+      ...nativeMessage,
+      ...(typeof message.name !== "string" && toolName ? { name: toolName } : {}),
+      content: workersAiTextContent(message.content),
+    };
+  });
+}
+
+function workersAiTextContent(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (value === null || value === undefined) {
+    return "";
+  }
+  if (!Array.isArray(value)) {
+    throw new PiModelError("Workers AI received a non-text message.");
+  }
+  return value.map((part) => {
+    if (part && typeof part === "object") {
+      const block = part as Record<string, unknown>;
+      if (block.type === "text" && typeof block.text === "string") {
+        return block.text;
+      }
+    }
+    throw new PiModelError("Workers AI received a non-text message part.");
+  }).join("");
+}
+
+function normalizeWorkersAiTools(value: unknown): unknown {
+  if (!Array.isArray(value)) {
+    return value;
+  }
+  return value.map((entry) => {
+    if (!entry || typeof entry !== "object") {
+      return entry;
+    }
+    const tool = entry as Record<string, unknown>;
+    if (tool.function && typeof tool.function === "object") {
+      const fn = tool.function as Record<string, unknown>;
+      return { ...tool, function: { ...fn, parameters: describeToolParameters(fn.parameters) } };
+    }
+    return { ...tool, parameters: describeToolParameters(tool.parameters) };
+  });
+}
+
+function describeToolParameters(value: unknown): unknown {
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  const schema = value as Record<string, unknown>;
+  if (!schema.properties || typeof schema.properties !== "object") {
+    return value;
+  }
+  const properties = Object.fromEntries(Object.entries(schema.properties).map(([name, property]) => {
+    if (!property || typeof property !== "object") {
+      return [name, property];
+    }
+    const descriptor = property as Record<string, unknown>;
+    return [name, {
+      ...descriptor,
+      description: typeof descriptor.description === "string" && descriptor.description
+        ? descriptor.description
+        : `Value for ${name}.`,
+    }];
+  }));
+  return { ...schema, properties };
+}
+
 function workersAiSse(modelId: string, result: Record<string, unknown>): string {
-  const toolCalls = normalizeWorkersAiToolCalls(result.tool_calls);
-  const response = typeof result.response === "string" ? result.response : "";
+  const choice = workersAiChatChoice(result);
+  const toolCalls = normalizeWorkersAiToolCalls(choice?.message.tool_calls ?? result.tool_calls);
+  const response = typeof choice?.message.content === "string"
+    ? choice.message.content
+    : typeof result.response === "string"
+      ? result.response
+      : "";
+  const finishReason = typeof choice?.finish_reason === "string"
+    ? choice.finish_reason
+    : toolCalls.length > 0
+      ? "tool_calls"
+      : "stop";
   const chunk = {
     id: `workers-ai-${crypto.randomUUID()}`,
     object: "chat.completion.chunk",
@@ -210,12 +355,33 @@ function workersAiSse(modelId: string, result: Record<string, unknown>): string 
           ...(response ? { content: response } : {}),
           ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
         },
-        finish_reason: toolCalls.length > 0 ? "tool_calls" : "stop",
+        finish_reason: finishReason,
       },
     ],
     usage: normalizeWorkersAiUsage(result.usage),
   };
   return `data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`;
+}
+
+function workersAiChatChoice(result: Record<string, unknown>): {
+  message: Record<string, unknown>;
+  finish_reason?: unknown;
+} | null {
+  if (!Array.isArray(result.choices)) {
+    return null;
+  }
+  const choice = result.choices[0];
+  if (!choice || typeof choice !== "object") {
+    return null;
+  }
+  const candidate = choice as Record<string, unknown>;
+  if (!candidate.message || typeof candidate.message !== "object") {
+    return null;
+  }
+  return {
+    message: candidate.message as Record<string, unknown>,
+    ...(candidate.finish_reason !== undefined ? { finish_reason: candidate.finish_reason } : {}),
+  };
 }
 
 function normalizeWorkersAiToolCalls(value: unknown): Array<{

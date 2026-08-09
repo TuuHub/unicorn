@@ -119,9 +119,39 @@ describe("WorkersAiPiRuntime", () => {
     ]);
   });
 
-  it("preserves native Workers AI tool calls for the Pi agent loop", async () => {
+  it("adapts the native GPT-OSS chat completions response", async () => {
     const binding: WorkersAiBinding = {
       async run() {
+        return {
+          id: "chatcmpl-edge",
+          object: "chat.completion",
+          created: 1,
+          model: "@cf/openai/gpt-oss-20b",
+          choices: [
+            {
+              index: 0,
+              message: { role: "assistant", content: "GPT-OSS is ready.", refusal: null },
+              finish_reason: "stop",
+              logprobs: null,
+            },
+          ],
+          usage: { prompt_tokens: 18, completion_tokens: 6, total_tokens: 24 },
+        };
+      },
+    };
+    const resolved = new WorkersAiPiRuntime(binding).resolve("@cf/openai/gpt-oss-20b");
+
+    const result = await resolved.stream(resolved.model, userContext("Hello")).result();
+
+    expect(result.content).toEqual([{ type: "text", text: "GPT-OSS is ready." }]);
+    expect(result.usage).toMatchObject({ input: 18, output: 6, totalTokens: 24 });
+  });
+
+  it("preserves native Workers AI tool calls for the Pi agent loop", async () => {
+    let nativeInput: Record<string, unknown> = {};
+    const binding: WorkersAiBinding = {
+      async run(_model, input) {
+        nativeInput = input;
         return {
           tool_calls: [
             {
@@ -156,9 +186,102 @@ describe("WorkersAiPiRuntime", () => {
     expect(result.content).toEqual([
       { type: "toolCall", id: "call_upcoming", name: "list_upcoming", arguments: { days: 7 } },
     ]);
+    expect(nativeInput).toMatchObject({
+      tools: [
+        {
+          function: {
+            parameters: {
+              properties: { days: { type: "number", description: expect.any(String) } },
+            },
+          },
+        },
+      ],
+    });
+  });
+
+  it("normalizes Pi text parts and tool history for the native binding schema", async () => {
+    let nativeInput: Record<string, unknown> = {};
+    const binding: WorkersAiBinding = {
+      async run(_model, input) {
+        nativeInput = input;
+        return { response: "Nothing is due." };
+      },
+    };
+    const context = toolHistoryContext();
+    const resolved = new WorkersAiPiRuntime(binding).resolve("@cf/meta/llama-3.3-70b-instruct-fp8-fast");
+
+    await resolved.stream(resolved.model, context).result();
+
+    const messages = nativeInput.messages as Array<{
+      role: string;
+      content: unknown;
+      name?: string;
+      tool_calls?: unknown;
+    }>;
+    expect(messages).toHaveLength(4);
+    expect(messages.every((message) => typeof message.content === "string")).toBe(true);
+    expect(messages.find((message) => message.role === "assistant")?.tool_calls).toBeUndefined();
+    expect(messages.find((message) => message.role === "tool")?.name).toBe("list_upcoming");
+  });
+
+  it("keeps GPT-OSS tool ids while normalizing message content", async () => {
+    let nativeInput: Record<string, unknown> = {};
+    const binding: WorkersAiBinding = {
+      async run(_model, input) {
+        nativeInput = input;
+        return {
+          choices: [
+            {
+              message: { role: "assistant", content: "Nothing is due." },
+              finish_reason: "stop",
+            },
+          ],
+        };
+      },
+    };
+    const resolved = new WorkersAiPiRuntime(binding).resolve("@cf/openai/gpt-oss-20b");
+
+    await resolved.stream(resolved.model, toolHistoryContext()).result();
+
+    const messages = nativeInput.messages as Array<{
+      role: string;
+      content: unknown;
+      tool_calls?: unknown;
+      tool_call_id?: string;
+    }>;
+    expect(messages.every((message) => typeof message.content === "string")).toBe(true);
+    expect(messages.find((message) => message.role === "assistant")?.tool_calls).toBeDefined();
+    expect(messages.find((message) => message.role === "tool")?.tool_call_id).toBe("call_1");
   });
 });
 
 function userContext(content: string): Context {
   return { messages: [{ role: "user", content, timestamp: 0 }] };
+}
+
+function toolHistoryContext(): Context {
+  return {
+    systemPrompt: "Use tools for current data.",
+    messages: [
+      { role: "user", content: "What is due?", timestamp: 1 },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "list_upcoming", arguments: { days: 7 } }],
+        api: "openai-completions",
+        provider: "cloudflare-workers-ai",
+        model: "test",
+        usage,
+        stopReason: "toolUse",
+        timestamp: 2,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "list_upcoming",
+        content: [{ type: "text", text: "[]" }],
+        isError: false,
+        timestamp: 3,
+      },
+    ],
+  } as unknown as Context;
 }

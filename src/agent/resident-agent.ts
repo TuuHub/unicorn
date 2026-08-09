@@ -8,7 +8,7 @@ const JOB_ID = "resident-agent";
 const DEFAULT_HISTORY_LIMIT = 40;
 const DEFAULT_MAX_TURNS = 4;
 const DEFAULT_MAX_OUTPUT_TOKENS = 800;
-const DEFAULT_TIMEOUT_MS = 20_000;
+const DEFAULT_TIMEOUT_MS = 45_000;
 
 export interface AgentTurn {
   conversationId: string;

@@ -52,7 +52,7 @@ Generate separate random values for `ADMIN_TOKEN` and `MCP_TOKEN`. `ADMIN_TOKEN`
 
 MCP clients connect to `https://<your-worker>/mcp` with `Authorization: Bearer <MCP_TOKEN>`.
 
-The `resident-agent`, `daily-digest`, and `triage` jobs are disabled by default. The built-in Cloudflare Workers AI binding needs no model secret; enable a job through the `configure_agent_job` MCP tool with a Workers AI model such as `@cf/meta/llama-3.3-70b-instruct-fp8-fast` and a monthly token cap. Setting `AI_API_KEY` and an optional OpenAI-compatible `AI_BASE_URL` overrides Workers AI for BYOK deployments. Actual input/output usage and measured monthly projections are exposed through MCP. Reaching a cap rejects new resident turns or pauses the scheduled model path without ever stopping ingestion.
+The `resident-agent`, `daily-digest`, and `triage` jobs are disabled by default. The built-in Cloudflare Workers AI binding needs no model secret; enable a job through the `configure_agent_job` MCP tool with a Workers AI model such as `@cf/openai/gpt-oss-20b` and a monthly token cap. Setting `AI_API_KEY` and an optional OpenAI-compatible `AI_BASE_URL` overrides Workers AI for BYOK deployments. Actual input/output usage and measured monthly projections are exposed through MCP. Reaching a cap rejects new resident turns or pauses the scheduled model path without ever stopping ingestion.
 
 The resident HTTP surface uses the operator token:
 
