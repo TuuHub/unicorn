@@ -247,9 +247,9 @@ export function createUnicornMcpServer(repository: McpRepository, options?: { ai
     {
       annotations: WRITE,
       description:
-        "Configure an agent job's BYOK model and monthly token cap, and enable or disable it. scheduleHourUtc applies to daily-digest only (the UTC hour after which it may run once per day); triage runs every cycle and ignores it.",
+        "Configure an agent job's BYOK model and monthly token cap, and enable or disable it. scheduleHourUtc applies to daily-digest only (the UTC hour after which it may run once per day); triage and resident-agent ignore it.",
       inputSchema: {
-        id: z.enum(["daily-digest", "triage"]),
+        id: z.enum(["daily-digest", "triage", "resident-agent"]),
         enabled: z.boolean(),
         model: z.string().trim().min(1).max(100),
         monthlyTokenCap: z.number().int().positive().max(100_000_000),
@@ -288,7 +288,7 @@ export function createUnicornMcpServer(repository: McpRepository, options?: { ai
       description:
         "List recent runs for an agent job: status, token usage, and a clipped output preview. Set fullOutput to true to include complete outputs (a digest run can be long).",
       inputSchema: {
-        id: z.enum(["daily-digest", "triage"]),
+        id: z.enum(["daily-digest", "triage", "resident-agent"]),
         limit: z.number().int().positive().max(100).optional().default(20),
         fullOutput: z.boolean().optional().default(false),
       },

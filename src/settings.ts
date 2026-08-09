@@ -18,6 +18,7 @@ export interface SettingsRuntime {
     moodle: boolean;
     ed: boolean;
     mcp: boolean;
+    agent: boolean;
     notifier: boolean;
   };
   // Live operational state, fetched by the route handler: whether the hourly
@@ -25,6 +26,7 @@ export interface SettingsRuntime {
   status: {
     schedulerRunning: boolean;
     failedNotifications: number;
+    residentAgentEnabled: boolean;
   };
 }
 
@@ -136,6 +138,7 @@ function renderSettings(
     ["Moodle", connections.moodle],
     ["Ed Discussion", connections.ed],
     ["MCP", connections.mcp],
+    ["Pi model", connections.agent],
     ["Notifier", connections.notifier],
   ] as const;
   const rail = sources
@@ -154,6 +157,11 @@ function renderSettings(
         <span class="source-name">Hourly scheduler</span>
         <span class="source-state">${status.schedulerRunning ? "Running" : "Stopped"}</span>
       </li>`;
+  const agentRow = `<li class="source">
+        <span class="dot ${status.residentAgentEnabled ? "is-live" : "is-off"}" aria-hidden="true"></span>
+        <span class="source-name">Resident agent</span>
+        <span class="source-state">${status.residentAgentEnabled ? "Enabled" : "Disabled"}</span>
+      </li>`;
   const failedNotice =
     status.failedNotifications > 0
       ? `<p class="notice error" role="alert">${status.failedNotifications} notification${status.failedNotifications === 1 ? "" : "s"} permanently failed to deliver. Check the channel configuration, then re-save it and new messages will flow again.</p>`
@@ -168,7 +176,7 @@ function renderSettings(
     ${failedNotice}
     <section class="card" aria-labelledby="connections-title">
       <div class="card-head"><h2 id="connections-title">Status</h2><p class="card-sub">Secrets are read from the Worker — configure with <code>wrangler secret put</code>, never stored here.</p></div>
-      <div class="card-body"><ul class="rail rows">${schedulerRow}${rail}</ul></div>
+      <div class="card-body"><ul class="rail rows">${schedulerRow}${agentRow}${rail}</ul></div>
     </section>
     <section class="card" aria-labelledby="behavior-title">
       <div class="card-head"><h2 id="behavior-title">Behavior</h2></div>

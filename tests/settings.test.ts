@@ -26,13 +26,16 @@ describe("settings", () => {
     expect(html).toContain("Not configured");
     expect(html).toContain("Hourly scheduler");
     expect(html).toContain("Running");
+    expect(html).toContain("Pi model");
+    expect(html).toContain("Resident agent");
+    expect(html).toContain("Enabled");
     expect(html).not.toContain("admin-secret");
   });
 
   it("warns when the scheduler is stopped or notifications have failed", async () => {
     const stopped = {
       ...runtime(),
-      status: { schedulerRunning: false, failedNotifications: 2 },
+      status: { schedulerRunning: false, failedNotifications: 2, residentAgentEnabled: false },
     };
     const response = await handleSettings(
       new Request("https://unicorn.example/settings", { headers: { authorization: basic("admin-secret") } }),
@@ -81,11 +84,13 @@ function runtime(repository = repositoryStub()) {
       moodle: true,
       ed: true,
       mcp: true,
+      agent: true,
       notifier: false,
     },
     status: {
       schedulerRunning: true,
       failedNotifications: 0,
+      residentAgentEnabled: true,
     },
   };
 }

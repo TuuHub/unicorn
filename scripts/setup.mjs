@@ -62,8 +62,9 @@ async function main() {
   const rl = createInterface({ input: stdin, output: stdout });
 
   step("Checking prerequisites");
-  if (Number(process.versions.node.split(".")[0]) < 20) {
-    fail(`Node 20+ is required; found ${process.versions.node}.`);
+  const [nodeMajor, nodeMinor] = process.versions.node.split(".").map(Number);
+  if (nodeMajor < 22 || (nodeMajor === 22 && nodeMinor < 19)) {
+    fail(`Node 22.19+ is required by the Pi runtime; found ${process.versions.node}.`);
   }
   run("npm", ["install"]);
 
@@ -93,6 +94,22 @@ async function main() {
   const adminToken = newToken();
   putSecret("ADMIN_TOKEN", adminToken);
   putSecret("MCP_TOKEN", newToken());
+
+  if (await confirm(rl, "Configure the Pi resident agent with an OpenAI-compatible API key?")) {
+    const value = (await rl.question("Paste the AI API key: ")).trim();
+    if (value) {
+      putSecret("AI_API_KEY", value);
+      step("Enabling the resident agent job");
+      wrangler([
+        "d1",
+        "execute",
+        "unicorn",
+        "--remote",
+        "--command",
+        "UPDATE agent_jobs SET enabled = 1, updated_at = datetime('now') WHERE id = 'resident-agent'",
+      ]);
+    }
+  }
 
   if (await confirm(rl, "Set an Ed Discussion API token now?")) {
     const value = (await rl.question("Paste the Ed API token: ")).trim();

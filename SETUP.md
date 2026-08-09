@@ -9,14 +9,15 @@ npm run setup
 
 That runs `scripts/setup.mjs`, a linear installer (ADR-0027) that:
 
-1. checks Node ≥ 20 and installs dependencies,
+1. checks Node ≥ 22.19 and installs dependencies,
 2. runs `wrangler login` (a browser window opens for OAuth — pass it through),
 3. creates the `unicorn` D1 database and writes the returned `database_id` back into `wrangler.jsonc`,
 4. applies migrations,
 5. generates random `ADMIN_TOKEN` and `MCP_TOKEN` secrets and stores them via `wrangler secret put`,
-6. optionally accepts an Ed API token and pushes a Moodle session (`npm run moodle:push`),
-7. deploys the Worker,
-8. starts the hourly scheduler with `POST /schedule`.
+6. optionally configures an AI key and enables the Pi resident agent,
+7. optionally accepts an Ed API token and pushes a Moodle session (`npm run moodle:push`),
+8. deploys the Worker,
+9. starts the hourly scheduler with `POST /schedule`.
 
 Secrets only ever enter through Wrangler; the Worker never rewrites its own secrets (ADR-0022).
 
@@ -60,8 +61,9 @@ retry (ADR-0025), so a retried cycle never double-sends.
 
 ### Talking back to the bot (Telegram)
 
-With Telegram configured, replies to the bot become triage memory ("FIT2099 quizzes
-don't count", "stop pinging me about tutorial threads") — applied from the next cycle.
+With Telegram configured, normal owner messages become persistent resident-agent turns.
+Use `/remember <text>` for a verbatim triage correction, `/memory` to inspect the
+correction note, and `/reset` to clear chat history without deleting memory or world state.
 Register the webhook once:
 
 ```bash
@@ -71,7 +73,8 @@ curl "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook" \
   -d "secret_token=<TELEGRAM_WEBHOOK_SECRET>"
 ```
 
-`/memory` in the chat shows what the bot has remembered; the MCP memory tools edit it.
+The webhook acknowledges model turns immediately, runs them through the conversation's
+Durable Object, and sends the answer through the Bot API when ready.
 
 ## Declarative plugin secrets
 
@@ -89,10 +92,15 @@ and reference it as `{ "auth": { "type": "bearer", "binding": "PLUGIN_SECRET_MYF
 
 ## Agent jobs (optional)
 
-Both `daily-digest` and `triage` are disabled by default. Configure them through the MCP
+`resident-agent`, `daily-digest`, and `triage` are disabled by default. Configure them through the MCP
 tools `configure_agent_job`, `list_agent_jobs`, and `list_agent_job_runs`, after setting
 `AI_API_KEY` and (if not OpenAI) `AI_BASE_URL`. Triage watches facet events, keeps
 deterministic reflexes (a deadline within 7 days is always important), and speaks only
 when something matters (ADR-0023). It reads your remembered judgments from the capped
 notes memory (ADR-0024), which your own MCP client edits through `get_memory` /
 `update_memory`.
+
+The resident agent shares the same job policy and measured ledger. It keeps bounded D1
+history, routes each conversation through one Durable Object, and exposes only read-only
+Unicorn tools. `POST /agent` and `DELETE /agent` use `ADMIN_TOKEN`; Telegram uses the
+webhook secret and owner chat id.

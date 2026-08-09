@@ -3,6 +3,7 @@
   "name": "unicorn",
   "main": "src/index.ts",
   "compatibility_date": "2026-07-12",
+  "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
   "observability": {
     "enabled": true
@@ -12,6 +13,10 @@
       {
         "name": "SCHEDULER",
         "class_name": "Scheduler"
+      },
+      {
+        "name": "AGENT_SESSIONS",
+        "class_name": "AgentSession"
       }
     ]
   },
@@ -19,6 +24,10 @@
     {
       "tag": "v1",
       "new_sqlite_classes": ["Scheduler"]
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["AgentSession"]
     }
   ],
   "vars": {

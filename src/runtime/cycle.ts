@@ -27,6 +27,7 @@ export interface Env extends NotifierEnv {
   MCP_TOKEN: string;
   MOODLE_BASE_URL: string;
   MOODLE_SESSION?: string;
+  AGENT_SESSIONS: DurableObjectNamespace;
   SCHEDULER: DurableObjectNamespace;
   TELEGRAM_WEBHOOK_SECRET?: string;
 }

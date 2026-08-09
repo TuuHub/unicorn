@@ -61,6 +61,35 @@ describe("unicorn MCP server", () => {
 
     expect(readToolJson(result)).toEqual(cycle);
   });
+
+  it("configures the resident-agent job through the existing job policy tool", async () => {
+    const configured = {
+      id: "resident-agent",
+      enabled: true,
+      model: "gpt-5-mini",
+      monthlyTokenCap: 200000,
+      scheduleHourUtc: 0,
+      credentialPreference: "byok" as const,
+    };
+    const repository = {
+      configureAgentJob: vi.fn().mockResolvedValue(configured),
+    } as unknown as McpRepository;
+    const client = await connectClient(repository);
+
+    const result = await client.callTool({
+      name: "configure_agent_job",
+      arguments: configured,
+    });
+
+    expect(repository.configureAgentJob).toHaveBeenCalledWith("resident-agent", {
+      enabled: true,
+      model: "gpt-5-mini",
+      monthlyTokenCap: 200000,
+      scheduleHourUtc: 0,
+      credentialPreference: "byok",
+    });
+    expect(readToolJson(result)).toEqual(configured);
+  });
 });
 
 async function connectClient(repository: McpRepository, options?: { aiConfigured?: boolean }): Promise<Client> {

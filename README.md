@@ -13,7 +13,8 @@ The Worker runtime now includes:
 - Tier-1 declarative JSON and RSS/Atom plugins
 - authenticated Streamable HTTP MCP tools, including capped agent-memory notes
 - protected settings, retention, and Discord / Telegram / email notifications through a durable outbox
-- an hourly Durable Object scheduler, a resident triage job, and an opt-in BYOK daily digest with measured token caps
+- a Pi-backed resident agent over authenticated HTTP and Telegram, with D1 conversation history and per-conversation Durable Object serialization
+- an hourly Durable Object scheduler, a resident triage job, and opt-in BYOK model jobs with measured token caps
 
 Production deployment: [unicorn.bunizao.workers.dev](https://unicorn.bunizao.workers.dev/health)
 
@@ -47,11 +48,22 @@ curl -X POST https://<your-worker>/schedule -H "Authorization: Bearer <ADMIN_TOK
 
 </details>
 
-Generate separate random values for `ADMIN_TOKEN` and `MCP_TOKEN`. `ADMIN_TOKEN` is the password for HTTP Basic user `unicorn` at `/settings` and the bearer token for `/sync`; `MCP_TOKEN` protects `/mcp`. Reusing them needlessly turns one leaked client credential into full operator access.
+Generate separate random values for `ADMIN_TOKEN` and `MCP_TOKEN`. `ADMIN_TOKEN` is the password for HTTP Basic user `unicorn` at `/settings` and the bearer token for `/sync` and `/agent`; `MCP_TOKEN` protects `/mcp`. Reusing them needlessly turns one leaked client credential into full operator access.
 
 MCP clients connect to `https://<your-worker>/mcp` with `Authorization: Bearer <MCP_TOKEN>`.
 
-The `daily-digest` agent job is disabled by default. To use it, set `AI_API_KEY`, choose an OpenAI-compatible `AI_BASE_URL`, then enable it through the `configure_agent_job` MCP tool with a UTC schedule hour and monthly token cap. Actual input/output usage and measured monthly projections are exposed through MCP. The runner reserves prompt and output budget before every call; reaching the cap disables the digest until re-enabled and pauses triage's model (its zero-token deterministic reflexes keep running), sends a notifier warning when configured, and never stops ingestion.
+The `resident-agent`, `daily-digest`, and `triage` jobs are disabled by default. To use them, set `AI_API_KEY`, choose an OpenAI-compatible `AI_BASE_URL`, then enable each through the `configure_agent_job` MCP tool with its model and monthly token cap. Actual input/output usage and measured monthly projections are exposed through MCP. Reaching a cap rejects new resident turns or pauses the scheduled model path without ever stopping ingestion.
+
+The resident HTTP surface uses the operator token:
+
+```bash
+curl https://<your-worker>/agent \
+  -H "Authorization: Bearer <ADMIN_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{"conversationId":"operator","message":"What matters today?","idempotencyKey":"request-1"}'
+```
+
+`DELETE /agent?conversationId=operator` clears only that conversation. Pi can call compact read-only tools for items, deadlines, changes, memory, and sync status; it has no arbitrary fetch, SQL, shell, secret, or source-write capability.
 
 ## What it is
 
@@ -60,7 +72,7 @@ unicorn is a **plugin platform first**. Plugins ingest from any source; the kern
 On top of the kernel, unicorn is becoming a **resident secretary agent** (ADR-0023): an event-driven triage loop that watches every facet event, suppresses noise, speaks only when something matters, and remembers your corrections in a capped notes memory (ADR-0024). Two faces over one kernel (ADR-0026):
 
 - **MCP server** *(v1)* — the pull face: your own Claude / ChatGPT client consults unicorn's structured data and memory; your agent does the open-ended reasoning.
-- **IM** *(v1: push, converse next)* — proactive triage alerts and digests via Telegram / Discord / email through a durable outbox, growing into a two-way conversational surface.
+- **IM** *(v1)* — proactive alerts and digests plus a persistent Pi conversation in Telegram.
 
 There is deliberately no maintained web dashboard and no daily-driver CLI — views are rendered reports (`/settings`, `/digest`) or generated on demand by your MCP client.
 
@@ -88,7 +100,7 @@ Read the decision records in order — they're the source of truth:
 | 0004 | Server-side LLM with degradation chain |
 | 0005 | Course / Assessment / Event data model *(generalized by 0016 → now campus-plugin facets)* |
 | 0006 | v1 scope: MCP + cron + D1 |
-| 0007 | LLM layer: Vercel AI SDK + custom subscription providers |
+| 0007 | Original LLM layer choice *(superseded by 0028)* |
 | 0008 | Agent job registry with metering + hard budget caps |
 | 0009 | Surfaces: shared kernel, three faces |
 | 0010 | Pluggable notifier abstraction |
@@ -109,6 +121,7 @@ Read the decision records in order — they're the source of truth:
 | **0025** | **Event-driven serverless is load-bearing; capability ladder for heavy work** |
 | **0026** | **Surfaces: IM push/converse + MCP pull; UI is output, not asset** |
 | **0027** | **Onboarding: one in-repo setup script shared by humans and agents** |
+| **0028** | **Pi resident brain behind a narrow runtime seam** |
 
 ## Related projects
 

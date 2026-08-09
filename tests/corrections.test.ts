@@ -58,11 +58,13 @@ describe("handleTelegramWebhook", () => {
     TELEGRAM_BOT_TOKEN: "bot-token",
     TELEGRAM_CHAT_ID: "42",
     TELEGRAM_WEBHOOK_SECRET: "hook-secret",
+    AGENT_SESSIONS: agentNamespace(),
     DB: db,
   });
 
   it("404s when telegram is not configured", async () => {
     const response = await handleTelegramWebhook(webhookRequest("hi", "hook-secret"), {
+      AGENT_SESSIONS: agentNamespace(),
       DB: {} as D1Database,
     });
     expect(response.status).toBe(404);
@@ -75,12 +77,46 @@ describe("handleTelegramWebhook", () => {
 
   it("saves an owner message as a correction and replies inline", async () => {
     const db = fakeDb();
-    const response = await handleTelegramWebhook(webhookRequest("quizzes don't count", "hook-secret"), env(db));
+    const response = await handleTelegramWebhook(webhookRequest("/remember quizzes don't count", "hook-secret"), env(db));
 
     expect(response.status).toBe(200);
     const body = (await response.json()) as { method: string; text: string };
     expect(body.method).toBe("sendMessage");
     expect(body.text).toContain("Noted");
+  });
+
+  it("routes an owner question through the resident conversation", async () => {
+    const runtime = { ...env(fakeDb()), AGENT_SESSIONS: agentNamespace("Assignment 3 is due tomorrow.") };
+
+    const response = await handleTelegramWebhook(webhookRequest("What is due?", "hook-secret"), runtime);
+
+    const body = (await response.json()) as { text: string };
+    expect(body.text).toBe("Assignment 3 is due tomorrow.");
+  });
+
+  it("acks immediately and sends a background answer in production", async () => {
+    const runtime = { ...env(fakeDb()), AGENT_SESSIONS: agentNamespace("A background answer.") };
+    let pending: Promise<unknown> | undefined;
+    const waitUntil = vi.fn((promise: Promise<unknown>) => {
+      pending = promise;
+    });
+    const fetcher = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
+    vi.stubGlobal("fetch", fetcher);
+
+    const response = await handleTelegramWebhook(
+      webhookRequest("What changed?", "hook-secret"),
+      runtime,
+      { waitUntil },
+    );
+    await pending;
+
+    expect(await response.text()).toBe("");
+    expect(waitUntil).toHaveBeenCalledOnce();
+    expect(fetcher).toHaveBeenCalledWith(
+      "https://api.telegram.org/botbot-token/sendMessage",
+      expect.objectContaining({ method: "POST" }),
+    );
+    vi.unstubAllGlobals();
   });
 
   it("silently acks messages from other chats", async () => {
@@ -101,8 +137,24 @@ function webhookRequest(text: string, secret: string, chatId = 42): Request {
       "content-type": "application/json",
       "x-telegram-bot-api-secret-token": secret,
     },
-    body: JSON.stringify({ message: { chat: { id: chatId }, text } }),
+    body: JSON.stringify({ update_id: 123, message: { message_id: 456, chat: { id: chatId }, text } }),
   });
+}
+
+function agentNamespace(answer = "Agent answer."): DurableObjectNamespace {
+  return {
+    idFromName: vi.fn().mockReturnValue({ name: "telegram:42" }),
+    get: vi.fn().mockReturnValue({
+      fetch: vi.fn().mockResolvedValue(
+        Response.json({
+          conversationId: "telegram:42",
+          answer,
+          toolsUsed: [],
+          usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+        }),
+      ),
+    }),
+  } as unknown as DurableObjectNamespace;
 }
 
 function memoryStore(content: string): MemoryStore & { get: ReturnType<typeof vi.fn>; save: ReturnType<typeof vi.fn> } {

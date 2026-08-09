@@ -1,13 +1,15 @@
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
+import { AgentSession } from "./agent/session";
 import { renderDigestReport } from "./digest-report";
+import { D1JobStore } from "./jobs/d1-job-store";
 import { D1McpRepository } from "./mcp/d1-repository";
 import { createUnicornMcpServer } from "./mcp/server";
 import { MoodleProbeError, probeMoodle } from "./moodle-probe";
-import { runCycle, type Env } from "./runtime/cycle";
+import { runCycle, Scheduler, type Env } from "./runtime/cycle";
 import { constantTimeEqual, D1SettingsRepository, handleSettings, isBasicAuthorized } from "./settings";
 import { handleTelegramWebhook } from "./telegram";
 
-export { Scheduler } from "./runtime/cycle";
+export { AgentSession, Scheduler };
 
 function json(value: unknown, status = 200): Response {
   return Response.json(value, { status });
@@ -16,7 +18,11 @@ function json(value: unknown, status = 200): Response {
 // Live operational state shared by /health and /settings: is the hourly scheduler
 // alarm set, and how many notifications have permanently failed. Both checks are
 // best-effort — a failure reports as degraded rather than throwing.
-async function operationalStatus(env: Env): Promise<{ schedulerRunning: boolean; failedNotifications: number }> {
+async function operationalStatus(env: Env): Promise<{
+  schedulerRunning: boolean;
+  failedNotifications: number;
+  residentAgentEnabled: boolean;
+}> {
   let schedulerRunning = false;
   try {
     const id = env.SCHEDULER.idFromName("primary");
@@ -33,7 +39,13 @@ async function operationalStatus(env: Env): Promise<{ schedulerRunning: boolean;
   } catch {
     failedNotifications = 0;
   }
-  return { schedulerRunning, failedNotifications };
+  let residentAgentEnabled = false;
+  try {
+    residentAgentEnabled = (await new D1JobStore(env.DB).get("resident-agent"))?.enabled === true;
+  } catch {
+    residentAgentEnabled = false;
+  }
+  return { schedulerRunning, failedNotifications, residentAgentEnabled };
 }
 
 // Bearer routes compare against the secret in constant time so a response-timing
@@ -47,7 +59,7 @@ function bearerOk(request: Request, token: string | undefined): boolean {
 }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, context: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
     if (request.method === "GET" && url.pathname === "/") {
@@ -72,6 +84,11 @@ export default {
           database,
           scheduler: status.schedulerRunning ? "running" : "stopped",
           mcp: "/mcp",
+          agent: {
+            endpoint: "/agent",
+            configured: Boolean(env.AI_API_KEY),
+            enabled: status.residentAgentEnabled,
+          },
           settings: "/settings",
           digest: "/digest",
         },
@@ -80,9 +97,55 @@ export default {
     }
 
     if (request.method === "POST" && url.pathname === "/telegram") {
-      // The IM converse face (ADR-0026): user replies become memory corrections.
+      // The IM converse face (ADR-0026): owner text becomes a resident-agent turn.
       // Auth is Telegram's secret_token header, checked inside the handler.
-      return handleTelegramWebhook(request, env);
+      return handleTelegramWebhook(request, env, context);
+    }
+
+    if (url.pathname === "/agent") {
+      if (!bearerOk(request, env.ADMIN_TOKEN)) {
+        return json({ error: "unauthorized" }, 401);
+      }
+      if (request.method === "POST") {
+        let body: { message?: unknown; conversationId?: unknown; idempotencyKey?: unknown };
+        try {
+          body = (await request.json()) as typeof body;
+        } catch {
+          return json({ error: "invalid_turn" }, 400);
+        }
+        const conversationId = typeof body.conversationId === "string" ? body.conversationId.trim() : "operator";
+        if (!validConversationId(conversationId)) {
+          return json({ error: "invalid_turn" }, 400);
+        }
+        const id = env.AGENT_SESSIONS.idFromName(conversationId);
+        return env.AGENT_SESSIONS.get(id).fetch(
+          new Request("https://agent-session/turn", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              conversationId,
+              message: body.message,
+              ...(body.idempotencyKey !== undefined ? { idempotencyKey: body.idempotencyKey } : {}),
+            }),
+          }),
+        );
+      }
+      if (request.method === "DELETE") {
+        const conversationId = (url.searchParams.get("conversationId") ?? "operator").trim();
+        if (!validConversationId(conversationId)) {
+          return json({ error: "invalid_turn" }, 400);
+        }
+        const id = env.AGENT_SESSIONS.idFromName(conversationId);
+        return env.AGENT_SESSIONS.get(id).fetch(
+          new Request(`https://agent-session/conversation?conversationId=${encodeURIComponent(conversationId)}`, {
+            method: "DELETE",
+          }),
+        );
+      }
+      return new Response(JSON.stringify({ error: "method_not_allowed" }), {
+        status: 405,
+        headers: { "content-type": "application/json", allow: "POST, DELETE" },
+      });
     }
 
     if (request.method === "GET" && url.pathname === "/digest") {
@@ -105,6 +168,7 @@ export default {
           moodle: Boolean(env.MOODLE_SESSION),
           ed: Boolean(env.ED_API_TOKEN),
           mcp: Boolean(env.MCP_TOKEN),
+          agent: Boolean(env.AI_API_KEY),
           notifier: Boolean(env.NOTIFIER_URL || (env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_CHAT_ID) || (env.RESEND_API_KEY && env.EMAIL_FROM && env.EMAIL_TO)),
         },
         status: await operationalStatus(env),
@@ -169,3 +233,7 @@ export default {
     return json({ error: "not_found" }, 404);
   },
 } satisfies ExportedHandler<Env>;
+
+function validConversationId(value: string): boolean {
+  return /^[A-Za-z0-9:_-]{1,100}$/.test(value);
+}
