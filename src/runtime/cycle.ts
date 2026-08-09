@@ -1,12 +1,7 @@
 import { DailyDigestRunner, type DigestResult } from "../jobs/daily-digest";
 import { D1JobStore } from "../jobs/d1-job-store";
 import { MemoryConsolidator } from "../jobs/memory-consolidation";
-import {
-  AiSdkTextGenerator,
-  D1DigestDataSource,
-  D1MemoryReader,
-  D1TriageDataSource,
-} from "../jobs/runtime";
+import { D1DigestDataSource, D1MemoryReader, D1TriageDataSource } from "../jobs/runtime";
 import { TriageRunner, type TriageResult } from "../jobs/triage";
 import { D1ItemStore } from "../kernel/d1-item-store";
 import { Kernel, type InvalidItemError } from "../kernel/kernel";
@@ -21,6 +16,7 @@ import { D1ManifestStore } from "../plugins/declarative/store";
 import type { Plugin } from "../plugins/plugin";
 import { D1RetentionRepository, runRetention } from "../retention";
 import { D1SettingsRepository } from "../settings";
+import { OpenAiCompatiblePiRuntime, PiTextGenerator } from "../agent/pi-model";
 
 export interface Env extends NotifierEnv {
   ADMIN_TOKEN: string;
@@ -129,7 +125,7 @@ export async function runCycle(env: Env, forceSync: boolean): Promise<CycleResul
   const memory = await new MemoryConsolidator(
     new D1MemoryStore(env.DB),
     new D1JobStore(env.DB),
-    env.AI_API_KEY ? new AiSdkTextGenerator({ apiKey: env.AI_API_KEY, baseUrl: env.AI_BASE_URL }) : null,
+    createTextGenerator(env),
   )
     .run()
     .catch((error): { status: "failed" } => {
@@ -196,7 +192,7 @@ async function runTriage(
     new D1JobStore(env.DB),
     new D1TriageDataSource(env.DB),
     new D1MemoryReader(env.DB),
-    env.AI_API_KEY ? new AiSdkTextGenerator({ apiKey: env.AI_API_KEY, baseUrl: env.AI_BASE_URL }) : null,
+    createTextGenerator(env),
     async (title, body) => {
       if (notificationsEnabled) {
         // Day-bucket the key so a retried cycle within the day dedupes, but a
@@ -236,7 +232,7 @@ async function runDigest(
   const result = await new DailyDigestRunner(
     new D1JobStore(env.DB),
     new D1DigestDataSource(env.DB),
-    new AiSdkTextGenerator({ apiKey: env.AI_API_KEY, baseUrl: env.AI_BASE_URL }),
+    createTextGenerator(env)!,
   ).run(now);
   if (!notificationsEnabled) {
     return result;
@@ -258,6 +254,15 @@ async function runDigest(
     );
   }
   return result;
+}
+
+function createTextGenerator(env: Env): PiTextGenerator | null {
+  if (!env.AI_API_KEY) {
+    return null;
+  }
+  return new PiTextGenerator(
+    new OpenAiCompatiblePiRuntime({ apiKey: env.AI_API_KEY, baseUrl: env.AI_BASE_URL }),
+  );
 }
 
 function enqueueBudgetExhausted(outbox: NotificationOutbox, env: Env): Promise<void> {
