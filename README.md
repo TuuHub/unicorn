@@ -122,6 +122,11 @@ Read the decision records in order — they're the source of truth:
 | **0026** | **Surfaces: IM push/converse + MCP pull; UI is output, not asset** |
 | **0027** | **Onboarding: one in-repo setup script shared by humans and agents** |
 | **0028** | **Pi resident brain behind a narrow runtime seam** |
+| **0029** | **unicorn is the agent; the harness is the product; users bring their own client** |
+| **0030** | **Door: two-tool MCP front for clients, separate admin MCP** |
+| **0031** | **Playbooks are the harness; plans and briefs are durable state** |
+| **0032** | **Pull-only delivery; Telegram converse face retired** |
+| **0033** | **Remote MCP servers as ingest sources; Gmail via Google's official MCP** |
 
 ## Related projects
 

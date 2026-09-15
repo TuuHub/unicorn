@@ -517,3 +517,125 @@ The existing `TextGenerator` interface stays as the one-shot seam for digest, tr
 - `nodejs_compat` becomes part of the Worker runtime contract and must be verified by Wrangler dry-run and production smoke tests.
 - Workers AI becomes a first-class Worker binding; no model secret is required for the default edge deployment.
 - Pi version changes are explicit upgrades, not floating dependency updates, because message and event semantics sit on a persistence seam.
+
+---
+
+## ADR-0029 — Product: unicorn is the agent, the harness is the product, users bring their own client
+
+**Status:** Accepted (2026-09-16; supersedes ADR-0023's "no server-side multi-step reasoning" and its 9:1 body:brain rule; extends ADR-0028)
+
+**Context.** Mounting Ed, Moodle, OnTrack and an email MCP separately into a client agent does not work in practice: 60+ source-shaped tools, no cross-source join, and the client model rarely plans a multi-source query on its own. The three jobs the user actually wants are not one-shot lookups:
+
+1. **Plan the week** — a cross-course to-do for the next 7 days that knows which emails to search (extension, reschedule, due) and asks back when the data is ambiguous.
+2. **Assignment reminder and decomposition** — when an assessment enters its due window, read its spec, split it into tasks, and lay them out day by day.
+3. **Staff forum brief** — what teaching staff said on the forum since the last brief, delivered wherever the user's agent runs.
+
+All three need a strong model running a bounded multi-step loop over persistent state, plus a scheduler that acts when nobody is asking. Several alternative shapes were considered and rejected in the same session: a query-time "meta-MCP" that routes among N mounted MCP servers (tool-selection just moves down a level, tokens and latency double); a zero-LLM cache with course-shaped tools and `query(sql)` (cannot plan a week or split an assignment); a template ladder / JSON plan DSL for weak client models (the use cases need reasoning, not form-filling); LLM-written scripts in Dynamic Workers (paid, beta).
+
+**Decision.** unicorn is the agent. The user's own client (Claude Code, Claude Cowork, a Grok bot, Hermes, anything that speaks MCP) is a thin front; unicorn does the reasoning server-side with the user's own model credentials. Three commitments:
+
+- **Brain is first-class.** The Pi loop (ADR-0028) becomes the product surface. It runs up to a dozen tool turns per request, drives itself from **playbooks** (ADR-0031), and owns durable **plans** and **briefs**. A capable BYOK model is the recommended production configuration; the native Workers AI binding remains the zero-secret default and the degradation path, not the design target.
+- **Body stays.** Hourly ingestion into D1, change detection, capped memory and the scheduler are unchanged (ADR-0015 – ADR-0025). They exist so the brain never re-fetches four sources per question and can answer "what changed", which no client session can.
+- **Harness is the investment.** Playbooks, tool projections, memory, plan state, budget caps and scheduled triggers are the analogue of a coding agent's skills, tools, memory and hooks. That is where new effort goes; new sources are plugins (ADR-0017, ADR-0033), not new reasoning code.
+
+**Consequences.**
+- ADR-0023's weekend test still applies to the body; the brain is exempt because the value is in the playbooks and state, which are unicorn-specific.
+- The MCP surface for clients shrinks to a door (ADR-0030); the IM converse face is retired (ADR-0032).
+- Token cost lives in unicorn's ADR-0008 ledger under one job (`resident-agent`), never in the client.
+
+---
+
+## ADR-0030 — Door: a two-tool MCP front for client agents, a separate admin MCP for operators
+
+**Status:** Accepted (amends ADR-0026's MCP face)
+
+**Context.** The existing `/mcp` exposes ~15 kernel-shaped tools (items, events, relations, manifests, jobs, memory). That is the right surface for an operator, and the wrong one for a client agent that should just hand the question over. Tool count in the client's context is the whole problem ADR-0029 exists to solve.
+
+**Decision.** Two MCP endpoints on the same Worker:
+
+- **`POST /mcp` — the door** (bearer `MCP_TOKEN`). Exactly four tools:
+  - `ask({ question, conversationId? })` → `{ answer, toolsUsed, usage }`. Runs one resident-agent turn (ADR-0028 seam) through the per-conversation Durable Object. `conversationId` defaults to `"mcp"`; clients may pass their own to keep separate threads.
+  - `get_briefs({ unreadOnly? = true, limit? = 20 })` → `[{ id, kind, subject, title, body, createdAt, readAt }]`, newest first.
+  - `ack_briefs({ ids })` → marks briefs read.
+  - `remember({ text })` → appends a dated line to the `corrections` memory domain verbatim (zero-LLM; replaces the Telegram `/remember` command).
+  The server's `instructions` field tells the client: call `get_briefs` at the start of a session and whenever the user asks what is new; route every question about courses, deadlines, forums, email or planning to `ask`; never answer those from its own knowledge.
+- **`POST /mcp/admin` — the operator surface** (bearer `ADMIN_TOKEN`). The existing tool set unchanged (`list_items`, `get_item`, `list_upcoming`, `list_changes`, relations, manifests, agent jobs, memory). Operators and setup agents use it; client agents never mount it.
+
+`POST /agent` (ADR-0028) stays as the raw HTTP form of `ask` for scripts.
+
+**Consequences.**
+- A client sees four tools and one sentence of instructions; the 60-tool problem is gone by construction.
+- `ask` is synchronous. The turn budget is 55 s wall (under the default MCP client timeout) with the loop capped by ADR-0031's turn limit; a timeout is an explicit `timed_out` error, never a partial answer presented as complete.
+- `mcp-server.test.ts` splits into door and admin suites; the door suite proves the four tools and the instructions text.
+
+---
+
+## ADR-0031 — Playbooks: procedures are the harness; plans and briefs are durable state
+
+**Status:** Accepted
+
+**Context.** ADR-0028's loop has four read tools, four turns and a generic system prompt. It can answer "what is due", not "plan my week". The missing pieces are procedure (what to gather, what to search, when to ask back, what to output), richer tools shaped for those procedures, and state that outlives one turn.
+
+**Decision.**
+
+**Playbooks.** A playbook is a markdown procedure bundled in the Worker (`src/agent/playbooks/*.md`, imported as text) with a small header: `id`, `title`, `trigger` (`on-demand`, `daily`, `weekly`, or `assessment-due-window`), and `output` (`answer` or `brief`). Three ship in v1:
+
+| id | trigger | output | procedure summary |
+|----|---------|--------|-------------------|
+| `weekly-plan` | on-demand; also `weekly` (Monday, at the resident job's `schedule_hour_utc`) | brief | List courses. Pull deadlines for 14 days with submission status, open OnTrack-style tasks, staff posts for 7 days, and emails matching due / extension / reschedule / exam / quiz. Rank by due date and effort. Lay out 7 days. If two deadlines collide or a spec is missing, say what is unknown and ask one question. Output: per-day checklist plus a "needs your input" list. |
+| `decompose-assignment` | `assessment-due-window` (an assessment enters 7 days to due, is not submitted, and has no plan yet) and on-demand | brief + plan | Read the assessment body, the course's staff posts that mention it, and emails that mention it. Split into 3–7 concrete tasks with an estimated hour each. Spread across the days left, lighter on weekends per memory. Save as a plan keyed by the assessment. Output the plan. |
+| `forum-brief` | `daily` (at `schedule_hour_utc`) and on-demand | brief | For each active course, staff-authored threads (author role `staff`/`admin`, or thread type `announcement`, or pinned) since the last forum brief. Group by course. One line per thread: what changed for the student, with the link. Skip courses with nothing. Empty result → no brief. |
+
+Playbook text is part of the system prompt for every `ask` turn (three procedures fit in about a thousand tokens), so the model follows the matching procedure when the question calls for it and answers directly otherwise. Scheduled runs invoke one playbook explicitly through a `PlaybookRunner` that runs an ephemeral loop (no conversation history) and stores the result as a brief.
+
+**Tools.** The resident tool set grows to fit the procedures, all read-only on sources:
+`list_courses`, `get_course_overview(course)` (identity, assessments with status, recent staff posts, emails mentioning the code, whether an OnTrack-style task source exists), `search_items(query, kind?, course?, since?)` (D1 `LIKE` over title and body, projection only), `get_item(source, itemId)` (full body), `list_upcoming`, `list_changes`, `list_staff_posts(course?, since?)`, `list_memory`, `get_sync_status`, `get_plan(kind, subject)`, `save_plan(kind, subject, content)`, `remember(text)`. The loop limit rises from 4 to 12 turns; the wall budget is 50 s. Tool results stay projections (ADR-0026).
+
+**State.** Two tables, both single-user and unbounded only by retention:
+- `plans(id, kind, subject, content, created_at, updated_at)` — `kind` is `weekly` or `assignment`; `subject` is an ISO week or `source item_id`. One current row per (kind, subject).
+- `briefs(id, kind, subject, title, body, created_at, read_at)` — `kind` is `weekly-plan`, `assignment-plan`, `forum-brief` or `digest`. The existing daily digest writes its output here too so `get_briefs` is the one inbox.
+
+**Budget.** All Pi usage — `ask` turns and scheduled playbooks — is metered under the existing `resident-agent` job (ADR-0008). A scheduled playbook that would exceed the cap is skipped with a logged reason and a one-line brief saying so; `ask` fails with `budget_exhausted` as today.
+
+**Consequences.**
+- Playbook edits are the primary way to improve the product; they are reviewed like code and covered by tests that assert the prompt contains each procedure.
+- Staff detection relies on the Ed thread payload (`user.role` / `type` / `is_pinned`); the Ed plugin gains an `authorRole` field on its `author` facet.
+- Course attribution for items without a `course-membership` facet (emails) uses unit-code mentions (ADR-0033).
+- Migrations: `0009_plans.sql`, `0010_briefs.sql`.
+
+---
+
+## ADR-0032 — Delivery: pull-only; the Telegram converse face is retired
+
+**Status:** Accepted (amends ADR-0026; ADR-0010's notifier stays for operational alerts)
+
+**Context.** ADR-0026 made Telegram the primary converse face because MCP was "just a tool server". With ADR-0029 the user talks to unicorn through their own agent, and an IM conversation loop is a second front to maintain for a user who is no longer the target. Push is still wanted for scheduled output, but MCP clients cannot receive pushes, and the user chose the simplest option: the client pulls.
+
+**Decision.**
+- `POST /telegram`, `src/telegram.ts` and `TELEGRAM_WEBHOOK_SECRET` are removed. `/remember` becomes the `remember` door tool; `/reset` is `DELETE /agent`.
+- Scheduled playbook output and the daily digest are **briefs** (ADR-0031), read through `get_briefs` and acknowledged through `ack_briefs`. The door's instructions ask clients to pull briefs on session start.
+- The notifier and outbox (ADR-0010, ADR-0025) are kept for what they are good at: operational alerts (sync failures, budget exhausted) and the existing triage pings. They no longer carry conversational content. Telegram remains available there as one channel among three.
+
+**Consequences.**
+- A T-7 reminder is seen when the user next opens their agent; for a student that is daily and was judged acceptable.
+- One brain, one door, no second loop to keep in sync with it.
+- SETUP and README drop the Telegram bot setup for conversation and keep it under notifications.
+
+---
+
+## ADR-0033 — Remote MCP servers as ingest sources; Gmail through Google's official MCP
+
+**Status:** Accepted
+
+**Context.** The user's paradigm is "plug an MCP in". ADR-0029 rejected doing that at query time; doing it at ingest time fits ADR-0017's Tier-1 model exactly: a manifest names a remote MCP server, one tool, fixed arguments, and a field mapping, and the hourly cycle calls it like any other declarative source. Gmail is the first target: Google ships a remote Gmail MCP at `https://gmailmcp.googleapis.com/mcp/v1` with `search_threads` / `get_thread`, authenticated by OAuth against the user's own Google Cloud OAuth client (no dynamic client registration). Monash student mail is Google Workspace, so Gmail is the campus email source, and a self-deploy (ADR-0001) means each user's own OAuth client in testing mode needs no Google verification.
+
+**Decision.**
+- The declarative manifest gains a transport: `{ "transport": { "type": "mcp", "url", "tool", "arguments", "auth" } }`, where `auth` is either the existing `PLUGIN_SECRET_*` bearer binding or `{ "type": "oauth", "provider": "google" }`. The plugin is a Streamable HTTP MCP **client**; it calls the one tool, takes `structuredContent` (or parses the first text content as JSON), and applies the existing `itemsPath` + mapping language. Everything else in the manifest is unchanged, so `install_plugin` on the admin MCP accepts it.
+- **OAuth** is a one-time browser dance from `/settings`: `GET /settings/oauth/<pluginId>/start` redirects to the provider, `GET /settings/oauth/callback` exchanges the code and stores the refresh token in D1 (`oauth_tokens(plugin_id, provider, refresh_token, access_token, expires_at, scope, updated_at)`). Client id and secret live in Worker Secrets (`PLUGIN_SECRET_GOOGLE_CLIENT_ID`, `PLUGIN_SECRET_GOOGLE_CLIENT_SECRET`); ADR-0022 holds because the Worker never mutates its own secrets — the refresh token is application state in the user's own D1, like the Moodle session would be if it were not a secret. Access tokens are refreshed on demand.
+- A **Gmail preset manifest** ships in-repo (`src/plugins/presets/gmail.json`) and is installable in one click from `/settings`: `search_threads` with `q: "newer_than:14d"`, kind `email`, facets `author` (from sender) and `course-mention` (`codes`: unit codes matched by `/\b[A-Z]{3}\d{4}\b/` over subject and snippet, with a `relation` capability named `mentions-course`). The kernel provides the extractor so any source (RSS, other mailboxes) can declare the same facet.
+- `get_course_overview` and `search_items` (ADR-0031) join emails to courses through `course-mention.codes` ↔ `course-identity.code`.
+
+**Consequences.**
+- Adding a source is a JSON manifest, again; existing edstem/moodle/ontrack MCP servers can be mounted the same way if their tools return JSON.
+- Gmail cannot be exercised end-to-end in CI; the plugin is tested against a fake MCP server, the OAuth flow against a fake token endpoint, and the preset is validated against the manifest schema. First real-account verification is a deploy-time smoke step recorded in SETUP.
+- Migration: `0011_oauth_tokens.sql`.
