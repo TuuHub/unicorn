@@ -19,6 +19,7 @@ import { D1ManifestStore } from "../plugins/declarative/store";
 import type { Plugin } from "../plugins/plugin";
 import { D1RetentionRepository, runRetention } from "../retention";
 import { D1SettingsRepository } from "../settings";
+import { getAccessToken } from "../oauth";
 import {
   createPiModelRuntime,
   PiTextGenerator,
@@ -350,7 +351,12 @@ async function syncSources(env: Env): Promise<SyncSummary> {
   }
   const manifests = await new D1ManifestStore(env.DB).list(true);
   const bindings = pluginBindings(env as unknown as Record<string, unknown>);
-  plugins.push(...manifests.map(({ manifest }) => new DeclarativePlugin(manifest, bindings)));
+  // OAuth-backed MCP sources (ADR-0033) resolve their access token from D1 at pull time.
+  plugins.push(
+    ...manifests.map(
+      ({ manifest }) => new DeclarativePlugin(manifest, bindings, undefined, (pluginId) => getAccessToken(pluginId, env)),
+    ),
+  );
 
   const kernel = new Kernel(new D1ItemStore(env.DB));
   const summary: SyncSummary = { results: [], errors: [] };
