@@ -6,6 +6,8 @@ import {
 } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import {
+  DEFAULT_MAX_TURNS,
+  DEFAULT_TIMEOUT_MS,
   PiResidentAgent,
   ResidentAgentError,
   type AgentConversationStore,
@@ -13,6 +15,8 @@ import {
   type AgentTurnResult,
 } from "../src/agent/resident-agent";
 import type { PiModelRuntime } from "../src/agent/pi-model";
+import { PLAYBOOKS } from "../src/agent/playbooks";
+import { buildConversationSystemPrompt } from "../src/agent/prompt";
 import type { JobRunInput, JobStore } from "../src/jobs/daily-digest";
 import type { AgentToolRepository } from "../src/agent/tools";
 
@@ -87,12 +91,32 @@ function fauxRuntime(
 
 function repository(overrides: Partial<AgentToolRepository> = {}): AgentToolRepository {
   return {
+    listCourses: vi.fn().mockResolvedValue([]),
+    getCourseOverview: vi.fn().mockResolvedValue({
+      query: "",
+      identity: null,
+      assessments: [],
+      staffPosts: [],
+      emailMentions: [],
+      sources: { moodle: false, ed: false, ontrack: false, email: false },
+    }),
+    searchItems: vi.fn().mockResolvedValue([]),
     find: vi.fn().mockResolvedValue(null),
-    listItems: vi.fn().mockResolvedValue([]),
     listUpcoming: vi.fn().mockResolvedValue([]),
     listEvents: vi.fn().mockResolvedValue([]),
+    listStaffPosts: vi.fn().mockResolvedValue([]),
     listMemory: vi.fn().mockResolvedValue([]),
     getSyncStatus: vi.fn().mockResolvedValue(null),
+    getPlan: vi.fn().mockResolvedValue(null),
+    savePlan: vi.fn().mockResolvedValue({
+      id: "plan-1",
+      kind: "weekly",
+      subject: "2026-W38",
+      content: "",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    }),
+    remember: vi.fn().mockResolvedValue("saved"),
     ...overrides,
   };
 }
@@ -236,5 +260,113 @@ describe("PiResidentAgent", () => {
       code: "loop_exhausted",
     } satisfies Partial<ResidentAgentError>);
     expect(conversations.messages.has("operator")).toBe(false);
+  });
+
+  it("runs get_course_overview and answers from the projected result", async () => {
+    const conversations = new MemoryConversationStore();
+    const { store } = enabledJobStore();
+    const getCourseOverview = vi.fn().mockResolvedValue({
+      query: "FIT2004",
+      identity: { code: "FIT2004", name: "Algorithms and Data Structures", platforms: ["campus-moodle"] },
+      assessments: [
+        { source: "campus-moodle", itemId: "assessment:1", title: "Assignment 1", dueAt: "2026-08-01T00:00:00.000Z", status: "not submitted" },
+      ],
+      staffPosts: [],
+      emailMentions: [],
+      sources: { moodle: true, ed: false, ontrack: false, email: false },
+    });
+    const { runtime } = fauxRuntime([
+      fauxAssistantMessage(fauxToolCall("get_course_overview", { course: "FIT2004" }), { stopReason: "toolUse" }),
+      (context) => {
+        expect(JSON.stringify(context.messages)).toContain("Assignment 1");
+        return fauxAssistantMessage("Assignment 1 is due 1 August, not yet submitted.");
+      },
+    ]);
+    const agent = new PiResidentAgent({
+      conversations,
+      jobs: store,
+      repository: repository({ getCourseOverview }),
+      runtime,
+    });
+
+    const result = await agent.run({ conversationId: "operator", message: "What's due in FIT2004?" });
+
+    expect(result.answer).toBe("Assignment 1 is due 1 August, not yet submitted.");
+    expect(getCourseOverview).toHaveBeenCalledWith("FIT2004");
+  });
+
+  it("runs search_items with the requested filters", async () => {
+    const conversations = new MemoryConversationStore();
+    const { store } = enabledJobStore();
+    const searchItems = vi.fn().mockResolvedValue([]);
+    const { runtime } = fauxRuntime([
+      fauxAssistantMessage(
+        fauxToolCall("search_items", { query: "extension", kind: "email", course: "FIT2004", limit: 5 }),
+        { stopReason: "toolUse" },
+      ),
+      () => fauxAssistantMessage("No extension emails found."),
+    ]);
+    const agent = new PiResidentAgent({
+      conversations,
+      jobs: store,
+      repository: repository({ searchItems }),
+      runtime,
+    });
+
+    const result = await agent.run({ conversationId: "operator", message: "Any extension emails for FIT2004?" });
+
+    expect(result.answer).toBe("No extension emails found.");
+    expect(searchItems).toHaveBeenCalledWith({ query: "extension", kind: "email", course: "FIT2004", limit: 5 });
+  });
+
+  it("saves a plan through the save_plan tool", async () => {
+    const conversations = new MemoryConversationStore();
+    const { store } = enabledJobStore();
+    const savePlan = vi.fn().mockResolvedValue({
+      id: "plan-1",
+      kind: "weekly",
+      subject: "2026-W38",
+      content: "Day-by-day checklist",
+      createdAt: "2026-09-14T00:00:00.000Z",
+      updatedAt: "2026-09-14T00:00:00.000Z",
+    });
+    const { runtime } = fauxRuntime([
+      fauxAssistantMessage(
+        fauxToolCall("save_plan", { kind: "weekly", subject: "2026-W38", content: "Day-by-day checklist" }),
+        { stopReason: "toolUse" },
+      ),
+      () => fauxAssistantMessage("Saved your weekly plan."),
+    ]);
+    const agent = new PiResidentAgent({
+      conversations,
+      jobs: store,
+      repository: repository({ savePlan }),
+      runtime,
+    });
+
+    const result = await agent.run({ conversationId: "operator", message: "Save this week's plan." });
+
+    expect(result.answer).toBe("Saved your weekly plan.");
+    expect(savePlan).toHaveBeenCalledWith("weekly", "2026-W38", "Day-by-day checklist");
+  });
+
+  it("defaults to the ADR-0031 turn and timeout limits", () => {
+    expect(DEFAULT_MAX_TURNS).toBe(12);
+    expect(DEFAULT_TIMEOUT_MS).toBe(50_000);
+  });
+});
+
+describe("buildConversationSystemPrompt", () => {
+  it("includes the current UTC time, every playbook, and the read-only rules", () => {
+    const prompt = buildConversationSystemPrompt(new Date("2026-09-16T03:00:00.000Z"));
+
+    expect(prompt).toContain("2026-09-16T03:00:00.000Z");
+    expect(PLAYBOOKS).toHaveLength(3);
+    for (const playbook of PLAYBOOKS) {
+      expect(prompt).toContain(playbook.title);
+      expect(prompt).toContain(playbook.procedure);
+    }
+    expect(prompt).toContain("read-only");
+    expect(prompt).toContain("Ask at most one clarifying question");
   });
 });
