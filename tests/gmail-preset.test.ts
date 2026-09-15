@@ -30,7 +30,7 @@ describe("Gmail preset manifest", () => {
               sender: "unit-staff@monash.edu",
               toRecipients: ["student@student.monash.edu"],
               date: "2026-08-10T02:00:00.000Z",
-              plaintextBody: "Assignment 2 for FIT2004 is due Friday.",
+              snippet: "Assignment 2 for FIT2004 is due Friday.",
               htmlBody: "<p>Assignment 2 for FIT2004 is due Friday.</p>",
               labelIds: ["INBOX"],
             },
@@ -65,7 +65,7 @@ describe("Gmail preset manifest", () => {
         {
           id: "thread-2",
           messages: [
-            { subject: "Coffee?", date: "2026-08-10T02:00:00.000Z", plaintextBody: "Free later?", sender: "friend@example.com" },
+            { subject: "Coffee?", date: "2026-08-10T02:00:00.000Z", snippet: "Free later?", sender: "friend@example.com" },
           ],
         },
       ],

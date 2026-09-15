@@ -6,7 +6,7 @@
     "type": "mcp",
     "url": "https://gmailmcp.googleapis.com/mcp/v1",
     "tool": "search_threads",
-    "arguments": { "q": "newer_than:14d" },
+    "arguments": { "query": "newer_than:14d", "pageSize": 50 },
     "auth": { "type": "oauth", "provider": "google" }
   },
   "itemsPath": "threads",
@@ -15,7 +15,7 @@
     "kind": { "value": "email" },
     "title": { "path": "messages.0.subject" },
     "timestamp": { "path": "messages.0.date" },
-    "body": { "path": "messages.0.plaintextBody" },
+    "body": { "path": "messages.0.snippet" },
     "facets": [
       {
         "type": "author",

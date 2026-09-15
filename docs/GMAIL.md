@@ -98,17 +98,18 @@ list_items source=gmail
 ```
 
 should return recent threads as generic Items with `title` = subject, `body` =
-plaintext body, a `course-mention` facet when a unit code (e.g. `FIT2004`) appears
+message snippet, a `course-mention` facet when a unit code (e.g. `FIT2004`) appears
 in the subject or body, and an `author` facet with the sender.
 
 ## Known gaps / things to double check on first real sync
 
-- **Argument name.** ADR-0033 pins the manifest's tool arguments to `{"q":
-  "newer_than:14d"}`. Google's own published input schema for `search_threads`
-  names the parameter `query`, not `q`. If the first sync returns every thread (or
-  errors on an unrecognized argument) rather than the last 14 days, edit the
-  installed manifest's `transport.arguments` key from `q` to `query` via
-  `install_plugin` on the admin MCP and re-sync.
+- **Argument name and view.** The preset calls `search_threads` with
+  `{"query": "newer_than:14d", "pageSize": 50}` — the parameter names in Google's
+  published input schema. The default `view` (THREAD_VIEW_MINIMAL) is assumed to
+  include `subject`, `sender`, `date` and `snippet` per message; `body` maps to
+  `snippet` because `plaintextBody` may be absent in the minimal view. If the first
+  sync yields items without titles, set `"view"` in `transport.arguments` to the
+  full variant via `install_plugin` on the admin MCP and re-sync.
 - **Message ordering.** The preset reads `messages.0.subject` / `.date` /
   `.plaintextBody` / `.sender` — i.e. the *first* message in each thread. If Gmail
   MCP returns messages newest-first instead of oldest-first, the mapped title/body
