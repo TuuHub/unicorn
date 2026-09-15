@@ -59,15 +59,36 @@ Pi message types, provider routing, event handling, tool schemas, replay convers
 
 ## Tools
 
-The first version is read-only. It exposes compact projections for:
+Every tool is read-only against sources; the only writes are to the agent's own `plans` and `memory` tables (ADR-0031). List/search tools return clipped, bounded projections; `get_item` is the one tool that returns a full, unclipped body, and only for a specifically requested item.
 
-- upcoming items;
-- recent changes;
-- normalized item lists and individual items;
-- agent memory;
-- latest synchronization status.
+- `list_courses` — every known course across platforms (Moodle, Ed), with unit code and status.
+- `get_course_overview(course)` — one course's assessments, staff/pinned Ed posts, email mentions, and which sources (`moodle`, `ed`, `ontrack`, `email`) actually have data for it. `ontrack` is reported `false` today: no OnTrack plugin exists yet.
+- `search_items(query, kind?, course?, since?, limit?)` — free-text search over item titles/bodies, optionally scoped to a kind, a course, or a recency window.
+- `get_item(source, itemId)` — one item's full body, uncapped.
+- `list_upcoming` — items with an upcoming deadline capability.
+- `list_changes` — recent kernel change events.
+- `list_staff_posts(course?, since?, limit?)` — Ed threads authored by teaching staff, or that are platform announcements or pinned.
+- `list_memory` — the agent's own memory notes (corrections, preferences).
+- `get_sync_status` — the last ingestion cycle's summary.
+- `get_plan(kind, subject)` / `save_plan(kind, subject, content)` — read/write a saved plan (see Plans below).
+- `remember(text)` — record a verbatim correction, the same inbox `/remember` and IM corrections use.
 
 There is no arbitrary fetch, SQL, shell, code execution, source synchronization, plugin installation, relation write, settings write, or secret access in the Pi tool set.
+
+## Playbooks and plans
+
+A **playbook** is a named, human-authored procedure — `weekly-plan`, `decompose-assignment`, `forum-brief` — that tells the agent what to check and how, using only the tools above. Playbooks are markdown source (`src/agent/playbooks/*.md`), each with an `id`/`title`/`trigger`/`output` header and a numbered procedure written for a real Monash student (unit codes, Moodle submission status, Ed staff/announcement/pinned posts, email `course-mention`s, and an explicit "not connected" answer when a source like OnTrack is absent). `npm run playbooks:build` compiles them into `src/agent/playbooks.ts`; `tests/playbooks-sync.test.ts` fails `npm run check` if the generated file drifts from the markdown.
+
+The conversational system prompt embeds all three procedures compactly, so `/agent` and Telegram conversation can run them inline. A separate `PlaybookRunner` (`src/agent/pi-playbook-runner.ts`, `createPlaybookRunner(env)`) runs one playbook **outside** any conversation — no history, same tools, same `resident-agent` job budget and ledger — for scheduled or triggered use. It returns:
+
+- `{status: "completed", title, text, usage}` — a short human-readable result;
+- `{status: "skipped", reason: "nothing_to_report"}` — the playbook's procedure ends by instructing the model to emit a fixed sentinel line when there is nothing worth reporting, which the runner recognizes instead of returning an empty brief;
+- `{status: "skipped", reason: "disabled" | "not_configured" | "budget_exhausted"}` — same gating as a normal turn, checked before any inference call;
+- `{status: "failed", code}` — timeout, provider failure, loop exhaustion, empty answer, an unknown playbook id, or a job-store failure.
+
+A **plan** is a saved per-subject text artifact — a weekly plan keyed by ISO week (e.g. `2026-W38`), or an assignment plan keyed by the assessment's item id — written with `save_plan` and re-read with `get_plan`. Plans live in the `plans` D1 table (`migrations/0009_plans.sql`), one row per `(kind, subject)`, upserted on every save so re-planning replaces rather than duplicates.
+
+A **brief** is the short text a playbook run hands back (e.g. forum-brief's summary of new staff posts); it is not itself persisted unless the caller separately saves it as a plan.
 
 ## Reliability and cost
 
@@ -76,7 +97,7 @@ There is no arbitrary fetch, SQL, shell, code execution, source synchronization,
 - The native Workers AI binding is the zero-secret default. An `AI_API_KEY` plus optional `AI_BASE_URL` overrides it for OpenAI-compatible BYOK deployments.
 - Provider errors, aborts, empty responses, tool-loop limits, and persistence failures are explicit failures; none are rendered as a successful answer.
 - A model failure never affects ingestion, deterministic triage, retention, scheduling, MCP, or notification delivery.
-- Model calls have a hard timeout and bounded output. Tool execution is sequential and the turn count is capped.
+- Model calls have a hard timeout and bounded output. Tool execution is sequential and the turn count is capped: 12 turns, 50-second timeout (`DEFAULT_MAX_TURNS` / `DEFAULT_TIMEOUT_MS` in `src/agent/resident-agent.ts`, shared by conversation turns and playbook runs alike).
 
 ## Security and privacy
 
