@@ -1,7 +1,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createUnicornMcpServer, type McpRepository } from "../src/mcp/server";
+import { createAdminMcpServer, type McpRepository } from "../src/mcp/server";
 
 const closeCallbacks: Array<() => Promise<void>> = [];
 
@@ -9,7 +9,7 @@ afterEach(async () => {
   await Promise.all(closeCallbacks.splice(0).map((close) => close()));
 });
 
-describe("unicorn MCP server", () => {
+describe("unicorn admin MCP server", () => {
   it("serves upcoming items through the MCP tool interface", async () => {
     const repository = {
       listUpcoming: vi.fn().mockResolvedValue([
@@ -93,7 +93,7 @@ describe("unicorn MCP server", () => {
 });
 
 async function connectClient(repository: McpRepository, options?: { aiConfigured?: boolean }): Promise<Client> {
-  const server = createUnicornMcpServer(repository, options);
+  const server = createAdminMcpServer(repository, options);
   const client = new Client({ name: "unicorn-test", version: "0.0.0" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport);
