@@ -32,6 +32,41 @@ describe("settings", () => {
     expect(html).not.toContain("admin-secret");
   });
 
+  it("hides the Gmail connect action when Google secrets are not configured", async () => {
+    const response = await handleSettings(
+      new Request("https://unicorn.example/settings", { headers: { authorization: basic("admin-secret") } }),
+      runtime(),
+    );
+    const html = await response.text();
+
+    expect(html).toContain("Gmail");
+    expect(html).toContain("PLUGIN_SECRET_GOOGLE_CLIENT_ID");
+    expect(html).not.toContain("/settings/oauth/gmail/start");
+  });
+
+  it("shows a Connect Gmail button once Google secrets are configured but not yet connected", async () => {
+    const response = await handleSettings(
+      new Request("https://unicorn.example/settings", { headers: { authorization: basic("admin-secret") } }),
+      { ...runtime(), connections: { ...runtime().connections, google: true, gmailConnected: false } },
+    );
+    const html = await response.text();
+
+    expect(html).toContain('href="/settings/oauth/gmail/start"');
+    expect(html).toContain("Connect Gmail");
+    expect(html).not.toContain("Connected — Gmail");
+  });
+
+  it("shows Gmail as connected once a token is on file", async () => {
+    const response = await handleSettings(
+      new Request("https://unicorn.example/settings", { headers: { authorization: basic("admin-secret") } }),
+      { ...runtime(), connections: { ...runtime().connections, google: true, gmailConnected: true } },
+    );
+    const html = await response.text();
+
+    expect(html).toContain("Connected — Gmail threads sync");
+    expect(html).not.toContain("/settings/oauth/gmail/start");
+  });
+
   it("warns when the scheduler is stopped or notifications have failed", async () => {
     const stopped = {
       ...runtime(),

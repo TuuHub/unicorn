@@ -20,6 +20,12 @@ export interface SettingsRuntime {
     mcp: boolean;
     agent: boolean;
     notifier: boolean;
+    // Google OAuth client secrets configured (ADR-0033) — optional so callers that
+    // predate the Gmail source (and existing tests) don't have to supply it.
+    google?: boolean;
+    // Whether a Gmail refresh token is on file (oauth_tokens), i.e. the one-time
+    // browser dance at /settings/oauth/gmail/start has been completed.
+    gmailConnected?: boolean;
   };
   // Live operational state, fetched by the route handler: whether the hourly
   // scheduler alarm is set, and how many notifications have permanently failed.
@@ -127,6 +133,24 @@ export function constantTimeEqual(left: string, right: string): boolean {
   return difference === 0;
 }
 
+// Gmail (ADR-0033) gets its own small card rather than a row in the generic secrets
+// rail: unlike the other sources, it has a real "connected" state (a refresh token on
+// file) and an action to get there, not just a configured/not-configured secret.
+function renderGmailCard(connections: SettingsRuntime["connections"]): string {
+  const configured = connections.google === true;
+  const connected = connections.gmailConnected === true;
+  const body = !configured
+    ? `<p class="hint">Set <code>PLUGIN_SECRET_GOOGLE_CLIENT_ID</code> and <code>PLUGIN_SECRET_GOOGLE_CLIENT_SECRET</code> with <code>wrangler secret put</code>, then reload this page. See docs/GMAIL.md for the full setup.</p>`
+    : connected
+      ? `<p class="notice" role="status">Connected — Gmail threads sync on the hourly cycle.</p>`
+      : `<p class="hint">Not connected yet.</p><div class="actions"><a class="button" href="/settings/oauth/gmail/start">Connect Gmail</a></div>`;
+  return `
+    <section class="card" aria-labelledby="gmail-title">
+      <div class="card-head"><h2 id="gmail-title">Gmail</h2><p class="card-sub">Ingests recent threads through Google's Gmail MCP server.</p></div>
+      <div class="card-body">${body}</div>
+    </section>`;
+}
+
 function renderSettings(
   settings: AppSettings,
   runtime: Pick<SettingsRuntime, "connections" | "status">,
@@ -178,6 +202,7 @@ function renderSettings(
       <div class="card-head"><h2 id="connections-title">Status</h2><p class="card-sub">Secrets are read from the Worker — configure with <code>wrangler secret put</code>, never stored here.</p></div>
       <div class="card-body"><ul class="rail rows">${schedulerRow}${agentRow}${rail}</ul></div>
     </section>
+    ${renderGmailCard(connections)}
     <section class="card" aria-labelledby="behavior-title">
       <div class="card-head"><h2 id="behavior-title">Behavior</h2></div>
       <div class="card-body">
@@ -220,6 +245,8 @@ function renderSettings(
       .switch:checked{background:var(--ok)}
       .switch:checked::after{translate:16px 0}
       .actions{padding-top:16px;display:flex;justify-content:flex-end}
+      .button{display:inline-block;border:0;border-radius:8px;background:var(--btn-bg);color:var(--btn-ink);padding:8px 16px;font:inherit;font-size:14px;font-weight:550;text-decoration:none;cursor:pointer;transition:background .15s ease-out}
+      .button:hover{background:var(--btn-hover)}
       @media (prefers-reduced-motion:reduce){.switch,.switch::after{transition:none}}
     </style>`;
   return renderPage({

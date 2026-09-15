@@ -10,6 +10,9 @@ import { D1McpRepository } from "./mcp/d1-repository";
 import { createDoorMcpServer, type AgentSessionClient, type AgentSessionResponse, type AgentTurnAnswer } from "./mcp/door";
 import { createAdminMcpServer } from "./mcp/server";
 import { MoodleProbeError, probeMoodle } from "./moodle-probe";
+import { D1OAuthTokenStore, handleCallback, OAuthError, startAuthorization, type OAuthEnv } from "./oauth";
+import { D1ManifestStore } from "./plugins/declarative/store";
+import gmailPreset from "./plugins/presets/gmail.json";
 import { runCycle, Scheduler, type Env } from "./runtime/cycle";
 import { constantTimeEqual, D1SettingsRepository, handleSettings, isBasicAuthorized } from "./settings";
 
@@ -158,6 +161,54 @@ export default {
       return renderDigestReport(env.DB);
     }
 
+    // --- Gmail/Google OAuth (ADR-0033): begin ---
+    // GET /settings/oauth/:pluginId/start redirects to Google's consent screen;
+    // GET /settings/oauth/callback exchanges the code and stores the refresh token.
+    // Both are gated behind the same Basic auth as /settings itself.
+    if (request.method === "GET" && url.pathname.startsWith("/settings/oauth/") && url.pathname.endsWith("/start")) {
+      if (!isBasicAuthorized(request.headers.get("authorization"), env.ADMIN_TOKEN)) {
+        return new Response("Authentication required.", {
+          status: 401,
+          headers: { "www-authenticate": 'Basic realm="unicorn settings", charset="UTF-8"' },
+        });
+      }
+      const pluginId = url.pathname.split("/")[3];
+      if (!pluginId) {
+        return json({ error: "oauth_invalid_request" }, 400);
+      }
+      try {
+        const redirectUrl = await startAuthorization(pluginId, "google", env as unknown as OAuthEnv, url);
+        return Response.redirect(redirectUrl, 302);
+      } catch (error) {
+        const code = error instanceof OAuthError ? error.code : "oauth_start_failed";
+        console.error(JSON.stringify({ event: "oauth_start_failed", pluginId, code }));
+        return json({ error: code }, 400);
+      }
+    }
+
+    if (request.method === "GET" && url.pathname === "/settings/oauth/callback") {
+      if (!isBasicAuthorized(request.headers.get("authorization"), env.ADMIN_TOKEN)) {
+        return new Response("Authentication required.", {
+          status: 401,
+          headers: { "www-authenticate": 'Basic realm="unicorn settings", charset="UTF-8"' },
+        });
+      }
+      try {
+        const { pluginId } = await handleCallback(url, env as unknown as OAuthEnv);
+        // The Gmail preset manifest installs itself the first time its OAuth
+        // connection succeeds, so "Connect Gmail" is genuinely one click.
+        if (pluginId === "gmail") {
+          await new D1ManifestStore(env.DB).upsert(gmailPreset);
+        }
+        return Response.redirect(new URL(`/settings?connected=${encodeURIComponent(pluginId)}`, url).toString(), 302);
+      } catch (error) {
+        const code = error instanceof OAuthError ? error.code : "oauth_callback_failed";
+        console.error(JSON.stringify({ event: "oauth_callback_failed", code }));
+        return json({ error: code }, 400);
+      }
+    }
+    // --- Gmail/Google OAuth (ADR-0033): end ---
+
     if (url.pathname === "/settings") {
       return handleSettings(request, {
         adminToken: env.ADMIN_TOKEN,
@@ -168,6 +219,8 @@ export default {
           mcp: Boolean(env.MCP_TOKEN),
           agent: piModelConfigured(env),
           notifier: Boolean(env.NOTIFIER_URL || (env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_CHAT_ID) || (env.RESEND_API_KEY && env.EMAIL_FROM && env.EMAIL_TO)),
+          google: Boolean((env as unknown as OAuthEnv).PLUGIN_SECRET_GOOGLE_CLIENT_ID && (env as unknown as OAuthEnv).PLUGIN_SECRET_GOOGLE_CLIENT_SECRET),
+          gmailConnected: await new D1OAuthTokenStore(env.DB).has("gmail"),
         },
         status: await operationalStatus(env),
       });

@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "id": "gmail",
+  "name": "Gmail",
+  "transport": {
+    "type": "mcp",
+    "url": "https://gmailmcp.googleapis.com/mcp/v1",
+    "tool": "search_threads",
+    "arguments": { "query": "newer_than:14d", "pageSize": 50 },
+    "auth": { "type": "oauth", "provider": "google" }
+  },
+  "itemsPath": "threads",
+  "mapping": {
+    "id": { "path": "id" },
+    "kind": { "value": "email" },
+    "title": { "path": "messages.0.subject" },
+    "timestamp": { "path": "messages.0.date" },
+    "body": { "path": "messages.0.snippet" },
+    "facets": [
+      {
+        "type": "author",
+        "fields": { "actor": { "path": "messages.0.sender" } },
+        "capabilities": [{ "name": "has-author", "primitive": "actor", "field": "actor" }]
+      },
+      { "derive": "course-mention", "from": ["title", "body"] }
+    ]
+  }
+}

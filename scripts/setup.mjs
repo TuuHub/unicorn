@@ -118,6 +118,16 @@ async function main() {
     }
   }
 
+  if (await confirm(rl, "Set Google OAuth client credentials now (for Gmail via /settings)?")) {
+    const clientId = (await rl.question("Paste the Google OAuth client id: ")).trim();
+    const clientSecret = (await rl.question("Paste the Google OAuth client secret: ")).trim();
+    if (clientId && clientSecret) {
+      putSecret("PLUGIN_SECRET_GOOGLE_CLIENT_ID", clientId);
+      putSecret("PLUGIN_SECRET_GOOGLE_CLIENT_SECRET", clientSecret);
+      stdout.write("  Open /settings after deploy and click \"Connect Gmail\" — see docs/GMAIL.md.\n");
+    }
+  }
+
   if (await confirm(rl, "Push a Moodle session from your local Okta login?")) {
     run("npm", ["run", "moodle:push"], { allowFailure: true });
   }
