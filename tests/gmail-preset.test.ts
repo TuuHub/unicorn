@@ -25,7 +25,6 @@ describe("Gmail preset manifest", () => {
           messages: [
             {
               id: "msg-1",
-              snippet: "Reminder about FIT2004",
               subject: "FIT2004 assignment 2 reminder",
               sender: "unit-staff@monash.edu",
               toRecipients: ["student@student.monash.edu"],
