@@ -57,24 +57,9 @@ npx wrangler secret put EMAIL_TO
 ```
 
 All outbound messages go through a durable outbox with idempotency keys and bounded
-retry (ADR-0025), so a retried cycle never double-sends.
-
-### Talking back to the bot (Telegram)
-
-With Telegram configured, normal owner messages become persistent resident-agent turns.
-Use `/remember <text>` for a verbatim triage correction, `/memory` to inspect the
-correction note, and `/reset` to clear chat history without deleting memory or world state.
-Register the webhook once:
-
-```bash
-npx wrangler secret put TELEGRAM_WEBHOOK_SECRET   # any random string
-curl "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook" \
-  -d "url=https://<your-worker>/telegram" \
-  -d "secret_token=<TELEGRAM_WEBHOOK_SECRET>"
-```
-
-The webhook acknowledges model turns immediately, runs them through the conversation's
-Durable Object, and sends the answer through the Bot API when ready.
+retry (ADR-0025), so a retried cycle never double-sends. IM is push-only (ADR-0032):
+there is no converse loop over Telegram or any other channel — talk to the resident
+agent through the door's `ask` tool instead (see "MCP endpoints" below).
 
 ## Declarative plugin secrets
 
@@ -104,5 +89,26 @@ notes memory (ADR-0024), which your own MCP client edits through `get_memory` /
 
 The resident agent shares the same job policy and measured ledger. It keeps bounded D1
 history, routes each conversation through one Durable Object, and exposes only read-only
-Unicorn tools. `POST /agent` and `DELETE /agent` use `ADMIN_TOKEN`; Telegram uses the
-webhook secret and owner chat id.
+Unicorn tools. `POST /agent` and `DELETE /agent` use `ADMIN_TOKEN`; the door's `ask` tool
+(below) forwards to the same conversation Durable Object.
+
+## MCP endpoints
+
+Two separate MCP servers, two separate tokens (ADR-0030):
+
+- `/mcp` — the **door**, four tools (`ask`, `get_briefs`, `ack_briefs`, `remember`) for
+  your own client agent. Bearer `MCP_TOKEN`. Add it with:
+
+  ```bash
+  claude mcp add --transport http unicorn https://<worker>/mcp --header "Authorization: Bearer <MCP_TOKEN>"
+  ```
+
+- `/mcp/admin` — the pre-existing ~15 operator tools (item/plugin/job/memory inspection
+  and configuration). Bearer `ADMIN_TOKEN`. This is what you (or a coding agent acting as
+  operator) use to configure unicorn itself — a client agent should never be pointed at
+  this endpoint.
+
+Scheduled playbooks (weekly plan, assignment decomposition, forum brief) and the daily
+digest write their output as **briefs** (ADR-0031), pulled through `get_briefs` and
+acknowledged with `ack_briefs` — there is no push notification for them beyond whatever
+the outbox is already configured to send.
