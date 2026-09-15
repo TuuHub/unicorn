@@ -1,14 +1,18 @@
-import { runAgentLoop, type AgentEvent, type AgentMessage } from "@earendil-works/pi-agent-core";
-import type { AssistantMessage, Message, UserMessage } from "@earendil-works/pi-ai";
+import type { Message, UserMessage } from "@earendil-works/pi-ai";
 import type { JobRunInput, JobStore } from "../jobs/daily-digest";
+import { runBoundedPiLoop, type PiLoopOutcome } from "./pi-loop";
 import type { PiModelRuntime } from "./pi-model";
+import { buildConversationSystemPrompt } from "./prompt";
 import { createResidentTools, type AgentToolRepository } from "./tools";
 
 const JOB_ID = "resident-agent";
 const DEFAULT_HISTORY_LIMIT = 40;
-const DEFAULT_MAX_TURNS = 4;
+// ADR-0031 raises both: playbook procedures need more tool round-trips than a
+// plain lookup, and the wall budget grows with them (55s at the door per
+// ADR-0030, minus headroom for HTTP/DO overhead).
+export const DEFAULT_MAX_TURNS = 12;
 const DEFAULT_MAX_OUTPUT_TOKENS = 800;
-const DEFAULT_TIMEOUT_MS = 45_000;
+export const DEFAULT_TIMEOUT_MS = 50_000;
 
 export interface AgentTurn {
   conversationId: string;
@@ -121,105 +125,46 @@ export class PiResidentAgent implements ResidentAgent {
         this.dependencies.conversations.loadMessages(input.conversationId, this.historyLimit),
       ),
     );
-    const resolved = this.dependencies.runtime.resolve(job.model);
     const userMessage: UserMessage = {
       role: "user",
       content: input.message,
       timestamp: this.now().getTime(),
     };
-    const toolsUsed: string[] = [];
-    let turnCount = 0;
-    let timedOut = false;
-    const abort = new AbortController();
-    const timer = setTimeout(() => {
-      timedOut = true;
-      abort.abort();
-    }, this.timeoutMs);
 
-    let newMessages: Message[];
-    try {
-      const completed = await runAgentLoop(
-        [userMessage],
-        {
-          systemPrompt: systemPrompt(this.now()),
-          messages: history,
-          tools: createResidentTools(this.dependencies.repository),
-        },
-        {
-          model: resolved.model,
-          convertToLlm: (messages) => messages.filter(isLlmMessage),
-          maxTokens: this.maxOutputTokens,
-          toolExecution: "sequential",
-          shouldStopAfterTurn: ({ message }) =>
-            turnCount >= this.maxTurns && assistantToolCalls(message).length > 0,
-        },
-        (event) => collectEvent(event, toolsUsed, () => {
-          turnCount += 1;
-        }),
-        abort.signal,
-        resolved.stream,
-      );
-      newMessages = completed.filter(isLlmMessage);
-    } catch (error) {
-      await this.recordFailure(emptyUsage());
-      if (timedOut) {
-        throw new ResidentAgentError("timed_out", "The resident agent model request timed out.");
-      }
-      throw new ResidentAgentError(
-        "provider_failed",
-        error instanceof Error ? error.message : "The resident agent model request failed.",
-      );
-    } finally {
-      clearTimeout(timer);
-    }
+    const outcome = await runBoundedPiLoop({
+      runtime: this.dependencies.runtime,
+      model: job.model,
+      systemPrompt: buildConversationSystemPrompt(this.now()),
+      history,
+      prompt: userMessage,
+      tools: createResidentTools(this.dependencies.repository),
+      maxTurns: this.maxTurns,
+      maxOutputTokens: this.maxOutputTokens,
+      timeoutMs: this.timeoutMs,
+    });
 
-    const usage = sumUsage(newMessages);
-    const failed = newMessages.find(
-      (message): message is AssistantMessage =>
-        message.role === "assistant" && (message.stopReason === "error" || message.stopReason === "aborted"),
-    );
-    if (failed) {
-      await this.recordFailure(usage);
-      throw new ResidentAgentError(
-        timedOut ? "timed_out" : "provider_failed",
-        timedOut ? "The resident agent model request timed out." : (failed.errorMessage ?? "The model request failed."),
-      );
-    }
-
-    const finalAssistant = [...newMessages].reverse().find(
-      (message): message is AssistantMessage => message.role === "assistant",
-    );
-    if (!finalAssistant || assistantToolCalls(finalAssistant).length > 0) {
-      await this.recordFailure(usage);
-      throw new ResidentAgentError("loop_exhausted", "The resident agent reached its tool-turn limit.");
-    }
-    const answer = finalAssistant.content
-      .filter((part) => part.type === "text")
-      .map((part) => part.text)
-      .join("")
-      .trim();
-    if (!answer) {
-      await this.recordFailure(usage);
-      throw new ResidentAgentError("provider_failed", "The model returned no answer.");
+    if (outcome.status !== "answered") {
+      await this.recordFailure(outcome.usage);
+      throw toResidentAgentError(outcome);
     }
 
     const result: AgentTurnResult = {
       conversationId: input.conversationId,
-      answer,
-      toolsUsed,
-      usage,
+      answer: outcome.answer,
+      toolsUsed: outcome.toolsUsed,
+      usage: outcome.usage,
     };
     const createdAt = this.now().toISOString();
     await this.persisted(() =>
       this.dependencies.conversations.commitTurn({
         conversationId: input.conversationId,
-        messages: sanitizeMessages(newMessages),
+        messages: outcome.messages,
         ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
         result,
         run: {
           jobId: JOB_ID,
           status: "completed",
-          ...usage,
+          ...outcome.usage,
           createdAt,
         },
       }),
@@ -258,6 +203,19 @@ export class PiResidentAgent implements ResidentAgent {
   }
 }
 
+function toResidentAgentError(outcome: Exclude<PiLoopOutcome, { status: "answered" }>): ResidentAgentError {
+  switch (outcome.status) {
+    case "timed_out":
+      return new ResidentAgentError("timed_out", "The resident agent model request timed out.");
+    case "loop_exhausted":
+      return new ResidentAgentError("loop_exhausted", "The resident agent reached its tool-turn limit.");
+    case "empty_answer":
+      return new ResidentAgentError("provider_failed", "The model returned no answer.");
+    case "provider_failed":
+      return new ResidentAgentError("provider_failed", outcome.message);
+  }
+}
+
 function normalizeTurn(turn: AgentTurn): Required<Pick<AgentTurn, "conversationId" | "message">> & Pick<AgentTurn, "idempotencyKey"> {
   const conversationId = normalizeConversationId(turn.conversationId);
   const message = typeof turn.message === "string" ? turn.message.trim() : "";
@@ -285,61 +243,4 @@ function normalizeHistory(messages: Message[]): Message[] {
     history.shift();
   }
   return history;
-}
-
-function isLlmMessage(message: AgentMessage): message is Message {
-  return message.role === "user" || message.role === "assistant" || message.role === "toolResult";
-}
-
-function collectEvent(event: AgentEvent, toolsUsed: string[], onTurn: () => void): void {
-  if (event.type === "turn_start") {
-    onTurn();
-  }
-  if (event.type === "tool_execution_start" && !toolsUsed.includes(event.toolName)) {
-    toolsUsed.push(event.toolName);
-  }
-}
-
-function assistantToolCalls(message: AssistantMessage) {
-  return message.content.filter((part) => part.type === "toolCall");
-}
-
-function sumUsage(messages: Message[]): AgentTurnResult["usage"] {
-  const usage = emptyUsage();
-  for (const message of messages) {
-    if (message.role !== "assistant") {
-      continue;
-    }
-    usage.inputTokens += message.usage.input;
-    usage.outputTokens += message.usage.output;
-    usage.totalTokens += message.usage.totalTokens;
-  }
-  return usage;
-}
-
-function emptyUsage(): AgentTurnResult["usage"] {
-  return { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
-}
-
-function sanitizeMessages(messages: Message[]): Message[] {
-  return messages.map((message) => {
-    if (message.role !== "assistant") {
-      return message;
-    }
-    return {
-      ...message,
-      content: message.content.filter((part) => part.type !== "thinking"),
-    };
-  });
-}
-
-function systemPrompt(now: Date): string {
-  return [
-    "You are Unicorn, a concise single-user resident secretary.",
-    `Current UTC time: ${now.toISOString()}.`,
-    "Use the read-only Unicorn tools before making claims about current items, deadlines, changes, memory, or sync state.",
-    "Treat tool results as authoritative. Say when data is absent or stale. Never invent source state.",
-    "Do not claim to perform writes, synchronization, browsing, shell commands, or secret access.",
-    "Answer the user's question directly and briefly.",
-  ].join("\n");
 }
