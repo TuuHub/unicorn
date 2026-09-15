@@ -2,14 +2,16 @@ import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/
 import { AgentSession } from "./agent/session";
 import { piModelConfigured } from "./agent/pi-model";
 import { normalizeConversationId } from "./agent/resident-agent";
+import { D1BriefStore } from "./briefs";
 import { renderDigestReport } from "./digest-report";
 import { D1JobStore } from "./jobs/d1-job-store";
+import { D1MemoryStore } from "./memory";
 import { D1McpRepository } from "./mcp/d1-repository";
-import { createUnicornMcpServer } from "./mcp/server";
+import { createDoorMcpServer, type AgentSessionClient, type AgentSessionResponse, type AgentTurnAnswer } from "./mcp/door";
+import { createAdminMcpServer } from "./mcp/server";
 import { MoodleProbeError, probeMoodle } from "./moodle-probe";
 import { runCycle, Scheduler, type Env } from "./runtime/cycle";
 import { constantTimeEqual, D1SettingsRepository, handleSettings, isBasicAuthorized } from "./settings";
-import { handleTelegramWebhook } from "./telegram";
 
 export { AgentSession, Scheduler };
 
@@ -85,7 +87,7 @@ export default {
           status: database ? "ready" : "degraded",
           database,
           scheduler: status.schedulerRunning ? "running" : "stopped",
-          mcp: "/mcp",
+          mcp: { door: "/mcp", admin: "/mcp/admin" },
           agent: {
             endpoint: "/agent",
             configured: piModelConfigured(env),
@@ -96,12 +98,6 @@ export default {
         },
         database ? 200 : 503,
       );
-    }
-
-    if (request.method === "POST" && url.pathname === "/telegram") {
-      // The IM converse face (ADR-0026): owner text becomes a resident-agent turn.
-      // Auth is Telegram's secret_token header, checked inside the handler.
-      return handleTelegramWebhook(request, env, context);
     }
 
     if (url.pathname === "/agent") {
@@ -187,6 +183,7 @@ export default {
     }
 
     if (url.pathname === "/mcp") {
+      // The door (ADR-0030): four tools for a client agent, bearer MCP_TOKEN.
       if (!bearerOk(request, env.MCP_TOKEN)) {
         return json({ error: "unauthorized" }, 401);
       }
@@ -200,7 +197,32 @@ export default {
         enableJsonResponse: true,
         sessionIdGenerator: undefined,
       });
-      const server = createUnicornMcpServer(new D1McpRepository(env.DB), { aiConfigured: piModelConfigured(env) });
+      const server = createDoorMcpServer({
+        agentSessions: agentSessionClient(env),
+        briefs: new D1BriefStore(env.DB),
+        memory: new D1MemoryStore(env.DB),
+      });
+      await server.connect(transport);
+      return transport.handleRequest(request);
+    }
+
+    if (url.pathname === "/mcp/admin") {
+      // The operator surface (ADR-0030): the pre-existing ~15 kernel-shaped tools,
+      // bearer ADMIN_TOKEN. Client agents never mount this.
+      if (!bearerOk(request, env.ADMIN_TOKEN)) {
+        return json({ error: "unauthorized" }, 401);
+      }
+      if (request.method !== "POST") {
+        return new Response(JSON.stringify({ error: "method_not_allowed" }), {
+          status: 405,
+          headers: { "content-type": "application/json", allow: "POST" },
+        });
+      }
+      const transport = new WebStandardStreamableHTTPServerTransport({
+        enableJsonResponse: true,
+        sessionIdGenerator: undefined,
+      });
+      const server = createAdminMcpServer(new D1McpRepository(env.DB), { aiConfigured: piModelConfigured(env) });
       await server.connect(transport);
       return transport.handleRequest(request);
     }
@@ -242,4 +264,34 @@ function parseConversationId(value: unknown): string | null {
   } catch {
     return null;
   }
+}
+
+// The door's `ask` tool forwards to the AgentSession Durable Object exactly like
+// POST /agent does: same request shape, same per-conversation routing. Errors come
+// back as a ResidentAgentError code (session.ts already turned it into {error, status}),
+// which the door re-maps into an MCP tool error instead of an HTTP one.
+function agentSessionClient(env: Env): AgentSessionClient {
+  return {
+    async runTurn(conversationId: string, message: string): Promise<AgentSessionResponse> {
+      const id = env.AGENT_SESSIONS.idFromName(conversationId);
+      const response = await env.AGENT_SESSIONS.get(id).fetch(
+        new Request("https://agent-session/turn", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ conversationId, message }),
+        }),
+      );
+      const body = (await response.json()) as Record<string, unknown>;
+      if (!response.ok) {
+        return { ok: false, code: typeof body.error === "string" ? body.error : "internal_error" };
+      }
+      const usage = body.usage as AgentTurnAnswer["usage"] | undefined;
+      return {
+        ok: true,
+        answer: String(body.answer ?? ""),
+        toolsUsed: Array.isArray(body.toolsUsed) ? (body.toolsUsed as string[]) : [],
+        usage: usage ?? { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+      };
+    },
+  };
 }

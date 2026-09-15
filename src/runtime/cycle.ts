@@ -1,3 +1,6 @@
+import type { PlaybookId, PlaybookRunner, PlaybookRunResult } from "../agent/playbook-runner";
+import { createPlaybookRunner } from "../agent/pi-playbook-runner";
+import { D1BriefStore, type BriefKind, type BriefStore } from "../briefs";
 import { DailyDigestRunner, type DigestResult } from "../jobs/daily-digest";
 import { D1JobStore } from "../jobs/d1-job-store";
 import { MemoryConsolidator } from "../jobs/memory-consolidation";
@@ -34,7 +37,6 @@ export interface Env extends NotifierEnv {
   MOODLE_SESSION?: string;
   AGENT_SESSIONS: DurableObjectNamespace;
   SCHEDULER: DurableObjectNamespace;
-  TELEGRAM_WEBHOOK_SECRET?: string;
 }
 
 interface SyncSummary {
@@ -42,12 +44,35 @@ interface SyncSummary {
   errors: Array<{ plugin: string; code: string }>;
 }
 
+// One outcome per scheduled playbook trigger (ADR-0031), counts and status codes
+// only — never prompt or brief content, which stays out of logs and the persisted
+// last_cycle summary.
+export type PlaybookTriggerStatus =
+  | { status: "not_due" }
+  | { status: "already_done" }
+  | { status: "completed" }
+  | { status: "skipped"; reason: string }
+  | { status: "failed"; code: string };
+
+export interface PlaybookCycleSummary {
+  forumBrief: PlaybookTriggerStatus;
+  weeklyPlan: PlaybookTriggerStatus;
+  decomposeAssignment: { attempted: number; completed: number; skipped: number; failed: number };
+}
+
 export interface CycleResult extends SyncSummary {
   archived: number;
   triage: TriageResult | { status: "not_configured" | "failed" };
   digest: DigestResult | { status: "not_configured" };
+  playbooks: PlaybookCycleSummary;
   delivered: { delivered: number; failed: number; retrying: number };
   skipped: boolean;
+}
+
+// Injected so the scheduler compiles and is testable against a fake runner before
+// feat/brain's real src/agent/pi-playbook-runner.ts lands (see that file's stub).
+export interface CycleDeps {
+  playbookRunner?: PlaybookRunner;
 }
 
 export class Scheduler {
@@ -87,6 +112,11 @@ export class Scheduler {
           archived: cycle.archived,
           triage: cycle.triage.status,
           digest: cycle.digest.status,
+          playbooks: {
+            forumBrief: cycle.playbooks.forumBrief.status,
+            weeklyPlan: cycle.playbooks.weeklyPlan.status,
+            decomposeAssignment: cycle.playbooks.decomposeAssignment,
+          },
           delivered: cycle.delivered,
           skipped: cycle.skipped,
         }),
@@ -102,7 +132,7 @@ export class Scheduler {
   }
 }
 
-export async function runCycle(env: Env, forceSync: boolean): Promise<CycleResult> {
+export async function runCycle(env: Env, forceSync: boolean, deps: CycleDeps = {}): Promise<CycleResult> {
   const settings = await new D1SettingsRepository(env.DB).get();
   const skipped = !forceSync && !settings.syncEnabled;
   const summary = skipped ? { results: [], errors: [] } : await syncSources(env);
@@ -149,12 +179,27 @@ export async function runCycle(env: Env, forceSync: boolean): Promise<CycleResul
     );
   }
 
+  // ADR-0031 scheduled playbooks: best-effort, bounded (the hourly alarm runs on
+  // the free plan's CPU wall), after ingestion and before delivery so a completed
+  // brief can ride the same outbox notice if a future job wants one.
+  const playbooks = await runPlaybookTriggers(env, deps.playbookRunner ?? createPlaybookRunner(env), new Date()).catch(
+    (error): PlaybookCycleSummary => {
+      console.error(JSON.stringify({ event: "playbooks_failed", message: errorMessage(error) }));
+      return {
+        forumBrief: { status: "failed", code: "trigger_failed" },
+        weeklyPlan: { status: "failed", code: "trigger_failed" },
+        decomposeAssignment: { attempted: 0, completed: 0, skipped: 0, failed: 0 },
+      };
+    },
+  );
+
   // Deliver last, once every enqueue for this cycle has landed. Delivery is
   // idempotent and retries on its own schedule, so a mid-cycle crash before this
   // line just means the next cycle drains the outbox.
   const delivered = await outbox.deliver(env);
   await outbox.prune(settings.retentionDays);
-  const cycle: CycleResult = { ...summary, archived, triage, digest, delivered, skipped };
+  await new D1BriefStore(env.DB).prune(settings.retentionDays);
+  const cycle: CycleResult = { ...summary, archived, triage, digest, playbooks, delivered, skipped };
   await recordCycle(env.DB, cycle);
   return cycle;
 }
@@ -172,6 +217,11 @@ async function recordCycle(db: D1Database, cycle: CycleResult): Promise<void> {
     archived: cycle.archived,
     triage: cycle.triage.status,
     digest: cycle.digest.status,
+    playbooks: {
+      forumBrief: cycle.playbooks.forumBrief.status,
+      weeklyPlan: cycle.playbooks.weeklyPlan.status,
+      decomposeAssignment: cycle.playbooks.decomposeAssignment,
+    },
     delivered: cycle.delivered,
   };
   try {
@@ -240,6 +290,19 @@ async function runDigest(
     new D1DigestDataSource(env.DB),
     createTextGenerator(env)!,
   ).run(now);
+  if (result.status === "completed") {
+    // ADR-0031: get_briefs is the one inbox — the digest lands there independent of
+    // whether push notifications are configured. Idempotent id: a retried cycle on
+    // the same UTC day never duplicates it.
+    await new D1BriefStore(env.DB).insert({
+      id: `digest:${key}`,
+      kind: "digest",
+      subject: key,
+      title: "unicorn daily digest",
+      body: result.text,
+      createdAt: now.toISOString(),
+    });
+  }
   if (!notificationsEnabled) {
     return result;
   }
@@ -386,4 +449,237 @@ function hash(value: string): string {
     h = Math.imul(h, 16777619);
   }
   return (h >>> 0).toString(36);
+}
+
+// ADR-0031 scheduled triggers. Each is independently best-effort: one trigger's
+// failure never blocks another, or the outbox delivery that follows.
+const DECOMPOSE_ASSIGNMENT_CAP = 3;
+const SUBMITTED_STATUSES = new Set(["submitted", "graded"]);
+
+async function runPlaybookTriggers(env: Env, runner: PlaybookRunner, now: Date): Promise<PlaybookCycleSummary> {
+  const jobs = new D1JobStore(env.DB);
+  const briefs = new D1BriefStore(env.DB);
+  let scheduleHourUtc = 0;
+  try {
+    scheduleHourUtc = (await jobs.get("resident-agent"))?.scheduleHourUtc ?? 0;
+  } catch {
+    scheduleHourUtc = 0;
+  }
+
+  const forumBrief = await runForumBriefTrigger(runner, briefs, scheduleHourUtc, now);
+  const weeklyPlan = await runWeeklyPlanTrigger(runner, briefs, scheduleHourUtc, now);
+  const decomposeAssignment = await runDecomposeAssignmentTriggers(env.DB, runner, briefs, now);
+  return { forumBrief, weeklyPlan, decomposeAssignment };
+}
+
+async function runForumBriefTrigger(
+  runner: PlaybookRunner,
+  briefs: BriefStore,
+  scheduleHourUtc: number,
+  now: Date,
+): Promise<PlaybookTriggerStatus> {
+  if (now.getUTCHours() < scheduleHourUtc) {
+    return { status: "not_due" };
+  }
+  const id = `forum-brief:${dayKey(now)}`;
+  if (await briefs.exists(id)) {
+    return { status: "already_done" };
+  }
+  const previous = await briefs.latestByKind("forum-brief");
+  const subject = previous?.createdAt ?? new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  return runPlaybookAndFile(runner, briefs, "forum-brief", { id, kind: "forum-brief", subject }, now);
+}
+
+async function runWeeklyPlanTrigger(
+  runner: PlaybookRunner,
+  briefs: BriefStore,
+  scheduleHourUtc: number,
+  now: Date,
+): Promise<PlaybookTriggerStatus> {
+  if (now.getUTCDay() !== 1 || now.getUTCHours() < scheduleHourUtc) {
+    return { status: "not_due" };
+  }
+  const week = isoWeek(now);
+  const id = `weekly-plan:${week}`;
+  if (await briefs.exists(id)) {
+    return { status: "already_done" };
+  }
+  return runPlaybookAndFile(runner, briefs, "weekly-plan", { id, kind: "weekly-plan", subject: week }, now);
+}
+
+async function runDecomposeAssignmentTriggers(
+  db: D1Database,
+  runner: PlaybookRunner,
+  briefs: BriefStore,
+  now: Date,
+): Promise<PlaybookCycleSummary["decomposeAssignment"]> {
+  const counts = { attempted: 0, completed: 0, skipped: 0, failed: 0 };
+  let candidates: Array<{ source: string; itemId: string }>;
+  try {
+    candidates = await findDecomposeCandidates(db, now);
+  } catch (error) {
+    console.error(JSON.stringify({ event: "decompose_candidates_failed", message: errorMessage(error) }));
+    return counts;
+  }
+
+  let plansTableWarned = false;
+  for (const candidate of candidates) {
+    if (counts.attempted >= DECOMPOSE_ASSIGNMENT_CAP) {
+      break;
+    }
+    const subject = `${candidate.source} ${candidate.itemId}`;
+    const id = `assignment-plan:${candidate.source}:${candidate.itemId}`;
+    if (await briefs.exists(id)) {
+      continue;
+    }
+    const hasPlan = await hasAssignmentPlan(db, subject, () => {
+      if (!plansTableWarned) {
+        plansTableWarned = true;
+        console.error(JSON.stringify({ event: "plans_table_unavailable" }));
+      }
+    });
+    if (hasPlan) {
+      continue;
+    }
+    counts.attempted += 1;
+    const outcome = await runPlaybookAndFile(
+      runner,
+      briefs,
+      "decompose-assignment",
+      { id, kind: "assignment-plan", subject },
+      now,
+    );
+    if (outcome.status === "completed") {
+      counts.completed += 1;
+    } else if (outcome.status === "failed") {
+      counts.failed += 1;
+    } else {
+      counts.skipped += 1;
+    }
+  }
+  return counts;
+}
+
+// Runs one playbook and turns its result into a brief (or a log line): completed
+// becomes a brief; nothing_to_report and other skip reasons write nothing;
+// budget_exhausted also writes one shared per-day notice; failed only logs counts
+// and a code, never the playbook's prompt or partial output.
+async function runPlaybookAndFile(
+  runner: PlaybookRunner,
+  briefs: BriefStore,
+  playbook: PlaybookId,
+  brief: { id: string; kind: BriefKind; subject: string },
+  now: Date,
+): Promise<PlaybookTriggerStatus> {
+  let result: PlaybookRunResult;
+  try {
+    result = await runner.run({ playbook, subject: brief.subject });
+  } catch (error) {
+    console.error(JSON.stringify({ event: "playbook_failed", playbook, message: errorMessage(error) }));
+    return { status: "failed", code: "runner_failed" };
+  }
+
+  if (result.status === "completed") {
+    await briefs.insert({
+      id: brief.id,
+      kind: brief.kind,
+      subject: brief.subject,
+      title: result.title,
+      body: result.text,
+      createdAt: now.toISOString(),
+    });
+    console.log(JSON.stringify({ event: "playbook_completed", playbook }));
+    return { status: "completed" };
+  }
+  if (result.status === "skipped") {
+    if (result.reason === "budget_exhausted") {
+      await briefs.insert({
+        id: `budget:${dayKey(now)}`,
+        kind: brief.kind,
+        subject: "budget",
+        title: "unicorn playbook budget exhausted",
+        body: "The resident-agent monthly token cap is exhausted, so scheduled playbooks are paused today. Raise the cap with configure_agent_job or wait for next month.",
+        createdAt: now.toISOString(),
+      });
+    }
+    console.log(JSON.stringify({ event: "playbook_skipped", playbook, reason: result.reason }));
+    return { status: "skipped", reason: result.reason };
+  }
+  console.error(JSON.stringify({ event: "playbook_failed", playbook, code: result.code }));
+  return { status: "failed", code: result.code };
+}
+
+interface DecomposeCandidateRow {
+  source: string;
+  item_id: string;
+}
+
+// Items with a `has-deadline` temporal facet due within 7 days, not archived.
+// Submission status is checked separately (a second facet, possibly absent).
+async function findDecomposeCandidates(db: D1Database, now: Date): Promise<Array<{ source: string; itemId: string }>> {
+  const rows = await db
+    .prepare(
+      `SELECT DISTINCT i.source, i.item_id
+       FROM items i
+       JOIN facets f ON f.source = i.source AND f.item_id = i.item_id
+       JOIN json_each(f.capabilities_json) binding
+       WHERE i.archived_at IS NULL
+         AND json_extract(binding.value, '$.name') = 'has-deadline'
+         AND json_extract(binding.value, '$.primitive') = 'temporal'
+         AND julianday(
+               json_extract(f.data_json, '$.' || json_extract(binding.value, '$.field'))
+             ) BETWEEN julianday(?) AND julianday(?, '+7 days')
+       ORDER BY i.source, i.item_id`,
+    )
+    .bind(now.toISOString(), now.toISOString())
+    .all<DecomposeCandidateRow>();
+
+  const eligible: Array<{ source: string; itemId: string }> = [];
+  for (const row of rows.results) {
+    const status = await getSubmissionStatus(db, row.source, row.item_id);
+    if (status && SUBMITTED_STATUSES.has(status)) {
+      continue;
+    }
+    eligible.push({ source: row.source, itemId: row.item_id });
+  }
+  return eligible;
+}
+
+async function getSubmissionStatus(db: D1Database, source: string, itemId: string): Promise<string | null> {
+  const row = await db
+    .prepare(
+      `SELECT json_extract(f.data_json, '$.' || json_extract(binding.value, '$.field')) AS status
+       FROM facets f
+       JOIN json_each(f.capabilities_json) binding
+       WHERE f.source = ? AND f.item_id = ?
+         AND json_extract(binding.value, '$.name') = 'has-submission-status'
+       LIMIT 1`,
+    )
+    .bind(source, itemId)
+    .first<{ status: string | null }>();
+  return row?.status ?? null;
+}
+
+// The `plans` table lands with feat/brain's migration 0009; until merged (and if a
+// future migration ever drops it) this degrades to "no plan yet" rather than
+// failing the whole trigger, logging the first occurrence per cycle only.
+async function hasAssignmentPlan(db: D1Database, subject: string, onUnavailable: () => void): Promise<boolean> {
+  try {
+    const row = await db.prepare("SELECT 1 FROM plans WHERE kind = 'assignment' AND subject = ? LIMIT 1").bind(subject).first();
+    return row !== null;
+  } catch {
+    onUnavailable();
+    return false;
+  }
+}
+
+// ISO 8601 week (e.g. "2026-W38"), Monday-start with the Thursday rule for the
+// year boundary.
+function isoWeek(date: Date): string {
+  const d = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+  const dayNumber = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - dayNumber);
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  const week = Math.ceil(((d.getTime() - yearStart.getTime()) / 86_400_000 + 1) / 7);
+  return `${d.getUTCFullYear()}-W${String(week).padStart(2, "0")}`;
 }

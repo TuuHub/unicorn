@@ -78,6 +78,50 @@ describe("/agent", () => {
   });
 });
 
+describe("/mcp (door)", () => {
+  it("requires the MCP bearer token, not the admin one", async () => {
+    const env = { MCP_TOKEN: "mcp-secret", ADMIN_TOKEN: "admin-secret" } as unknown as Env;
+
+    const noAuth = await worker.fetch(new Request("https://unicorn.example/mcp", { method: "POST" }), env, executionContext());
+    const wrongToken = await worker.fetch(
+      new Request("https://unicorn.example/mcp", { method: "POST", headers: { authorization: "Bearer admin-secret" } }),
+      env,
+      executionContext(),
+    );
+
+    expect(noAuth.status).toBe(401);
+    expect(wrongToken.status).toBe(401);
+  });
+
+  it("rejects non-POST methods once authorized", async () => {
+    const env = { MCP_TOKEN: "mcp-secret", ADMIN_TOKEN: "admin-secret" } as unknown as Env;
+
+    const response = await worker.fetch(
+      new Request("https://unicorn.example/mcp", { method: "GET", headers: { authorization: "Bearer mcp-secret" } }),
+      env,
+      executionContext(),
+    );
+
+    expect(response.status).toBe(405);
+  });
+});
+
+describe("/mcp/admin", () => {
+  it("requires the admin bearer token, not the MCP one", async () => {
+    const env = { MCP_TOKEN: "mcp-secret", ADMIN_TOKEN: "admin-secret" } as unknown as Env;
+
+    const noAuth = await worker.fetch(new Request("https://unicorn.example/mcp/admin", { method: "POST" }), env, executionContext());
+    const wrongToken = await worker.fetch(
+      new Request("https://unicorn.example/mcp/admin", { method: "POST", headers: { authorization: "Bearer mcp-secret" } }),
+      env,
+      executionContext(),
+    );
+
+    expect(noAuth.status).toBe(401);
+    expect(wrongToken.status).toBe(401);
+  });
+});
+
 function environment() {
   const fetch = vi.fn().mockImplementation(async (request: Request) => {
     if (request.method === "DELETE") {

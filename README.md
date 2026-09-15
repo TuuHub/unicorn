@@ -11,10 +11,11 @@ The Worker runtime now includes:
 - D1-backed Item, facet, capability, Event, relation, settings, and manifest storage
 - Moodle and Ed Discussion Campus plugins
 - Tier-1 declarative JSON and RSS/Atom plugins
-- authenticated Streamable HTTP MCP tools, including capped agent-memory notes
+- two authenticated Streamable HTTP MCP servers: the **door** (`/mcp`, four tools for your own client agent) and the **admin** surface (`/mcp/admin`, the ~15 operator tools), including capped agent-memory notes
+- durable **briefs** (`get_briefs` / `ack_briefs`) — the one inbox scheduled playbooks and the daily digest write to
 - protected settings, retention, and Discord / Telegram / email notifications through a durable outbox
-- a Pi-backed resident agent over authenticated HTTP and Telegram, with D1 conversation history and per-conversation Durable Object serialization
-- an hourly Durable Object scheduler, a resident triage job, and opt-in model jobs backed by Workers AI or BYOK with measured token caps
+- a Pi-backed resident agent over authenticated HTTP — the door's `ask` tool and the operator `/agent` route — with D1 conversation history and per-conversation Durable Object serialization
+- an hourly Durable Object scheduler, a resident triage job, scheduled playbooks (weekly plan, assignment decomposition, forum brief), and opt-in model jobs backed by Workers AI or BYOK with measured token caps
 
 Production deployment: [unicorn.bunizao.workers.dev](https://unicorn.bunizao.workers.dev/health)
 
@@ -48,9 +49,21 @@ curl -X POST https://<your-worker>/schedule -H "Authorization: Bearer <ADMIN_TOK
 
 </details>
 
-Generate separate random values for `ADMIN_TOKEN` and `MCP_TOKEN`. `ADMIN_TOKEN` is the password for HTTP Basic user `unicorn` at `/settings` and the bearer token for `/sync` and `/agent`; `MCP_TOKEN` protects `/mcp`. Reusing them needlessly turns one leaked client credential into full operator access.
+Generate separate random values for `ADMIN_TOKEN` and `MCP_TOKEN`. `ADMIN_TOKEN` is the password for HTTP Basic user `unicorn` at `/settings` and the bearer token for `/sync`, `/agent`, and the admin MCP surface at `/mcp/admin`; `MCP_TOKEN` protects the door at `/mcp`. Reusing them needlessly turns one leaked client credential into full operator access.
 
-MCP clients connect to `https://<your-worker>/mcp` with `Authorization: Bearer <MCP_TOKEN>`.
+### The door (`/mcp`)
+
+This is what your own client agent (Claude Code, Claude Desktop, etc.) connects to. It exposes exactly four tools — `ask` (forwards to the resident agent), `get_briefs` / `ack_briefs` (the durable inbox for scheduled playbooks and the daily digest), and `remember` (save a verbatim correction). Add it with:
+
+```bash
+claude mcp add --transport http unicorn https://<worker>/mcp --header "Authorization: Bearer <MCP_TOKEN>"
+```
+
+A client should call `get_briefs` at the start of a session, route open-ended questions to `ask`, and use `remember` whenever you correct it — the tool's own `instructions` field spells this out for the client model.
+
+### The admin surface (`/mcp/admin`)
+
+The pre-existing ~15 operator tools (item/plugin/job/memory inspection and configuration) live here, unchanged, now separated from the door so a client agent never sees or accidentally calls operator-only tools. Bearer `ADMIN_TOKEN`.
 
 The `resident-agent`, `daily-digest`, and `triage` jobs are disabled by default. The built-in Cloudflare Workers AI binding needs no model secret; enable a job through the `configure_agent_job` MCP tool with a Workers AI model such as `@cf/openai/gpt-oss-20b` and a monthly token cap. Setting `AI_API_KEY` and an optional OpenAI-compatible `AI_BASE_URL` overrides Workers AI for BYOK deployments. Actual input/output usage and measured monthly projections are exposed through MCP. Reaching a cap rejects new resident turns or pauses the scheduled model path without ever stopping ingestion.
 
@@ -71,8 +84,8 @@ unicorn is a **plugin platform first**. Plugins ingest from any source; the kern
 
 On top of the kernel, unicorn is becoming a **resident secretary agent** (ADR-0023): an event-driven triage loop that watches every facet event, suppresses noise, speaks only when something matters, and remembers your corrections in a capped notes memory (ADR-0024). Two faces over one kernel (ADR-0026):
 
-- **MCP server** *(v1)* — the pull face: your own Claude / ChatGPT client consults unicorn's structured data and memory; your agent does the open-ended reasoning.
-- **IM** *(v1)* — proactive alerts and digests plus a persistent Pi conversation in Telegram.
+- **MCP server** *(v1)* — the pull face, split into a four-tool **door** (`/mcp`) for your own client agent and a separate **admin** surface (`/mcp/admin`) for operator tooling (ADR-0030); your client's agent does the open-ended reasoning, unicorn hands it structured data, memory, and durable briefs.
+- **IM** *(v1)* — push-only: proactive alerts and digests over Discord / Telegram / email. There is no converse loop over IM (ADR-0032) — talk to the resident agent through the door's `ask` tool instead.
 
 There is deliberately no maintained web dashboard and no daily-driver CLI — views are rendered reports (`/settings`, `/digest`) or generated on demand by your MCP client.
 

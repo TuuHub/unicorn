@@ -36,18 +36,19 @@ Everything is a single Cloudflare Worker (ADR-0001, ADR-0009, ADR-0014). Not a s
                          │                          │    D1    │         │
                          │                          └────┬─────┘         │
                          │        ┌──────────────────────┼────────────┐  │
-                         │     ┌──▼───┐          ┌────────▼───┐   ┌────▼─┐│
-                         │     │ MCP  │          │ dashboard  │   │  IM  ││
-                         │     │ (v1) │          │  (later)   │   │ bot  ││
-                         │     └──┬───┘          └────────────┘   └──────┘│
-                         └────────┼────────────────────────────────────── ┘
-                                  │
-                         user's own Claude / ChatGPT client
+                         │     ┌──▼───┐   ┌──────┐  ┌────▼───┐   ┌────▼─┐│
+                         │     │ door │   │ admin│  │dashboard│  │  IM  ││
+                         │     │ /mcp │   │ /mcp/│  │ (later) │  │ push ││
+                         │     │      │   │ admin│  └─────────┘  │ only ││
+                         │     └──┬───┘   └──┬───┘               └──────┘│
+                         └────────┼──────────┼───────────────────────────┘
+                                  │          │
+                         user's own client   operator (you / a coding agent)
 ```
 
 - **Kernel** — source-agnostic core. Owns the Item + facet model, change detection, the job registry, the notifier, and retention. The product *is* the kernel.
 - **Plugins** — bring sources. Ingestion-only (ADR-0018): fetch + map to Items/facets, nothing downstream.
-- **Surfaces** — three thin faces over the kernel (ADR-0009). MCP first (v1); dashboard and IM bot later. No surface owns business logic.
+- **Surfaces** — thin faces over the kernel (ADR-0009). MCP is split into two endpoints (ADR-0030): the **door** (`/mcp`, four tools) for a client agent, and **admin** (`/mcp/admin`, the operator tool set); dashboard is deferred; IM is push-only (ADR-0032) — no converse loop. No surface owns business logic.
 
 ---
 
@@ -164,13 +165,16 @@ Retention: current data is **hot**; non-course Items older than the configured w
 
 ---
 
-## 9. Surfaces (ADR-0009, ADR-0010)
+## 9. Surfaces (ADR-0009, ADR-0010, ADR-0030, ADR-0032)
 
-- **MCP server (v1)** — query + write-back for the user's own agent: "what's due," "what changed," propose/confirm course mappings, connect a new Tier-1 plugin. The user's Claude/ChatGPT does the reasoning; unicorn serves data. This is how "Claude/Codex account access" is satisfied for interactive use with zero chat UI to build.
+MCP is two separate servers, not one (ADR-0030):
+
+- **The door (`/mcp`, bearer `MCP_TOKEN`)** — exactly four tools for the user's own client agent: `ask` (forwards a turn to the resident agent), `get_briefs` / `ack_briefs` (the durable inbox scheduled playbooks and the daily digest write to, ADR-0031), and `remember` (save a verbatim correction). The client's model does the open-ended reasoning; unicorn serves data, memory, and briefs. This is how "Claude/Codex account access" is satisfied for interactive use with zero chat UI to build.
+- **The admin surface (`/mcp/admin`, bearer `ADMIN_TOKEN`)** — the pre-existing ~15 operator tools (item/plugin/job/memory inspection and configuration, "what's due," "what changed," connect a new Tier-1 plugin). A client agent is never pointed at this endpoint.
 - **Web dashboard (later)** — read-only timeline. v1 already includes a password-protected operator settings page for non-secret behavior and connection status.
-- **IM bot (later)** — proactive push + light Q&A, over the pluggable notifier (Telegram / Discord / email).
+- **IM (push-only, ADR-0032)** — proactive alerts and digests over the pluggable notifier (Telegram / Discord / email). There is no converse loop over IM: the Telegram bot that used to run turns through the resident agent is retired, and talking to the agent happens through the door's `ask` tool instead.
 
-Onboarding: Wrangler provisions the Worker and D1, secrets are pushed without entering the repository, and course mapping plus Tier-1 source installation go through the MCP agent.
+Onboarding: Wrangler provisions the Worker and D1, secrets are pushed without entering the repository, and course mapping plus Tier-1 source installation go through the admin MCP surface.
 
 ---
 

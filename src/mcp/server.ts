@@ -77,8 +77,11 @@ export interface McpRepository {
   getSyncStatus(): Promise<JsonValue | null>;
 }
 
-export function createUnicornMcpServer(repository: McpRepository, options?: { aiConfigured?: boolean }): McpServer {
-  const server = new McpServer({ name: "unicorn", version: "0.1.0" });
+// ADR-0030: the operator surface. Unchanged tool set, now mounted at /mcp/admin
+// (bearer ADMIN_TOKEN) rather than /mcp — client agents never see these ~15 tools;
+// see ./door.ts for the four-tool client-facing server.
+export function createAdminMcpServer(repository: McpRepository, options?: { aiConfigured?: boolean }): McpServer {
+  const server = new McpServer({ name: "unicorn-admin", version: "0.1.0" });
   const aiConfigured = options?.aiConfigured ?? true;
 
   server.registerTool(
