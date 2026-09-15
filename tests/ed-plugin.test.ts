@@ -28,6 +28,7 @@ describe("EdPlugin.pull", () => {
               number: 12,
               course_id: 100,
               user_id: 99,
+              user: { id: 99, name: "Teaching Associate", course_role: "tutor" },
               title: "Assignment deadline clarification",
               document: "The deadline shown in Moodle is correct.",
               type: "question",
@@ -76,7 +77,7 @@ describe("EdPlugin.pull", () => {
         }),
         expect.objectContaining({
           type: "author",
-          data: { actor: "ed-user:99" },
+          data: { actor: "ed-user:99", authorRole: "tutor" },
         }),
         expect.objectContaining({
           type: "engagement",
@@ -87,5 +88,9 @@ describe("EdPlugin.pull", () => {
     expect(String(fetcher.mock.calls[1]?.[0])).toContain("courses/100/threads?limit=30");
     expect(fetcher.mock.calls[0]?.[1]?.headers).toMatchObject({ Authorization: "Bearer ed-secret" });
     expect(items[2]).not.toHaveProperty("body");
+    const authorFacet = (items[2] as { facets: Array<{ type: string; data: Record<string, unknown> }> }).facets.find(
+      (facet) => facet.type === "author",
+    );
+    expect(authorFacet?.data).toEqual({ actor: "ed-user:100" });
   });
 });

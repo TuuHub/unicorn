@@ -1,3 +1,16 @@
+import type {
+  CourseAssessment,
+  CourseEmailMention,
+  CourseOverview,
+  CourseStaffPost,
+  CourseSummary,
+  Plan,
+  PlanKind,
+  RememberResult,
+  SearchItemsQuery,
+  StaffPostQuery,
+} from "../agent/tools";
+import { recordCorrection } from "../corrections";
 import { D1ItemStore } from "../kernel/d1-item-store";
 import type { ItemEvent, JsonValue, StoredItem } from "../kernel/types";
 import type { AgentJob, AgentJobConfig } from "../jobs/daily-digest";
@@ -13,6 +26,58 @@ import type {
   UpcomingItem,
   UpcomingQuery,
 } from "./server";
+
+// Author roles the Ed plugin reports (ed-plugin.ts's `authorRole` field) that
+// count as teaching staff for the forum-brief playbook. Ed's course-scoped
+// role is one of student/tutor/admin; older payloads may report "staff".
+const STAFF_ROLES = new Set(["admin", "tutor", "staff", "instructor"]);
+const DEFAULT_STAFF_POST_WINDOW_DAYS = 14;
+
+interface CourseIdentityRow {
+  source: string;
+  item_id: string;
+  title: string;
+  code: string | null;
+  platform: string | null;
+  status: string | null;
+}
+
+interface CourseAssessmentRow {
+  source: string;
+  item_id: string;
+  title: string;
+  url: string | null;
+  due_at: string | null;
+  status: string | null;
+}
+
+interface StaffPostRow {
+  source: string;
+  item_id: string;
+  title: string;
+  url: string | null;
+  timestamp: string;
+  author_role: string | null;
+  pin_status: string | null;
+  thread_type: string | null;
+}
+
+interface EmailMentionRow {
+  source: string;
+  item_id: string;
+  title: string;
+  url: string | null;
+  timestamp: string;
+}
+
+interface PlanRow {
+  id: string;
+  kind: PlanKind;
+  subject: string;
+  content: string;
+  created_at: string;
+  updated_at: string;
+}
 
 interface ItemKeyRow {
   source: string;
@@ -274,6 +339,280 @@ export class D1McpRepository implements McpRepository {
       .first<{ value_json: string }>();
     return row ? (JSON.parse(row.value_json) as JsonValue) : null;
   }
+
+  async listCourses(): Promise<CourseSummary[]> {
+    const rows = await this.db
+      .prepare(
+        `SELECT i.source, i.item_id, i.title,
+           json_extract(f.data_json, '$.code') as code,
+           json_extract(f.data_json, '$.platform') as platform,
+           json_extract(f.data_json, '$.status') as status
+         FROM items i
+         JOIN facets f ON f.source = i.source AND f.item_id = i.item_id AND f.type = 'course-identity'
+         WHERE i.archived_at IS NULL
+         ORDER BY i.title
+         LIMIT 100`,
+      )
+      .all<CourseIdentityRow>();
+    return rows.results.map(parseCourseSummary);
+  }
+
+  async getCourseOverview(course: string): Promise<CourseOverview> {
+    const matches = await this.resolveCourseMatches(course);
+    const code = normalizeCourseCode(course);
+
+    const moodleMatches = matches.filter((match) => match.source === "campus-moodle");
+    const edMatches = matches.filter((match) => match.source === "campus-ed");
+    const since = new Date(Date.now() - DEFAULT_STAFF_POST_WINDOW_DAYS * 24 * 60 * 60 * 1_000).toISOString();
+
+    const [assessments, staffPosts, emailMentions, ontrack] = await Promise.all([
+      Promise.all(moodleMatches.map((match) => this.courseAssessments(match.source, match.itemId))).then((lists) =>
+        lists.flat().sort((a, b) => (a.dueAt ?? "").localeCompare(b.dueAt ?? "")),
+      ),
+      Promise.all(edMatches.map((match) => this.courseStaffPosts(match.source, match.itemId, since, 20))).then(
+        (lists) => lists.flat().sort((a, b) => b.timestamp.localeCompare(a.timestamp)),
+      ),
+      this.courseEmailMentions(code, 20),
+      this.sourceExists("%ontrack%"),
+    ]);
+
+    return {
+      query: course,
+      identity:
+        matches.length === 0
+          ? null
+          : { code, name: matches[0]!.name, platforms: [...new Set(matches.map((match) => match.source))] },
+      assessments,
+      staffPosts,
+      emailMentions,
+      sources: {
+        moodle: moodleMatches.length > 0,
+        ed: edMatches.length > 0,
+        ontrack,
+        email: emailMentions.length > 0,
+      },
+    };
+  }
+
+  async searchItems(query: SearchItemsQuery): Promise<StoredItem[]> {
+    const conditions = ["archived_at IS NULL", "(title LIKE ? ESCAPE '\\' OR body LIKE ? ESCAPE '\\')"];
+    const like = `%${escapeLike(query.query)}%`;
+    const values: Array<string | number> = [like, like];
+    if (query.kind) {
+      conditions.push("kind = ?");
+      values.push(query.kind);
+    }
+    if (query.since) {
+      conditions.push("timestamp >= ?");
+      values.push(query.since);
+    }
+    if (query.course) {
+      const matches = await this.resolveCourseMatches(query.course);
+      const code = normalizeCourseCode(query.course);
+      const membershipClauses = matches.map(
+        () =>
+          `EXISTS (SELECT 1 FROM facets cm WHERE cm.source = items.source AND cm.item_id = items.item_id
+             AND cm.type = 'course-membership' AND items.source = ? AND json_extract(cm.data_json, '$.course') = ?)`,
+      );
+      const mentionClause = `EXISTS (
+        SELECT 1 FROM facets men, json_each(men.data_json, '$.codes') c
+        WHERE men.source = items.source AND men.item_id = items.item_id
+          AND men.type = 'course-mention' AND upper(c.value) = ?
+      )`;
+      conditions.push(`(${[...membershipClauses, mentionClause].join(" OR ")})`);
+      for (const match of matches) {
+        values.push(match.source, match.itemId);
+      }
+      values.push(code);
+    }
+    values.push(query.limit);
+    const rows = await this.db
+      .prepare(
+        `SELECT source, item_id FROM items WHERE ${conditions.join(" AND ")} ORDER BY timestamp DESC LIMIT ?`,
+      )
+      .bind(...values)
+      .all<ItemKeyRow>();
+    return this.items.findMany(rows.results.map((row) => ({ source: row.source, itemId: row.item_id })));
+  }
+
+  async listStaffPosts(query: StaffPostQuery): Promise<CourseStaffPost[]> {
+    const since = query.since ?? new Date(Date.now() - DEFAULT_STAFF_POST_WINDOW_DAYS * 24 * 60 * 60 * 1_000).toISOString();
+    if (!query.course) {
+      return this.staffPostsBySource(null, null, since, query.limit);
+    }
+    const matches = (await this.resolveCourseMatches(query.course)).filter((match) => match.source === "campus-ed");
+    const lists = await Promise.all(
+      matches.map((match) => this.courseStaffPosts(match.source, match.itemId, since, query.limit)),
+    );
+    return lists
+      .flat()
+      .sort((a, b) => b.timestamp.localeCompare(a.timestamp))
+      .slice(0, query.limit);
+  }
+
+  async getPlan(kind: PlanKind, subject: string): Promise<Plan | null> {
+    const row = await this.db
+      .prepare("SELECT * FROM plans WHERE kind = ? AND subject = ?")
+      .bind(kind, subject)
+      .first<PlanRow>();
+    return row ? parsePlan(row) : null;
+  }
+
+  async savePlan(kind: PlanKind, subject: string, content: string): Promise<Plan> {
+    const now = new Date().toISOString();
+    await this.db
+      .prepare(
+        `INSERT INTO plans (id, kind, subject, content, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT (kind, subject) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at`,
+      )
+      .bind(crypto.randomUUID(), kind, subject, content, now, now)
+      .run();
+    const row = await this.db
+      .prepare("SELECT * FROM plans WHERE kind = ? AND subject = ?")
+      .bind(kind, subject)
+      .first<PlanRow>();
+    if (!row) {
+      throw new Error("Plan was not persisted.");
+    }
+    return parsePlan(row);
+  }
+
+  async remember(text: string): Promise<RememberResult> {
+    return recordCorrection(this.memory, text);
+  }
+
+  // Matches a unit code (e.g. "FIT2004") or a raw item id against every
+  // known course-identity facet. A course can legitimately match more than
+  // one row: the same unit usually exists as both a Moodle course and an Ed
+  // course, each with its own source-local item id.
+  private async resolveCourseMatches(courseParam: string): Promise<CourseIdentityMatch[]> {
+    const trimmed = courseParam.trim();
+    const code = normalizeCourseCode(trimmed);
+    const rows = await this.db
+      .prepare(
+        `SELECT i.source, i.item_id, i.title,
+           json_extract(f.data_json, '$.code') as code,
+           json_extract(f.data_json, '$.platform') as platform,
+           json_extract(f.data_json, '$.status') as status
+         FROM items i
+         JOIN facets f ON f.source = i.source AND f.item_id = i.item_id AND f.type = 'course-identity'
+         WHERE i.archived_at IS NULL
+           AND (i.item_id = ? OR upper(json_extract(f.data_json, '$.code')) LIKE ? || '%')
+         ORDER BY i.title`,
+      )
+      .bind(trimmed, code)
+      .all<CourseIdentityRow>();
+    return rows.results.map((row) => ({ source: row.source, itemId: row.item_id, name: row.title }));
+  }
+
+  private async courseAssessments(source: string, courseItemId: string): Promise<CourseAssessment[]> {
+    const rows = await this.db
+      .prepare(
+        `SELECT i.source, i.item_id, i.title, i.url,
+           json_extract(d.data_json, '$.dueAt') as due_at,
+           json_extract(s.data_json, '$.status') as status
+         FROM items i
+         JOIN facets m ON m.source = i.source AND m.item_id = i.item_id AND m.type = 'course-membership'
+         LEFT JOIN facets d ON d.source = i.source AND d.item_id = i.item_id AND d.type = 'deadline'
+         LEFT JOIN facets s ON s.source = i.source AND s.item_id = i.item_id AND s.type = 'submission'
+         WHERE i.archived_at IS NULL
+           AND i.source = ? AND i.kind = 'assessment'
+           AND json_extract(m.data_json, '$.course') = ?
+         ORDER BY due_at
+         LIMIT 30`,
+      )
+      .bind(source, courseItemId)
+      .all<CourseAssessmentRow>();
+    return rows.results.map((row) => ({
+      source: row.source,
+      itemId: row.item_id,
+      title: row.title,
+      ...(row.url ? { url: row.url } : {}),
+      dueAt: row.due_at,
+      status: row.status,
+    }));
+  }
+
+  private async courseStaffPosts(
+    source: string,
+    courseItemId: string,
+    since: string,
+    limit: number,
+  ): Promise<CourseStaffPost[]> {
+    return this.staffPostsBySource(source, courseItemId, since, limit);
+  }
+
+  private async staffPostsBySource(
+    source: string | null,
+    courseItemId: string | null,
+    since: string,
+    limit: number,
+  ): Promise<CourseStaffPost[]> {
+    const conditions = ["i.archived_at IS NULL", "i.source = 'campus-ed'", "i.kind = 'thread'", "i.timestamp >= ?"];
+    const values: Array<string | number> = [since];
+    let membershipJoin = "";
+    if (source && courseItemId) {
+      membershipJoin =
+        "JOIN facets m ON m.source = i.source AND m.item_id = i.item_id AND m.type = 'course-membership'";
+      conditions.push("json_extract(m.data_json, '$.course') = ?");
+      values.push(courseItemId);
+    }
+    values.push(limit * 4); // over-fetch: staff filtering happens in JS below.
+    const rows = await this.db
+      .prepare(
+        `SELECT i.source, i.item_id, i.title, i.url, i.timestamp,
+           json_extract(a.data_json, '$.authorRole') as author_role,
+           json_extract(disc.data_json, '$.pinStatus') as pin_status,
+           json_extract(i.raw_json, '$.type') as thread_type
+         FROM items i
+         ${membershipJoin}
+         LEFT JOIN facets a ON a.source = i.source AND a.item_id = i.item_id AND a.type = 'author'
+         LEFT JOIN facets disc ON disc.source = i.source AND disc.item_id = i.item_id AND disc.type = 'discussion-state'
+         WHERE ${conditions.join(" AND ")}
+         ORDER BY i.timestamp DESC
+         LIMIT ?`,
+      )
+      .bind(...values)
+      .all<StaffPostRow>();
+    return rows.results
+      .filter(isStaffPostRow)
+      .slice(0, limit)
+      .map((row) => ({
+        source: row.source,
+        itemId: row.item_id,
+        title: row.title,
+        ...(row.url ? { url: row.url } : {}),
+        timestamp: row.timestamp,
+      }));
+  }
+
+  private async courseEmailMentions(code: string, limit: number): Promise<CourseEmailMention[]> {
+    const rows = await this.db
+      .prepare(
+        `SELECT i.source, i.item_id, i.title, i.url, i.timestamp
+         FROM items i
+         JOIN facets f ON f.source = i.source AND f.item_id = i.item_id AND f.type = 'course-mention'
+         JOIN json_each(f.data_json, '$.codes') codes ON upper(codes.value) = ?
+         WHERE i.archived_at IS NULL
+         ORDER BY i.timestamp DESC
+         LIMIT ?`,
+      )
+      .bind(code, limit)
+      .all<EmailMentionRow>();
+    return rows.results.map((row) => ({
+      source: row.source,
+      itemId: row.item_id,
+      title: row.title,
+      ...(row.url ? { url: row.url } : {}),
+      timestamp: row.timestamp,
+    }));
+  }
+
+  private async sourceExists(likePattern: string): Promise<boolean> {
+    const row = await this.db.prepare("SELECT 1 FROM items WHERE source LIKE ? LIMIT 1").bind(likePattern).first();
+    return row !== null;
+  }
 }
 
 function parseEvent(row: EventRow): ItemEvent {
@@ -322,4 +661,55 @@ function normalizeRelation(input: LinkItemsInput): LinkItemsInput {
     toSource: input.fromSource,
     toItemId: input.fromItemId,
   };
+}
+
+interface CourseIdentityMatch {
+  source: string;
+  itemId: string;
+  name: string;
+}
+
+function parseCourseSummary(row: CourseIdentityRow): CourseSummary {
+  return {
+    source: row.source,
+    itemId: row.item_id,
+    code: row.code ?? "",
+    name: row.title,
+    platform: row.platform ?? row.source,
+    status: row.status ?? "unknown",
+  };
+}
+
+function parsePlan(row: PlanRow): Plan {
+  return {
+    id: row.id,
+    kind: row.kind,
+    subject: row.subject,
+    content: row.content,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+// ADR-0031: a thread counts as staff-authored when the Ed plugin resolved a
+// staff-shaped author role, or the thread is a platform announcement, or it
+// is pinned. Filtered here in JS (not SQL) because the row already carries
+// every field needed and keeping the staff definition in one readable place
+// beats re-deriving it with a harder-to-read SQL boolean expression.
+function isStaffPostRow(row: StaffPostRow): boolean {
+  const role = row.author_role?.toLowerCase();
+  return (role !== undefined && STAFF_ROLES.has(role)) || row.thread_type === "announcement" || row.pin_status === "pinned";
+}
+
+// Extracts the leading unit-code token (e.g. "FIT2004") from input like
+// "fit2004", "FIT2004 S1 2026", or a bare course title, uppercased for a
+// case-insensitive LIKE/equality match against stored course-identity codes
+// and course-mention codes alike.
+function normalizeCourseCode(input: string): string {
+  const upper = input.trim().toUpperCase();
+  return upper.match(/^[A-Z]{2,5}\d{3,4}/)?.[0] ?? upper;
+}
+
+function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, (char) => `\\${char}`);
 }

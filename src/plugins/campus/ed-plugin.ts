@@ -102,6 +102,7 @@ export class EdPlugin implements Plugin {
     const number = asNumber(thread.number);
     const courseId = asNumber(thread.course_id) || fallbackCourseId;
     const userId = asNumber(thread.user_id);
+    const role = threadAuthorRole(thread);
     const facets: Facet[] = [
       {
         type: "course-membership",
@@ -110,7 +111,11 @@ export class EdPlugin implements Plugin {
       },
       {
         type: "author",
-        data: { actor: `ed-user:${userId}` },
+        // ADR-0031: authorRole feeds the forum-brief playbook's staff detection
+        // (list_staff_posts). Ed embeds the poster's role on the thread as
+        // `user.course_role` (course-scoped: student/tutor/admin) or, in older
+        // payloads, `user.role`; either is trusted when present.
+        data: { actor: `ed-user:${userId}`, ...(role ? { authorRole: role } : {}) },
         capabilities: [{ name: "has-author", primitive: "actor", field: "actor" }],
       },
       {
@@ -160,4 +165,9 @@ export class EdPlugin implements Plugin {
 
 function ensureTrailingSlash(value: string): string {
   return value.endsWith("/") ? value : `${value}/`;
+}
+
+function threadAuthorRole(thread: Record<string, unknown>): string {
+  const user = asRecord(thread.user);
+  return asString(user.course_role) || asString(user.role);
 }
