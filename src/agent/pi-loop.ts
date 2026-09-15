@@ -20,7 +20,8 @@ export type PiLoopOutcome =
   | { status: "timed_out"; usage: PiLoopUsage }
   | { status: "provider_failed"; message: string; usage: PiLoopUsage }
   | { status: "loop_exhausted"; usage: PiLoopUsage }
-  | { status: "empty_answer"; usage: PiLoopUsage };
+  | { status: "empty_answer"; usage: PiLoopUsage }
+  | { status: "malformed_answer"; usage: PiLoopUsage };
 
 export interface PiLoopInput {
   runtime: PiModelRuntime;
@@ -108,7 +109,19 @@ export async function runBoundedPiLoop(input: PiLoopInput): Promise<PiLoopOutcom
   if (!answer) {
     return { status: "empty_answer", usage };
   }
+  if (looksLikeLeakedToolCall(answer)) {
+    return { status: "malformed_answer", usage };
+  }
   return { status: "answered", answer, toolsUsed, usage, messages: sanitizeMessages(newMessages) };
+}
+
+// Some small models (seen with Workers AI glm-4.7-flash) emit their tool-call
+// template as plain text instead of a structured call. Filing that as an
+// answer would store markup as a brief, so the loop reports it as malformed.
+const LEAKED_TOOL_CALL = /<tool_call>|<arg_key>|<\|tool_call\|>|<function=/;
+
+function looksLikeLeakedToolCall(answer: string): boolean {
+  return LEAKED_TOOL_CALL.test(answer);
 }
 
 function isLlmMessage(message: AgentMessage): message is Message {

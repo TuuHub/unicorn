@@ -145,7 +145,8 @@ export function createResidentTools(repository: AgentToolRepository): AgentTool[
         itemId: Type.String({ minLength: 1, maxLength: 200 }),
       }),
       executionMode: "sequential",
-      execute: async (_id, params) => toolResult(projectFullItem(await repository.find(params.source, params.itemId))),
+      execute: async (_id, params) =>
+        toolResult(projectFullItem(await repository.find(params.source, stripSourcePrefix(params.source, params.itemId)))),
     }),
     defineTool({
       name: "list_upcoming",
@@ -331,4 +332,17 @@ function clipJson(value: JsonValue): JsonValue {
     return Object.fromEntries(Object.entries(value).slice(0, 20).map(([key, entry]) => [key, clipJson(entry)]));
   }
   return value;
+}
+
+// Models often paste the subject line verbatim ("campus-moodle:assessment:501"
+// or "campus-moodle assessment:501") as the item id; tolerate that instead of
+// answering "not found" for an item that exists.
+function stripSourcePrefix(source: string, itemId: string): string {
+  for (const separator of [":", " "]) {
+    const prefix = `${source}${separator}`;
+    if (itemId.startsWith(prefix) && itemId.length > prefix.length) {
+      return itemId.slice(prefix.length);
+    }
+  }
+  return itemId;
 }

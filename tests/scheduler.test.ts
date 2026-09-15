@@ -255,7 +255,7 @@ describe("scheduled playbook triggers", () => {
         { source: "campus-moodle", itemId: "a3" },
         { source: "campus-moodle", itemId: "a4" },
       ],
-      plans: ["campus-moodle already-planned"],
+      plans: ["campus-moodle:already-planned"],
     };
     const runner = fakeRunner((input) => COMPLETED("plan", `plan for ${input.subject}`));
 
@@ -263,7 +263,7 @@ describe("scheduled playbook triggers", () => {
 
     expect(cycle.playbooks.decomposeAssignment).toEqual({ attempted: 3, completed: 3, skipped: 0, failed: 0 });
     const subjects = runner.calls.filter((call) => call.playbook === "decompose-assignment").map((call) => call.subject);
-    expect(subjects).toEqual(["campus-moodle a1", "campus-moodle a2", "campus-moodle a3"]);
+    expect(subjects).toEqual(["campus-moodle:a1", "campus-moodle:a2", "campus-moodle:a3"]);
   });
 
   it("degrades to no-plans when the plans table is unavailable, rather than failing the trigger", async () => {

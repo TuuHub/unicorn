@@ -211,6 +211,8 @@ function toResidentAgentError(outcome: Exclude<PiLoopOutcome, { status: "answere
       return new ResidentAgentError("loop_exhausted", "The resident agent reached its tool-turn limit.");
     case "empty_answer":
       return new ResidentAgentError("provider_failed", "The model returned no answer.");
+    case "malformed_answer":
+      return new ResidentAgentError("provider_failed", "The model returned tool-call markup instead of an answer.");
     case "provider_failed":
       return new ResidentAgentError("provider_failed", outcome.message);
   }

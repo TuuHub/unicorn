@@ -89,6 +89,19 @@ describe("PiPlaybookRunner", () => {
     expect(runs).toEqual([expect.objectContaining({ status: "no_changes" })]);
   });
 
+  it("fails as malformed_answer when the model leaks tool-call markup as text", async () => {
+    const { jobs, runs } = enabledJobStore();
+    const { runtime } = fauxRuntime([
+      fauxAssistantMessage("<tool_call>save_plan<arg_key>kind</arg_key><arg_value>assignment</arg_value>"),
+    ]);
+    const runner = new PiPlaybookRunner({ jobs, repository: repository(), runtime });
+
+    const result = await runner.run({ playbook: "decompose-assignment", subject: "campus-moodle:assessment:1" });
+
+    expect(result).toEqual({ status: "failed", code: "malformed_answer" });
+    expect(runs).toEqual([expect.objectContaining({ status: "failed" })]);
+  });
+
   it("skips before inference when the monthly budget is exhausted", async () => {
     const { jobs } = enabledJobStore(10_000);
     const { faux, runtime } = fauxRuntime([fauxAssistantMessage("must not run")]);

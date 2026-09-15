@@ -533,8 +533,10 @@ async function runDecomposeAssignmentTriggers(
     if (counts.attempted >= DECOMPOSE_ASSIGNMENT_CAP) {
       break;
     }
-    const subject = `${candidate.source} ${candidate.itemId}`;
-    const id = `assignment-plan:${candidate.source}:${candidate.itemId}`;
+    // Subject uses the same "<source>:<item_id>" form the playbook tells the
+    // model to pass to save_plan, so hasAssignmentPlan matches what it saved.
+    const subject = `${candidate.source}:${candidate.itemId}`;
+    const id = `assignment-plan:${subject}`;
     if (await briefs.exists(id)) {
       continue;
     }
@@ -552,7 +554,15 @@ async function runDecomposeAssignmentTriggers(
       runner,
       briefs,
       "decompose-assignment",
-      { id, kind: "assignment-plan", subject },
+      {
+        id,
+        kind: "assignment-plan",
+        subject,
+        context:
+          `The scheduler selected this assessment (source "${candidate.source}", item id "${candidate.itemId}") ` +
+          "because it is due within 7 days and its submission status is not \"submitted\". " +
+          "Call get_item with that source and item id first. Only reply NOTHING_TO_REPORT if get_item shows it is already submitted.",
+      },
       now,
     );
     if (outcome.status === "completed") {
@@ -574,12 +584,12 @@ async function runPlaybookAndFile(
   runner: PlaybookRunner,
   briefs: BriefStore,
   playbook: PlaybookId,
-  brief: { id: string; kind: BriefKind; subject: string },
+  brief: { id: string; kind: BriefKind; subject: string; context?: string },
   now: Date,
 ): Promise<PlaybookTriggerStatus> {
   let result: PlaybookRunResult;
   try {
-    result = await runner.run({ playbook, subject: brief.subject });
+    result = await runner.run({ playbook, subject: brief.subject, context: brief.context });
   } catch (error) {
     console.error(JSON.stringify({ event: "playbook_failed", playbook, message: errorMessage(error) }));
     return { status: "failed", code: "runner_failed" };

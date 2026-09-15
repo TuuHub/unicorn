@@ -15,7 +15,7 @@ import { createResidentTools, type AgentToolRepository } from "./tools";
 // scheduled playbooks alike — under the one `resident-agent` job.
 const JOB_ID = "resident-agent";
 const MAX_TURNS = 12;
-const MAX_OUTPUT_TOKENS = 800;
+const MAX_OUTPUT_TOKENS = 1_500;
 const TIMEOUT_MS = 50_000;
 
 // The exact line a playbook's procedure instructs the model to emit when it
@@ -135,7 +135,7 @@ function buildInstruction(playbook: Playbook, input: PlaybookRunInput): string {
   }
   lines.push(
     "",
-    `If the procedure finds nothing worth reporting, reply with exactly the single line "${NOTHING_SENTINEL}" and nothing else.`,
+    `Reply with exactly the single line "${NOTHING_SENTINEL}" and nothing else only when the procedure explicitly says to stop with nothing to report. Otherwise always produce the expected output.`,
   );
   return lines.join("\n");
 }
