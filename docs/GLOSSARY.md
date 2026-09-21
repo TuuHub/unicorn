@@ -1,35 +1,56 @@
 # Glossary — unicorn
 
-Terms as we use them in this project. When code and this file disagree, fix one of them.
+Terms as we use them in this project. When code and this file disagree, fix one of them. Terms marked *Retired* describe code that ADR-0034 removes; they stay here so older ADRs still read.
 
-- **unicorn** — An AI-native information aggregation platform, Cloudflare-deployed. Plugins ingest from arbitrary sources into a generic Item + facet model; the kernel tracks, detects changes, and exposes everything to the user's own LLM client over MCP. Campus (Ed + Moodle) is the flagship plugin. (ADR-0015)
-- **Platform / kernel** — The source-agnostic core: scheduled ingestion, D1 storage, the Item + facet model, change detection, job registry, notifier, retention. Everything a plugin can't touch. The product *is* the kernel; plugins bring sources. (ADR-0015)
-- **Plugin** — A source integration. Declares identity, auth, fetch, mapping, and which facets it emits — **ingestion only**, no downstream logic (ADR-0018). Two tiers: declarative manifest (Tier 1) or in-repo code (Tier 2). (ADR-0017)
-- **Campus plugin** — The flagship Tier-2 code plugin bundling Ed Discussion + Moodle. Dogfoods the kernel and keeps a real pain point (assessment tracking) steering the design. Reimplements the API subset it needs in TS; does **not** import the sibling Python CLIs (ADR-0002).
-- **Item** — The generic record every plugin produces: `id, source, kind, title, timestamp, url, body, raw`. The universal base of the data model. (ADR-0016)
-- **Facet** — An optional typed structure a plugin attaches to an Item (`deadline`, `thread`, `grade`, …). Facets are the **contract** between plugins and platform features. Open vocabulary. (ADR-0016, ADR-0018)
-- **Capability** — A dynamic declaration that binds one facet field to a behavior primitive, such as `has-deadline` binding `due_at` to `temporal`. New capabilities do not require kernel changes; only a genuinely new primitive does. (ADR-0019, ADR-0020)
-- **Tier 1 / Tier 2 plugin** — Tier 1 = declarative manifest (source + auth + fetch + field→Item/facet mapping) run by a generic engine; an AI agent generates the mapping from a sample response. Tier 2 = in-repo TS implementing the Plugin interface, for sources needing real logic (OAuth, sesskey, scraping). Campus is Tier 2. (ADR-0017)
-- **edstem-cli / moodle-cli** — The existing sibling Python CLIs. They stay independent and keep serving the local/terminal/agent use case. The campus plugin does **not** import them; it reimplements the small subset of API calls it needs (see ADR-0002).
-- **Worker** — A single Cloudflare Worker (TypeScript). Owns scheduled ingestion, D1 storage, the MCP endpoint, a scheduler Durable Object, and a small password-protected settings page. The whole product is this one deployable.
-- **Runner (local)** — *Rejected.* An earlier idea: a long-running process on the user's machine pulling LLM tasks to run against a locally-logged-in Claude/Codex. Superseded — the Worker calls subscription quota directly via custom AI SDK providers (ADR-0007), so no local process is needed. Kept here only as a historical fallback note.
-- **Ingestion** — The scheduler-driven pull: fetch enabled sources, normalize, diff against the last snapshot, and write Events.
-- **BYOK** — Bring Your Own Key. User supplies an Anthropic/OpenAI/OpenRouter/DeepSeek/Google API key, used for server-side LLM work when a subscription token isn't available. Implemented via official Vercel AI SDK providers — free breadth, zero maintenance. (ADR-0007)
-- **Subscription token** — An OAuth/session credential from a Claude or Codex *subscription* (not an API key), stored in Worker secrets so cron jobs can call the model on the user's plan quota. Higher reward, higher fragility — see ADR-0004 risk register.
-- **AI SDK interface** — The Vercel AI SDK (`generateText` etc.). *All* job code talks only to this; providers are swappable instances behind it. Workers-native. (ADR-0007)
-- **Custom subscription provider** — A self-written AI SDK provider (`claude-subscription`, `codex-subscription`) that does OAuth refresh + official-client-mimicking fetch to use subscription quota. Protocol reference is OpenClaw; code is ours and Workers-compatible. The fragile mimicry is quarantined here — when a provider changes fingerprints, only this package changes. Community `ai-sdk-provider-claude-code`-style packages don't work: they spawn a CLI subprocess, which Workers lack. (ADR-0007)
-- **Degradation chain** — Subscription token → BYOK → skip LLM step + notify. Mechanically, this is provider-instance swapping behind the AI SDK interface. The data pipeline never fails because of an LLM outage; only the LLM step is skipped. (ADR-0004, ADR-0007)
-- **Job registry** — The open catalog of server-side agent jobs (daily digest, Ed↔assessment association, real-time post triage, study planning, …). Each entry has an enable toggle, its own schedule, a credential preference, and metered usage. None are hardcoded-on; users select. (ADR-0008)
-- **Hard cap** — User-set monthly ceiling (tokens or $). On breach, LLM jobs auto-pause + notify; ingestion keeps running. Backed by real metered usage from API responses, not static estimates. (ADR-0008)
-- **notifier** — Pluggable outbound-notification interface with built-in Telegram / Discord / email adapters. User supplies their own webhook/token. The IM-bot surface reuses it. (ADR-0010)
-- **Source adapter** — Historical name for what is now a Tier-2 code plugin. Plugins emit generic Items + facets, not the superseded universal Course/Assessment/Event schema. (ADR-0012, ADR-0017)
-- **hot / archived** — Retention states. Current data is hot; old non-course Items become `archived` and leave normal query results. A freshly pulled Item becomes hot again before retention is re-evaluated. (ADR-0011)
-- **Course (unified)** — One row in D1 representing a single real course, even when it appears in both Ed and Moodle. The Ed↔Moodle link is proposed by the user's MCP agent and confirmed by the user (ADR-0005).
-- **Assessment** — A unified tracked entity: name, course, due date, submission/completion status, `source` field. Primary source is Moodle timeline; Ed posts annotate it.
-- **Event** — A timeline row recording a *change*: new assessment, due-date shift, status change, or a relevant new Ed post. What "change detection" produces and what the user queries against.
-- **keep-alive** — A scheduler cycle that loads Moodle `/my/`, keeping the session warm and deriving a fresh `sesskey` for AJAX calls. (ADR-0003, ADR-0021)
-- **MCP endpoint** — The v1 face of the product. The Worker exposes an MCP server; the user connects from Claude Desktop/Code or ChatGPT. This is how "Claude or Codex account access" is satisfied for *interactive* use — the user's own client does the reasoning, so the Worker needs no LLM for querying.
-- **Settings page** — A password-protected operator page for non-secret behavior and connection status. Credentials are set out-of-band as Worker Secrets; values are never rendered or stored in D1. (ADR-0022)
-- **Playbook** — A named, human-authored procedure (weekly plan, decompose assignment, forum brief) that tells the resident Pi agent what to check and how, using only the read-only agent tools. Playbooks are markdown source under `src/agent/playbooks/*.md`, compiled to `src/agent/playbooks.ts` by `npm run playbooks:build`; a sync test catches drift. Both the conversational agent's system prompt and the ephemeral `PlaybookRunner` are built from the same procedures. (ADR-0031)
-- **Plan** — A saved, per-subject text artifact the agent writes with `save_plan` and re-reads with `get_plan` (e.g. a weekly plan keyed by ISO week, or an assignment plan keyed by the assessment's item id). Stored in the `plans` D1 table, one row per `(kind, subject)`, upserted on every save. (ADR-0031)
-- **Brief** — The short natural-language result a playbook run returns to the caller (e.g. the forum-brief playbook's summary of new staff/pinned Ed posts). Produced by `PlaybookRunner.run()`; not persisted unless the caller chooses to save it as a plan. (ADR-0031)
+## Product
+
+- **unicorn** — The memory layer of a student's own AI agent: one Cloudflare Worker on their free account that ingests campus sources hourly, remembers them, joins one course across systems, and serves the result to the student's client (Claude Code, claude.ai, ChatGPT, Cowork) through an MCP door with widgets. It has no model of its own. (ADR-0034)
+- **Live vs memory** — The same source in two places by design: mounted in the client it is *live* (real-time, stateless); ingested by unicorn it is *memory* (baseline, change detection, cross-source join). The rule that answers "why not just mount it in Claude". (ADR-0034)
+- **Harness** — The student's client plus its scheduler plus the plugin we ship for it. Where reasoning runs. Not our code, except the plugin. (ADR-0035)
+- **Worker** — The single Cloudflare Worker (TypeScript) that is the whole deployable: scheduled ingestion, D1, the door and admin MCP servers, the OAuth server, the scheduler Durable Object, and `/settings`.
+
+## Body
+
+- **Kernel** — The source-agnostic core: ingestion, D1 storage, Item + facet model, change detection, buckets, the course resolver, the daily digest, retention. Everything a plugin can't touch. (ADR-0015, ADR-0036)
+- **Plugin** — A source integration: identity, auth, fetch, mapping, emitted facets. Ingestion only. Tier 1 = declarative manifest (one HTTPS fetch or one remote MCP tool call); Tier 2 = in-repo code. (ADR-0017, ADR-0018, ADR-0033)
+- **Campus plugin** — The Tier-2 bundle of Ed Discussion, Moodle and Canvas. Reimplements the small API subset it needs; does not import the sibling CLIs. (ADR-0002, ADR-0038)
+- **canvas-mcp** — `vishalsachdev/canvas-mcp`, the recommended *live* Canvas source for the client (student profile). unicorn ingests Canvas with its own plugin and does not call canvas-mcp. (ADR-0038)
+- **Item** — The generic record every plugin produces: `id, source, kind, title, timestamp, url, body, raw`, plus `bucket`, `topic`, `labeled_by`. (ADR-0016, ADR-0036)
+- **Facet** — An optional typed structure on an Item (`course-identity`, `deadline`, `thread`, `author`, …). Open vocabulary. (ADR-0016)
+- **Capability / primitive** — A capability binds one facet field to one of five behavior primitives: `temporal`, `state`, `relation`, `actor`, `scalar`. New capabilities need no kernel change. (ADR-0019, ADR-0020)
+- **course-identity** — The facet that names a course: `code`, `term`, `title`. `term` distinguishes offerings of the same code. (ADR-0036)
+- **Course resolver** — The ladder that answers "which Items are this course": confirmed relation → normalised code (+ term) → nothing automatic; fuzzy candidates only via `suggest_links`. Ambiguity is returned, never guessed. (ADR-0036)
+- **Relation** — A confirmed link between two Items across sources (`same-course`), written by `link_items`. The first rung of the resolver. (ADR-0005, ADR-0036)
+- **Ingestion / cycle** — The hourly scheduler-driven pull: fetch, normalize, diff, events, structural labels, daily digest, retention. LLM-free end to end. (ADR-0021, ADR-0034)
+- **keep-alive** — A cycle step that loads Moodle `/my/` to keep the Okta session warm and derive a fresh `sesskey`. (ADR-0003)
+- **Event** — A row recording one change in student terms: `item.added / archived / restored`, `deadline.changed`, `state.changed`, `grade.changed`, `content.changed`, `notice.posted`. Monotonic id = the client cursor. Never pruned. (ADR-0036)
+- **Cursor** — The event id a client passes to `changes_since` to get everything after it. Held by the client; the server keeps no per-client state. (ADR-0035)
+- **Bucket** — A two-level path on an Item: `course/<code>/<assignment>`, `course/<code>/general`, `life/events`, `life/admin`, `life/other`. The unit students think in. (ADR-0036)
+- **Label / triage** — Assigning a bucket (and optional `topic`). Structured Items are labelled at ingest (`labeled_by: structure`); free text is labelled by the `triage` playbook running as a routine (`triage`), or by the client on the spot (`client`). No regex classifier. (ADR-0036)
+- **Daily digest** — A zero-LLM brief written once a day at the user's local 07:00 when anything happened: changes since the last digest, deadlines in 7 days, staff posts. (ADR-0034)
+- **hot / archived** — Retention states. Archiving emits `item.archived`; a re-pulled Item becomes hot again. (ADR-0011, ADR-0036)
+
+## Door and harness
+
+- **Door** — `POST /mcp`, the one MCP server a client agent mounts: state tools, MCP prompts, widgets, user-defined tools. Read-only on sources. (ADR-0035)
+- **Admin surface** — `POST /mcp/admin`, bearer `ADMIN_TOKEN`: sources, links, tool definitions, inspection. Never mounted by a client agent. (ADR-0030, ADR-0035)
+- **Brief** — A durable inbox row (`briefs` table) read through `get_briefs`, acknowledged through `ack_briefs`, written by the daily digest and by routines through `write_brief`. (ADR-0031, ADR-0035)
+- **Plan** — A saved per-subject text artifact (`plans` table, one row per kind + subject) written with `save_plan`, read with `get_plan`, shared across every client. (ADR-0031)
+- **Playbook** — A markdown procedure (`weekly-plan`, `decompose-assignment`, `forum-brief`, `triage`) served as an MCP prompt and through `run_playbook`, executed by the client's model. Door tools required; live sources optional. (ADR-0031, ADR-0035)
+- **Routine** — A scheduled run of a playbook by the harness's own scheduler (Claude Code routines, Cowork scheduled tasks). Reaches unicorn as a connector. (ADR-0035)
+- **Plugin (Claude Code)** — The package we ship for Claude Code: door MCP config, playbooks as skills, a SessionStart hook that pulls briefs, a `setup-routines` skill. Distinct from a *source* plugin. (ADR-0035)
+- **Connector** — A remote MCP server added in claude.ai or ChatGPT. Requires OAuth; the Worker is the authorization server. (ADR-0035)
+- **User-defined tool** — A door tool that is data, not code: name, description, input schema, one read-only SQL statement over the `v_*` views. Defined by the student's agent on the admin surface; up to 20. (ADR-0035)
+- **Tool library** — The `unicorn-tools` GitHub repository with an `index.json`; `browse_tools`, `install_tool`, `publish_tool`. No hosted registry. (ADR-0035)
+- **Widget** — A `ui://unicorn/<name>` HTML resource attached to a tool result, rendered by ChatGPT and Claude via the MCP Apps extension. Additive to the text result; actions touch unicorn state only. (ADR-0037)
+- **Settings page** — `/settings`, Basic auth with `ADMIN_TOKEN`: onboarding by source, token entry straight into secrets, OAuth consent, timezone, sync status. The only web page; not a dashboard. (ADR-0022, ADR-0038)
+
+## Retired
+
+- **Resident agent / Pi loop / `ask`** — *Retired (ADR-0034).* The in-Worker agent of ADR-0028/0029. Removed; reasoning moved to the harness.
+- **BYOK, Workers AI runtime, subscription token, AI SDK interface, degradation chain, job registry, hard cap** — *Retired (ADR-0034).* The server-side LLM layer of ADR-0004/0007/0008. The Worker calls no model.
+- **notifier / outbox** — *Retired (ADR-0034).* Push channels of ADR-0010/0032. The client pulls.
+- **Judgment notes memory** — *Retired (ADR-0034).* The capped-notes half of ADR-0024; buckets and labels replace it. The `corrections` domain behind `remember` stays.
+- **Runner (local)** — *Rejected* earlier: a local process pulling LLM tasks. Never built.
+- **Source adapter** — Historical name for a Tier-2 plugin. (ADR-0012)
+- **edstem-cli / moodle-cli** — The sibling CLIs, now also remote MCP servers. Live sources for the client; unicorn does not import them. (ADR-0002)

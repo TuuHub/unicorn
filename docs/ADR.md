@@ -639,3 +639,141 @@ Playbook text is part of the system prompt for every `ask` turn (three procedure
 - Adding a source is a JSON manifest, again; existing edstem/moodle/ontrack MCP servers can be mounted the same way if their tools return JSON.
 - Gmail cannot be exercised end-to-end in CI; the plugin is tested against a fake MCP server, the OAuth flow against a fake token endpoint, and the preset is validated against the manifest schema. First real-account verification is a deploy-time smoke step recorded in SETUP.
 - Migration: `0011_oauth_tokens.sql`.
+
+---
+
+## ADR-0034 — Brain removed: unicorn is the memory layer; reasoning runs in the user's harness
+
+**Status:** Accepted (2026-09-21; supersedes ADR-0029 and ADR-0028; retires the LLM layer of ADR-0004/0007/0008, the notifier of ADR-0010/0032, and the judgment-notes half of ADR-0024; amends ADR-0031)
+
+**Context.** ADR-0029 put a Pi loop inside the Worker because, at the time, no client could act while the user was away. Two facts changed within a week of shipping it:
+
+1. Harnesses now run strong models on a schedule and reach remote MCP servers from there — Claude Code routines and Cowork scheduled tasks through claude.ai connectors. "Nobody is asking" no longer requires a model in the Worker.
+2. The sibling CLIs (Ed, Moodle, OnTrack) became remote MCP servers. The client can query live sources from any device, so unicorn is no longer needed for reach.
+
+Meanwhile the in-Worker model layer was the least reliable component: the free Workers AI model leaked tool-call markup and skipped `save_plan`; BYOK meant paying twice for a model the user already pays for in the client; every brief row in production was model-produced, so the whole proactive story rested on the weakest part. The layer plus its outbox and notifier is about 4,800 lines including tests.
+
+The question that survives is: **with every source mounted directly in the client, what can it still not do?** Exactly four things — remember (a baseline, so mutations are visible), join (one course across three systems), keep shared state (plans, briefs, labels reachable from any client and any routine), and render (a widget instead of prose). None needs a model in the Worker.
+
+**Decision.** unicorn is the **memory layer** of the user's campus agent. Reasoning runs in the harness.
+
+- **Delete** `src/agent/*` except the playbook markdown, the `ask` tool and `POST /agent`, the Workers AI / BYOK runtime, the model jobs (`daily-digest`, `triage`, `memory-consolidation`), the token ledger and caps, `src/notifier.ts` and `src/outbox.ts`. No degradation path is kept; a branch nobody tests is a liability.
+- **Keep** the body unchanged: hourly ingestion, Items and facets, change detection, retention, the scheduler, the corrections memory behind `remember`. The judgment-notes memory domain (ADR-0024) is retired; buckets and labels (ADR-0036) replace it.
+- **Replace** model-written briefs with a zero-LLM daily digest (changes since the last digest, deadlines in the next 7 days, staff posts) written once a day at 07:00 in the user's timezone and skipped when empty, and with `write_brief` for routines (ADR-0035).
+- **Move** playbooks out of the Worker's prompt and into the client: they are served as MCP prompts and through `run_playbook` (ADR-0035) and executed by whichever model the user already runs.
+
+The rule that settles every future "why not just mount it in Claude" question: **a source mounted in the client is live; the same source ingested by unicorn is memory. Both at once is the design, not a conflict.**
+
+**Consequences.**
+- About 4,800 lines removed; `src/runtime/cycle.ts` shrinks to ingest, diff, digest and retention. Tables from migrations 0005–0008 are dropped in a new migration; `plans` and `briefs` stay.
+- ADR-0023's weekend test applies to the whole Worker again; there is no exempt brain.
+- README and SETUP lose model configuration entirely; the first-run path has no AI credential of any kind.
+- The ADR trail is the story: the loop was built, measured against harness-side scheduling, and removed. Knowing what to delete is the engineering claim.
+
+---
+
+## ADR-0035 — Door v2: state tools, MCP prompts, OAuth for connectors, user-defined SQL tools
+
+**Status:** Accepted (2026-09-21; supersedes ADR-0030)
+
+**Context.** The door exposes `ask`, `get_briefs`, `ack_briefs`, `remember`; the one capability nobody else has, "what changed", is reachable only by paying for an `ask` turn. Connectors on claude.ai and ChatGPT need OAuth: ChatGPT accepts OAuth or no auth only, and Claude's static-header option is a beta gated on an organisation admin. ChatGPT consumes tools only, no prompts or resources. Users want to shape their own tools without a redeploy and without running code in the Worker.
+
+**Decision.**
+
+**Tools.** The door (`/mcp`) exposes, all read-only on sources:
+
+| tool | returns |
+|---|---|
+| `get_briefs`, `ack_briefs` | the durable inbox (unchanged) |
+| `write_brief({ kind, subject, title, body, idempotencyKey })` | for routines; a repeated key is a no-op |
+| `changes_since({ cursor?, limit? })` | `{ events[], nextCursor, counts }` — the lossless feed of ADR-0036; the server holds no client state |
+| `course({ code })` | one course across every source, grouped by bucket |
+| `life()` | the non-course buckets |
+| `search_items({ query, kind?, course?, since? })` | FTS5 over title and body, ranked |
+| `get_plan`, `save_plan`, `remember` | unchanged |
+| `run_playbook({ name })` | `{ instructions, data }` — the playbook text plus the data it needs, for tool-only clients |
+| `label_items([{ source, itemId, bucket, topic? }])` | the triage routine's write path |
+| `status()` | last sync and error per source, no secrets |
+
+Plus up to 20 **user-defined tools** (below). Server `instructions` tell the client to pull briefs on session start, to call `changes_since` when asked what is new, and to use `remember` on every correction.
+
+**Prompts.** Each playbook is registered under `prompts/list` with the same markdown `run_playbook` returns. Contract for playbook text: door tools are required; source MCPs (Ed, Moodle, canvas-mcp, Gmail) are optional enrichment, and the procedure must complete without them. Four playbooks: `weekly-plan`, `decompose-assignment`, `forum-brief`, `triage`.
+
+**Auth.** The Worker is an OAuth 2.1 authorization server via `workers-oauth-provider` with dynamic client registration on, since both Claude and ChatGPT register themselves. The consent page sits behind the existing `/settings` Basic auth; for a single-user deployment, logging in is entering `ADMIN_TOKEN`. The `MCP_TOKEN` bearer path stays for local Claude Code and development. Both credentials map to the door identity. The admin surface stays bearer-only.
+
+**User-defined tools.** A tool is data, not code: `{ name, description, inputSchema, sql }`. Admin tools `define_tool`, `list_tools`, `delete_tool`, `describe_schema`; the door lists defined tools dynamically and emits `tools/list_changed`. Guards are mechanical: `SELECT` or `WITH` only, one statement, bound parameters, access limited to the views `v_items`, `v_upcoming`, `v_changes`, `v_courses`, `v_buckets`, an enforced `LIMIT 200`, an `EXPLAIN` at definition time, a cap of 20. Sharing is a GitHub repository (`unicorn-tools`) with an `index.json`: admin `browse_tools`, `install_tool`, and `publish_tool`, which returns a PR-ready payload for the user's agent to open with `gh`. No hosted registry.
+
+**Client packaging.** A Claude Code plugin bundles the door's MCP config (token via `${CLAUDE_PLUGIN_OPTION_…}`), the playbooks as skills, a SessionStart hook that pulls briefs, and a `setup-routines` skill that creates the four routines through the harness's scheduler. ChatGPT is a tier-0 client: OAuth connector, `run_playbook`, widgets (ADR-0037); ChatGPT Tasks calling connectors is undocumented and offered as best effort. Cowork uses the connector plus its scheduled tasks.
+
+**Consequences.**
+- The door has about twelve fixed tools plus the user's own; `ask` and `POST /agent` are gone (ADR-0034).
+- `mcp-door.test.ts` proves each tool, the prompts list, the OAuth metadata endpoints, and every SQL guard.
+- ChatGPT Free cannot add connectors; Claude Free can. Onboarding docs say so.
+
+---
+
+## ADR-0036 — Change model and buckets: lossless events, five buckets, harness-side triage, term-aware course linking
+
+**Status:** Accepted (2026-09-21; supersedes ADR-0005's agent-proposed matching; extends ADR-0016, ADR-0020, ADR-0033)
+
+**Context.** Events today are `item.created`, `item.updated`, `capability.changed`. Archiving emits nothing; a moved deadline is buried in a `capability.changed` row the reader has to decode. The `relations` table exists but no read path consults it; courses are joined at query time by a code-prefix `LIKE`. Ed threads carry a category that students use as the unit of conversation ("Assignment 2"), and most of what students care about is posted by staff. Gmail ingests the whole inbox for 14 days. Regex classification of posts was rejected: it misses.
+
+**Decision.**
+
+**Events.** Typed by what a student would ask about, not by which column changed: `item.added`, `item.archived`, `item.restored`, `deadline.changed` (before, after), `state.changed`, `grade.changed`, `content.changed` (full before and after, never clipped), `notice.posted` (a staff post, with an optional `topic`). Every row carries a monotonic id (the cursor), `course`, `bucket`, `source`, `kind`, `url`. Events are never pruned; retention archives Items and emits `item.archived`.
+
+**Buckets.** A two-level path stored on the Item: `course/<code>/<assignment>`, `course/<code>/general`, `life/events`, `life/admin`, `life/other`. Structured sources are labelled deterministically at ingest: assessments own their bucket; Ed threads land in the assignment bucket whose title matches their category, otherwise `general`. Free text (email, general forum posts) is labelled by the `triage` playbook running as a routine, through `label_items`, with `labeled_by` recording `structure`, `triage` or `client`. Unlabelled Items are still returned, flagged `unlabeled`, and the client model decides on the spot. No regex.
+
+**Course linking.** A resolver, first hit wins: (1) a confirmed relation from `link_items`; (2) exact match on normalised code (uppercase, whitespace and `_S2_2026`-style suffixes stripped) with `term` when both sides carry one, falling back to the current active offering when one does not; (3) nothing automatic beyond that — `suggest_links` lists fuzzy title candidates for the user's agent to confirm. `course-identity` gains `term`. Assessment ↔ Ed category uses the same ladder on normalised titles. Ambiguity returns every match with `ambiguous: true`; the server never guesses.
+
+**Gmail scope.** University domains, mail mentioning a course code, and a sender allowlist edited in `/settings`. Not the whole inbox.
+
+**Consequences.**
+- Migration `0012`: events v2, `bucket` / `topic` / `labeled_by` on Items, `term` on `course-identity`, an FTS5 table over title and body. Existing event rows are kept under their old types; the cursor starts at the current max id.
+- The Ed plugin emits the thread category; the Canvas plugin (ADR-0038) emits `course_code` and term.
+- `course()` and `life()` are views over buckets; `changes_since` is flat and lets widgets group.
+
+---
+
+## ADR-0037 — Widgets: MCP Apps resources, six widgets, text fallback, unicorn-state-only actions
+
+**Status:** Accepted (2026-09-21)
+
+**Context.** Both ChatGPT and Claude (web, desktop, mobile, on individual plans) render the MCP Apps extension: a tool result points at a `ui://` resource served as `text/html;profile=mcp-app`. Rendering has open reliability bugs on some desktop and Claude Code paths. The user's judgment: for a question a student asks every day, a good widget is more reliable than a page of prose.
+
+**Decision.** Six widgets, one implementation for both clients, each a static HTML file bundled at build and served as a `ui://unicorn/<name>` resource:
+
+| widget | tool | actions |
+|---|---|---|
+| brief card | `get_briefs` | `ack_briefs` |
+| course view (buckets, expandable threads) | `course` | none |
+| changes feed (grouped course → bucket) | `changes_since` | none |
+| plan checklist | `get_plan` | `save_plan` |
+| deadline timeline | `search_items` / upcoming | none |
+| connection status | `status` | none |
+
+Every tool result also carries its full text content; the widget is additive and the text is the fallback. Widget actions call door tools only and mutate unicorn state only: `ack_briefs`, `save_plan`, `remember`, `label_items`. A widget never writes to a source; posting to Ed or submitting to Canvas is the user's agent calling the source's own MCP.
+
+**Consequences.**
+- Build order: brief card, course view, changes feed; the rest after Canvas.
+- Tests snapshot each widget's HTML and assert the text content is complete without it.
+- Writing to sources from a widget would need its own security model and is out of scope by decision, not by omission.
+
+---
+
+## ADR-0038 — Canvas: Tier-2 ingest plugin; canvas-mcp is the live toolbelt; onboarding by source
+
+**Status:** Accepted (2026-09-21; extends ADR-0017, ADR-0033)
+
+**Context.** Canvas is the LMS most universities outside Monash run, students can mint their own personal access tokens, and Ed + Canvas is a common pairing (USyd, UNSW, Stanford, Berkeley). `vishalsachdev/canvas-mcp` is an active MIT FastMCP server with 102 tools, a `--role student` profile, a stateless HTTP mode that takes the caller's token per request, and no term or planner output. The Tier-1 manifest does one fetch with no pagination or fan-out, which Canvas needs. Blackboard has no personal-token path and is out.
+
+**Decision.**
+- **Ingest** is a Tier-2 plugin, `src/plugins/campus/canvas-plugin.ts`: courses (with `include[]=term`), assignments, the user's own submissions, announcements and discussion topics, Link-header pagination, configured by `CANVAS_BASE_URL` and `PLUGIN_SECRET_CANVAS_TOKEN`. It emits `course-identity` (code, term), assessments (temporal + state), staff posts (actor) and threads. Pagination and the course-code cache follow canvas-mcp's implementation.
+- **Live** access is canvas-mcp's student profile, recommended in docs and named in playbooks as the optional enrichment source for Canvas users. unicorn does not call it for ingest: a cron that needs four GETs should not depend on a Python service the user has to keep alive.
+- **Upstream**: a PR to canvas-mcp surfacing the term it already fetches.
+- **Onboarding by source**: `/settings` gains a source form — pick a preset (Ed, Moodle, Canvas, Gmail), enter the base URL, paste the token (stored as a `PLUGIN_SECRET_*`, never through a model), capture the browser timezone, show last sync and errors. `npm run setup` asks which sources the user has and configures only those. The Canvas test bed is a Free-for-Teacher account. Piazza is the next candidate source.
+
+**Consequences.**
+- The campus plugin is Ed + Moodle + Canvas; Moodle stays the hard one (Okta), so a Canvas + Ed student onboards with two tokens and no browser session push.
+- Canvas is marketed only after one real Canvas + Ed student has installed it.
+- First external users are named friends, not a post; the post comes after three successful installs.

@@ -2,205 +2,248 @@
 
 This describes the whole system in its intended final form, from zero. It's the synthesized picture; the decision trail and rationale live in [ADR.md](ADR.md), the vocabulary in [GLOSSARY.md](GLOSSARY.md). When this doc and an ADR disagree, the ADR is authoritative (it records *why*); fix this doc.
 
+Rewritten 2026-09-21 for ADR-0034 – ADR-0038. Section 13 records what is built and what is next as of that date.
+
 ---
 
 ## 1. What unicorn is, in one paragraph
 
-unicorn is an **AI-native information aggregation platform** you deploy to your own free Cloudflare account as a **single Worker**. Plugins ingest from arbitrary sources (campus platforms, RSS, APIs, …) into one generic model; the kernel detects changes, tracks what matters, and exposes everything to **your own** AI agent over MCP — plus optional server-side jobs that summarize and notify on your LLM quota. The **campus plugin** (Ed Discussion + Moodle) is the flagship that proves the kernel against a real pain: tracking assessments scattered across platforms.
+unicorn is the **memory layer of a student's own AI agent**: a single Cloudflare Worker on the student's own free account that ingests their campus sources (Ed, Moodle, Canvas, Gmail) every hour, remembers what they looked like, joins one course across every system, and hands the result to whatever agent the student already runs — Claude Code, claude.ai on a phone, ChatGPT, Cowork — through one MCP door with widgets. It has **no model of its own** (ADR-0034). Thinking happens in the client, interactively or on a schedule; unicorn remembers, connects, notices change, and draws.
 
-The design bet (ADR-0015/0016): a generic data model would normally cripple a platform, because tracking and reasoning need structure. unicorn resolves that by being **AI-native** — structured behavior binds where plugins declare it, and an LLM supplies structure everywhere else at read time. So the platform sits far toward "accepts anything" without becoming a dumb blob store.
-
----
-
-## 2. The shape: one Worker, one kernel, three faces
-
-Everything is a single Cloudflare Worker (ADR-0001, ADR-0009, ADR-0014). Not a service, not a monorepo, not microservices. One deployable the user owns.
-
-```
-                         ┌─────────────────────────────────────────────┐
-                         │              ONE CLOUDFLARE WORKER            │
-                         │                                              │
-  scheduler alarm ─────▶ │  ┌────────────┐   ┌──────────────────────┐   │
-                         │  │  Plugins   │──▶│        KERNEL         │   │
-  (Ed API, Moodle,       │  │ (ingest)   │   │                      │   │
-   RSS, any source)      │  └────────────┘   │  normalize → Item    │   │
-                         │   Tier1 manifest   │  + facets            │   │
-                         │   Tier2 code       │  change detection    │   │
-                         │                    │  → Events            │   │
-                         │                    │  job registry        │   │
-                         │                    │  notifier            │   │
-                         │                    │  retention           │   │
-                         │                    └──────────┬───────────┘   │
-                         │                               │               │
-                         │                          ┌────▼─────┐         │
-                         │                          │    D1    │         │
-                         │                          └────┬─────┘         │
-                         │        ┌──────────────────────┼────────────┐  │
-                         │     ┌──▼───┐   ┌──────┐  ┌────▼───┐   ┌────▼─┐│
-                         │     │ door │   │ admin│  │dashboard│  │  IM  ││
-                         │     │ /mcp │   │ /mcp/│  │ (later) │  │ push ││
-                         │     │      │   │ admin│  └─────────┘  │ only ││
-                         │     └──┬───┘   └──┬───┘               └──────┘│
-                         └────────┼──────────┼───────────────────────────┘
-                                  │          │
-                         user's own client   operator (you / a coding agent)
-```
-
-- **Kernel** — source-agnostic core. Owns the Item + facet model, change detection, the job registry, the notifier, and retention. The product *is* the kernel.
-- **Plugins** — bring sources. Ingestion-only (ADR-0018): fetch + map to Items/facets, nothing downstream.
-- **Surfaces** — thin faces over the kernel (ADR-0009). MCP is split into two endpoints (ADR-0030): the **door** (`/mcp`, four tools) for a client agent, and **admin** (`/mcp/admin`, the operator tool set); dashboard is deferred; IM is push-only (ADR-0032) — no converse loop. No surface owns business logic.
+The rule that settles every "why not just mount the source in Claude": **a source mounted in the client is live; the same source ingested by unicorn is memory. Both at once is the design.** A client with every source mounted still cannot answer "what changed since Tuesday", cannot see that one course lives in three systems, cannot share a plan between a laptop session and a phone session, and cannot show a card instead of a paragraph. Those four are the product.
 
 ---
 
-## 3. The data model: generic Item + optional typed facets
+## 2. The shape: one Worker, a body, a door, and the harness around it
 
-(ADR-0016) Every record is a **generic Item**. Plugins optionally attach **typed facets**; facets optionally declare **capabilities** that bind fields to behavior **primitives** (ADR-0019/0020).
+```
+   the student's harness (not our code)                    ONE CLOUDFLARE WORKER (ours)
+ ┌──────────────────────────────────────────┐    ┌──────────────────────────────────────────────┐
+ │ Claude Code · claude.ai · ChatGPT · Cowork│    │                                              │
+ │                                          │    │  hourly alarm ──▶ Plugins ──▶ KERNEL          │
+ │  live sources mounted directly:          │    │   (Ed, Moodle, Canvas,      Item + facets     │
+ │   Ed MCP · Moodle MCP · canvas-mcp · Gmail│    │    Gmail, RSS, any MCP)     diff → Events v2  │
+ │                                          │    │                             buckets           │
+ │  playbooks as MCP prompts / skills       │    │                             course resolver   │
+ │  routines: weekly-plan, decompose,       │    │                             daily digest      │
+ │            forum-brief, triage           │◀──▶│                             retention         │
+ │  SessionStart hook: pull briefs          │    │                                  │            │
+ │  widgets rendered from ui:// resources   │    │                             ┌────▼────┐       │
+ └──────────────────────────────────────────┘    │                             │   D1    │       │
+              ▲ OAuth / bearer                   │                             └────┬────┘       │
+              │                                  │        ┌─────────────────────────┼─────┐      │
+              ▼                                  │   ┌────▼────┐  ┌──────────┐  ┌───▼───┐ │      │
+      the student (operator)                     │   │  door   │  │  admin   │  │/settings│      │
+      ───────────────────────────────────────────┼──▶│  /mcp   │  │/mcp/admin│  │onboard │      │
+                                                 │   └─────────┘  └──────────┘  └────────┘      │
+                                                 └──────────────────────────────────────────────┘
+```
+
+- **Kernel** — the source-agnostic body. Owns the Item + facet model, change detection, buckets, the course resolver, the zero-LLM daily digest, retention, the scheduler. No model, no outbound push.
+- **Plugins** — bring sources. Ingestion-only (ADR-0018): fetch and map to Items and facets, nothing downstream.
+- **Door** (`/mcp`) — the one surface a client agent mounts: state tools, MCP prompts, widgets, user-defined tools (ADR-0035, ADR-0037).
+- **Admin** (`/mcp/admin`) — operator tools for the student or their coding agent: sources, links, tool definitions, inspection.
+- **`/settings`** — the only web page: onboarding by source, OAuth consent, timezone, sync status. It is not a dashboard; anything about reading data belongs to the agent.
+- **Harness** — the client, its scheduler, and the plugin we ship for it. Playbooks run there. That is where reasoning lives.
+
+---
+
+## 3. The data model: generic Item + typed facets + a bucket
+
+(ADR-0016, ADR-0036) Every record is a **generic Item**. Plugins optionally attach **typed facets**; facets optionally declare **capabilities** that bind fields to behavior **primitives** (ADR-0019/0020). ADR-0036 adds a bucket path to every Item.
 
 ```
 Item {
-  id          # stable, plugin-scoped
-  source      # which plugin/source produced it
-  kind        # plugin-declared, free-form ("thread", "assignment", "email"…)
-  title
-  timestamp   # canonical time for ordering
-  url
-  body        # text/markdown
-  raw         # original payload, kept for reprocessing
-  facets[]    # zero or more typed facets
+  id, source, kind, title, timestamp, url, body, raw
+  bucket       # "course/FIT3175/assignment-2" | "course/FIT3175/general" | "life/events" | "life/admin" | "life/other" | null
+  topic        # optional free label from triage ("exam", "release", "club", …)
+  labeled_by   # "structure" | "triage" | "client" | null
+  facets[]
 }
 
-Facet {
-  type            # free-form ("deadline", "submission", "thread"…)
-  data            # arbitrary fields
-  capabilities[]  # bindings of data fields onto behavior primitives
-}
+Facet { type, data, capabilities[] }
+
+course-identity facet { code, term, title }     # term is new; Canvas and Ed supply it, Moodle parses shortname
 ```
 
 ### Behavior primitives — the finite kernel surface
 
-The one thing that is small, fixed, and carefully designed (ADR-0020). Capabilities are unbounded and dynamic; they *bind onto* these five:
+Unchanged (ADR-0020). Capabilities bind onto five primitives: `temporal`, `state`, `relation`, `actor`, `scalar`. A new domain need is a declaration, not a kernel change. The primitives are what turn a field diff into a typed event in section 6.
 
-| Primitive | A field is… | Unlocks | campus example |
-|-----------|-------------|---------|----------------|
-| `temporal` | a point in time | offset reminders, change-is-event, calendar/timeline | assessment `due_at` |
-| `state` | a value in a set | transition-is-event, notify-on-transition | submission status; read/unread |
-| `relation` | a reference to another item | threading, grouping | forum reply → thread |
-| `actor` | a person/entity | filter/group by actor | post author (staff vs peer) |
-| `scalar` | a number | threshold alerts, trend | grade, unread count |
+### Course identity across sources
 
-A new domain need (`has-grade`) is normally a *declaration* onto `scalar` + config — **no kernel change**. Kernel code changes only if a genuinely new primitive is ever required, which is rare by construction.
+One course exists in Moodle, Ed, Canvas and mail under different ids. The **course resolver** (ADR-0036) answers "which Items are FIT3175", first hit wins:
 
-v1 ships primitive validation, primitive-typed change Events, temporal queries, confirmed relations, and generic MCP access to every facet. Configurable reminder offsets, transition targets, and scalar thresholds are policy features after v1; the primitive model is their stable substrate, not a claim that every policy UI already exists.
+1. a confirmed relation (`link_items`, admin);
+2. exact match on the normalised code, with `term` when both sides carry one, else the current active offering;
+3. nothing automatic beyond that — `suggest_links` lists fuzzy candidates for the agent to confirm.
+
+Assessment ↔ Ed category uses the same ladder on normalised titles. Ambiguity is returned, never resolved by guessing.
 
 ---
 
-## 4. The ingestion → surface lifecycle
+## 4. The ingestion lifecycle
 
-One scheduler cycle (an hourly self-renewing Durable Object alarm, ADR-0021):
+One scheduler cycle, hourly, a self-renewing Durable Object alarm (ADR-0021):
 
-1. **Fetch** — each enabled plugin pulls from its source. Auth per plugin (Ed token direct; Moodle session cookie + derived sesskey, ADR-0003).
-2. **Normalize** — plugin maps raw payload → Items (+ facets + capability bindings). Tier-1 plugins run a declarative manifest; Tier-2 plugins run code.
-3. **Diff** — kernel compares against the last snapshot per Item.
-4. **Events** — differences become Events, typed by the primitive that changed: a `temporal` field moving = "deadline shifted"; a `state` transition = "status changed"; a new Item = "new".
-5. **Jobs** — enabled agent jobs (ADR-0008) react: daily digest, post triage, etc. These consume LLM quota under budget caps.
-6. **Notify / serve** — the notifier (ADR-0010) pushes what crosses a threshold; surfaces serve queries and reads.
+1. **Fetch** — each enabled plugin pulls its source with its own auth.
+2. **Normalize** — plugin maps payload → Items + facets. Tier-1 runs a manifest; Tier-2 runs code.
+3. **Diff** — kernel compares against the stored Item.
+4. **Events** — differences become typed events (section 6), each with a monotonic id that doubles as the client cursor.
+5. **Label** — structured Items get their bucket deterministically: an assessment owns its bucket; an Ed thread joins the assessment bucket its category matches, else `general`. Free text stays unlabelled until the triage routine runs.
+6. **Digest** — once a day at the user's local 07:00, if anything happened: a brief listing changes since the last digest, deadlines in 7 days, staff posts. Zero LLM.
+7. **Retain** — old non-course Items are archived, which is itself an event.
 
-Steps 1–4 are **LLM-free** (ADR-0004). If every LLM path is exhausted, step 5 degrades to "skip + notify" and data freshness is unaffected.
-
----
-
-## 5. Plugins in detail (ADR-0017, ADR-0018)
-
-A plugin declares only: **identity, auth, fetch, mapping, emitted facets**. Two tiers, both compiled into the one Worker:
-
-### Tier 1 — declarative manifest
-For the many sources that are "hit an endpoint, map fields." A manifest (stored in D1, addable without redeploy) describes source, auth kind, fetch spec, and a field→Item/facet mapping. **AI is the killer feature**: an agent reads a sample response and generates the mapping — the user says "connect this API," the agent writes the plugin. Covers REST/RSS/JSON.
-
-### Tier 2 — in-repo code
-For sources needing real logic — OAuth dances, Moodle's sesskey flow, HTML parsing. Implements the Plugin interface in TS, compiled in, added by PR + redeploy. **Campus is Tier 2.**
-
-**Not in scope (deferred v3+):** dynamic third-party sandboxed plugins. That needs Workers for Platforms (paid) and a trust/security model that is its own project.
-
-### The campus plugin
-The flagship Tier-2 plugin bundling Ed + Moodle. Reimplements the small API subset it needs in TS (ADR-0002) — Moodle is clean AJAX JSON (`/lib/ajax/service.php`), not scraping. It emits facets like:
-- assignment/assessment → `temporal` (`due_at`) + `state` (submission status when explicit, otherwise `unknown`) + `scalar` (grade when the source payload exposes one)
-- forum post → facet with `relation` (thread) + `actor` (author) + `state` (read/unread)
-
-Monash's enabled timeline AJAX method currently exposes deadlines and action availability but not authoritative grades or enough information to distinguish every submitted/closed case. unicorn therefore never guesses: ambiguous submission state is `unknown`, and no grade facet is emitted without a numeric source value. Richer grade retrieval needs a supported JSON endpoint and remains outside v1.
-
-Cross-platform course matching (same course in Ed and Moodle) is proposed by the user's MCP agent and confirmed by the user (ADR-0005), now expressed as a `relation` linking Items across sources.
+Every step is LLM-free. There is no step 8.
 
 ---
 
-## 6. LLM layer (ADR-0004, ADR-0007, ADR-0008)
+## 5. Plugins and sources (ADR-0017, ADR-0018, ADR-0033, ADR-0038)
 
-All job code talks only to the narrow **Pi runtime / `TextGenerator` interfaces**. Providers are swappable instances behind them:
+Two tiers, both compiled into the one Worker:
+
+- **Tier 1 — declarative manifest.** One HTTPS fetch (JSON or RSS) or one remote MCP tool call (`transport: mcp`, bearer or Google OAuth), plus a field mapping. Stored in D1, installable without a deploy, writable by an agent from a sample response. Planned extension: pagination and fan-out over a list, so most REST sources fit without code.
+- **Tier 2 — in-repo code.** For sources needing real logic. The campus plugin: **Ed** (token; emits thread category and staff role), **Moodle** (Okta session pushed from the user's machine and kept alive), **Canvas** (personal token; courses with term, assignments, own submissions, announcements, discussion topics; Link-header pagination).
+
+**Gmail** is a Tier-1 MCP-transport preset against Google's official remote Gmail MCP with the user's own OAuth client (ADR-0033), scoped to university domains, mail mentioning a course code, and a sender allowlist (ADR-0036).
+
+**Live counterpart.** Each source the Worker ingests also exists as something the client can mount directly for real-time access: the Ed and Moodle remote MCPs, `canvas-mcp` in student mode, the client's own Gmail connector. Playbooks name them as optional enrichment and must complete without them.
+
+Not in scope: dynamic third-party sandboxed plugins; Blackboard (no personal tokens). Next candidate: Piazza.
+
+---
+
+## 6. Change model and buckets (ADR-0036)
+
+**Events** are typed by what a student would ask about:
+
+| event | carries |
+|---|---|
+| `item.added` / `item.archived` / `item.restored` | the item |
+| `deadline.changed` | before, after |
+| `state.changed` / `grade.changed` | before, after |
+| `content.changed` | full before and after, never clipped |
+| `notice.posted` | a staff post, optional `topic` |
+
+Every row has `id` (cursor), `course`, `bucket`, `source`, `kind`, `url`. **Events are never pruned.** Nothing that happened is lost; the client reads it through `changes_since(cursor)` and decides what matters.
+
+**Buckets** are the unit students actually think in:
 
 ```
-job → Pi runtime → Workers AI binding (default) or OpenAI-compatible BYOK → skip without affecting ingestion
+course/<code>/<assignment>   deadline, submission, the Ed threads in that category, staff answers
+course/<code>/general        lectures, exam arrangements, everything else about the course
+life/events                  clubs, seminars, career fairs — mostly from mail
+life/admin                   enrolment, fees, timetable, official notices
+life/other                   the rest
 ```
 
-- **Workers AI** = the zero-secret default model runtime, invoked through the native `AI` binding.
-- **BYOK** = an optional OpenAI-compatible provider configured through `AI_API_KEY` and `AI_BASE_URL`; it overrides Workers AI.
-- **Subscription providers** remain an end-state experiment, not v1 code. Their unofficial protocol and account-risk surface do not belong in the stable ingestion path.
-- **Degradation** = a missing or failed model marks only the job as skipped/failed. Data freshness never depends on it.
-
-**Agent jobs** live in a registry (ADR-0008): each has an enable toggle, a UTC schedule hour, a credential preference, and metered usage. Budget is three-layer: real metering → measured current-month projections → a preflight-enforced hard monthly cap that auto-pauses and notifies on breach (never ingestion). End-state catalog: daily digest, Ed↔assessment association, real-time post triage, study planning, extensible.
+Structured sources label themselves. Free text is labelled by the **triage playbook** running as a routine in the harness, through `label_items`. Unlabelled Items are still returned, flagged, for the client model to place on the spot. There is no regex classifier: it would miss, and a wrong bucket is worse than an honest `unlabeled`.
 
 ---
 
-## 7. Storage & retention (ADR-0011)
+## 7. The door (ADR-0035)
 
-D1 (SQLite) holds Items, facets, Events, the plugin registry, the job registry + usage ledger, and course/relation mappings. Secrets (tokens, cookies, keys) live in CF Secrets, not D1 (ADR-0013).
+`POST /mcp`. What a client agent mounts. Read-only on every source; writes only unicorn's own state.
 
-Retention: current data is **hot**; non-course Items older than the configured window are flagged **archived** and excluded from normal lists. An Item pulled again becomes hot before retention is re-evaluated. A single user won't pressure the 5GB free tier for years; this is about keeping queries and change detection scoped, not about space.
+| tool | purpose |
+|---|---|
+| `get_briefs` / `ack_briefs` | the durable inbox |
+| `write_brief` | routines deposit their output here; idempotent |
+| `changes_since(cursor)` | the lossless feed; server holds no client state |
+| `course(code)` | one course across every source, grouped by bucket |
+| `life()` | the non-course buckets |
+| `search_items` | FTS5 over title and body |
+| `get_plan` / `save_plan` | shared plan state |
+| `remember` | verbatim corrections |
+| `run_playbook(name)` | playbook text plus its data, for tool-only clients |
+| `label_items` | the triage routine's write path |
+| `status()` | last sync and error per source |
+| *user-defined* | up to 20 saved SQL tools (section 9) |
 
----
+**Prompts.** The four playbooks — `weekly-plan`, `decompose-assignment`, `forum-brief`, `triage` — are registered under `prompts/list` so Claude Code shows them as slash commands; the same markdown comes back from `run_playbook` for ChatGPT, which consumes tools only.
 
-## 8. Auth & secrets (ADR-0003, ADR-0013)
+**Instructions.** The server tells the client: pull briefs on session start; call `changes_since` when asked what is new; call `remember` on every correction; never answer course questions from its own knowledge.
 
-- **Ed** — API token, used directly from the Worker.
-- **Moodle** — session cookie pushed from the user's machine after a local `okta` login; the Worker keep-alives it (a periodic dashboard GET refreshes both the session and the sesskey). Session death is rare (weeks); the user re-pushes. Optional opt-in full-auto re-login (password + TOTP in Secrets + Browser Rendering) is later.
-- **Secrets** — credentials are Cloudflare Worker Secrets, set through Wrangler or deployment automation. The Worker only reports whether each binding exists; it never renders values and deliberately cannot mutate its own secrets (ADR-0022).
-
----
-
-## 9. Surfaces (ADR-0009, ADR-0010, ADR-0030, ADR-0032)
-
-MCP is two separate servers, not one (ADR-0030):
-
-- **The door (`/mcp`, bearer `MCP_TOKEN`)** — exactly four tools for the user's own client agent: `ask` (forwards a turn to the resident agent), `get_briefs` / `ack_briefs` (the durable inbox scheduled playbooks and the daily digest write to, ADR-0031), and `remember` (save a verbatim correction). The client's model does the open-ended reasoning; unicorn serves data, memory, and briefs. This is how "Claude/Codex account access" is satisfied for interactive use with zero chat UI to build.
-- **The admin surface (`/mcp/admin`, bearer `ADMIN_TOKEN`)** — the pre-existing ~15 operator tools (item/plugin/job/memory inspection and configuration, "what's due," "what changed," connect a new Tier-1 plugin). A client agent is never pointed at this endpoint.
-- **Web dashboard (later)** — read-only timeline. v1 already includes a password-protected operator settings page for non-secret behavior and connection status.
-- **IM (push-only, ADR-0032)** — proactive alerts and digests over the pluggable notifier (Telegram / Discord / email). There is no converse loop over IM: the Telegram bot that used to run turns through the resident agent is retired, and talking to the agent happens through the door's `ask` tool instead.
-
-Onboarding: Wrangler provisions the Worker and D1, secrets are pushed without entering the repository, and course mapping plus Tier-1 source installation go through the admin MCP surface.
+`POST /mcp/admin` is the operator surface: `add_source`, `link_items`, `suggest_links`, `define_tool` / `list_tools` / `delete_tool` / `describe_schema`, `browse_tools` / `install_tool` / `publish_tool`, plus inspection. A client agent never mounts it.
 
 ---
 
-## 10. What v1 actually ships
+## 8. The harness side (ADR-0035)
 
-The sharp, finite first cut — kernel + campus, not "everything":
+unicorn ships nothing that reasons, so it ships the pieces that let the student's harness reason well:
 
-- Kernel: Item + facet model, the five primitives, change detection → Events, retention.
-- Campus plugin (Tier 2): Ed (token) + Moodle (keep-alive), emitting temporal/state/relation/actor/scalar facets.
-- Plugin engine: Tier-2 code path working; Tier-1 manifest engine at least minimally, since it's the "海纳百川" proof.
-- LLM layer via AI SDK: OpenAI-compatible BYOK, with the daily digest disabled until explicitly configured.
-- Job registry with metering + hard caps; daily digest as the first job.
-- Authenticated MCP surface, Discord notifier, operator settings page, retention, and a self-renewing scheduler alarm.
-
-**Deferred:** dashboard, IM bot, full subscription-provider breadth, Moodle full-auto re-login, dynamic third-party plugins, Ed↔assessment auto-association beyond simple relation.
+- **Claude Code plugin** — the door's MCP config with the token in plugin user config, the playbooks as skills, a SessionStart hook that pulls briefs, and a `setup-routines` skill that creates the four routines through the harness's own scheduler. One `claude plugin marketplace add` and the whole loop exists.
+- **Routines** — `weekly-plan` on Mondays, `decompose-assignment` daily, `forum-brief` daily, `triage` daily. Each is the harness's strong model calling door tools and, optionally, the live sources, then writing back with `write_brief`, `save_plan`, `label_items`. Claude Code routines reach unicorn as a claude.ai connector; Cowork scheduled tasks the same way.
+- **claude.ai and mobile** — add unicorn as a custom connector; OAuth (section 10) makes that a click.
+- **ChatGPT** — a tier-0 client: OAuth connector, `run_playbook`, widgets. ChatGPT Tasks calling connectors is undocumented and offered as best effort. Connectors need a paid ChatGPT plan; Claude's Free plan can add them.
 
 ---
 
-## 11. Build results and remaining bets
+## 9. User-defined tools and the library (ADR-0035)
 
-1. **Moodle auth works from Workers.** `/my/` refreshes the session and yields `sesskey`; `npm run moodle:push` moves the local Okta session into the Worker without printing it.
-2. **The five primitives survived a non-campus source.** A live RSS/Atom Tier-1 plugin ingests through the same kernel without new behavior code.
-3. **The manifest and MCP surfaces are concrete.** D1 stores validated JSON/RSS manifests; MCP exposes item, upcoming, change, relation, manifest, job, and memory tools.
-4. **The resident agent's organs are built (ADR-0023/0024/0025).** A budget-capped triage job runs deterministic reflexes first and calls a model only for the ambiguous middle; a capped notes memory (`get_memory` / `update_memory`) persists judgments; every outbound message flows through a durable outbox with idempotency keys and bounded retry, so a retried cycle never double-sends.
-5. **Two push channels beyond Discord (ADR-0010).** Telegram and Resend email adapters resolve from whichever secrets are present; the `/digest` route serves the latest digest as a rendered HTML report (ADR-0026).
-6. **Onboarding is one command (ADR-0027).** `npm run setup` orchestrates login → D1 create → migrate → secrets → deploy → schedule; `SETUP.md` documents the same path for coding agents.
-7. **Moodle session lifetime remains empirical.** The scheduler now supplies real hourly keep-alive evidence; only elapsed time can close this question.
-8. **Dynamic sandboxed code plugins and subscription-token providers remain deliberately deferred.** Both add trust or account-risk systems far larger than their v1 value.
-9. **Monash grade enrichment remains endpoint-limited.** The enabled AJAX API does not expose authoritative grades or complete submission state, so v1 preserves `unknown` rather than manufacturing certainty.
+A student's agent can grow the door without a deploy. A tool is data: name, description, input schema, one read-only SQL statement over the views `v_items`, `v_upcoming`, `v_changes`, `v_courses`, `v_buckets`. Defined on the admin surface, listed dynamically on the door, callable from every client — define `next_lab` on a laptop, call it from a phone.
+
+Guards are mechanical, not model-judged: `SELECT`/`WITH` only, one statement, bound parameters, view-only access, forced `LIMIT 200`, `EXPLAIN` at definition, cap of 20.
+
+Sharing is a GitHub repository, `unicorn-tools`, with an `index.json`: `browse_tools` reads it, `install_tool` imports one, `publish_tool` hands the agent a PR-ready payload. No hosted registry, no marketplace.
+
+---
+
+## 10. Auth, secrets, onboarding (ADR-0003, ADR-0013, ADR-0035, ADR-0038)
+
+- **Door auth** — the Worker is an OAuth 2.1 authorization server (`workers-oauth-provider`, dynamic client registration on) for connectors; the consent page is behind `/settings` Basic auth, so logging in is entering `ADMIN_TOKEN`. The `MCP_TOKEN` bearer path remains for local Claude Code and development.
+- **Admin auth** — bearer `ADMIN_TOKEN`, also the `/settings` password.
+- **Source credentials** — Worker Secrets in the `PLUGIN_SECRET_*` namespace; the Worker reports presence, never values, and cannot mutate its own secrets (ADR-0022). Google refresh tokens live in D1 as application state (ADR-0033). Moodle's session is pushed from the user's machine after a local Okta login.
+- **Onboarding** — `npm run setup` asks which sources the student has and configures only those. `/settings` is the source form: pick a preset, enter a base URL, paste a token (straight into a secret, never through a model), capture the browser timezone, see last sync and errors. That page is the whole web UI.
+
+---
+
+## 11. Widgets (ADR-0037)
+
+Tool results carry a `ui://unicorn/<name>` resource served as `text/html;profile=mcp-app`; ChatGPT and Claude (web, desktop, mobile) render it in a sandboxed frame. One implementation for both.
+
+| widget | tool | actions |
+|---|---|---|
+| brief card | `get_briefs` | ack |
+| course view | `course` | — |
+| changes feed | `changes_since` | — |
+| plan checklist | `get_plan` | check items → `save_plan` |
+| deadline timeline | `search_items` / upcoming | — |
+| connection status | `status` | — |
+
+Every result also carries its full text; the widget is additive and the text is the fallback for clients that do not render. Widget buttons call door tools and touch unicorn state only — acknowledging, planning, remembering, labelling. A widget never writes to a source.
+
+---
+
+## 12. Storage, retention, what is deliberately absent
+
+D1 holds Items, facets, events, relations, buckets, plans, briefs, corrections, plugin manifests, tool definitions, OAuth clients and grants. FTS5 indexes title and body. Secrets are Worker Secrets. Retention archives old non-course Items (and says so with an event); events themselves are kept forever — a single student will not press the free tier for years.
+
+Absent by decision, not omission:
+
+- no model in the Worker, no BYOK, no token ledger (ADR-0034);
+- no push channels — no Telegram, Discord or email out; the client pulls (ADR-0032, ADR-0034);
+- no hosted multi-tenant service, no app-directory listing; self-deploy only (ADR-0001);
+- no source writes from unicorn, ever — not from tools, not from widgets;
+- no vector search; a semester's corpus is small and FTS5 with a strong client model is enough;
+- no dashboard; `/settings` onboards and reports, the agent reads.
+
+---
+
+## 13. Build order (as of 2026-09-21)
+
+Shipped and in production through ADR-0033: the body, Ed + Moodle + Gmail ingest, events v1, briefs and plans, the four-tool door, the admin surface, the resident Pi agent and its playbook runner. ADR-0034 removes the last item.
+
+**This week** — everything a client with direct sources cannot do, in dependency order:
+
+1. Remove the brain, outbox and notifier; add the zero-LLM daily digest.
+2. OAuth authorization server on the Worker; keep bearer.
+3. Claude Code plugin with skills, SessionStart hook, `setup-routines`.
+4. Playbooks as MCP prompts plus `run_playbook`; `write_brief`.
+5. Events v2 and `changes_since`.
+6. FTS5 behind `search_items`.
+7. The brief-card widget.
+
+**Next** — buckets, `course()` and `life()`, the triage routine and `label_items`, `define_tool` and the tool library, the Canvas plugin and the `/settings` source form, the remaining widgets, Tier-1 pagination and fan-out.
+
+**Before any public post** — three named students install it successfully; one of them on Canvas + Ed.
