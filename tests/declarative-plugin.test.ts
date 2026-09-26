@@ -392,3 +392,325 @@ describe("PluginManifest schema (MCP transport)", () => {
     expect(() => parsePluginManifest(manifest)).not.toThrow();
   });
 });
+
+// --- Pagination and fan-out (the planned extension, ARCHITECTURE §5 / ADR-0017/0038) ---
+
+const paginationMapping = {
+  id: { path: "id" },
+  kind: { value: "issue" },
+  title: { path: "title" },
+  timestamp: { path: "ts" },
+};
+
+describe("DeclarativePlugin.pull (pagination)", () => {
+  it("follows link-header pagination across pages and stops when there is no next link", async () => {
+    const manifest: PluginManifest = {
+      version: 1,
+      id: "paged-issues",
+      name: "Paged issues",
+      format: "json",
+      url: "https://api.example.com/issues",
+      pagination: { type: "link-header" },
+      mapping: paginationMapping,
+    };
+    const fetcher = vi.fn<typeof fetch>();
+    fetcher.mockResolvedValueOnce(
+      Response.json([{ id: 1, title: "one", ts: "2026-01-01T00:00:00.000Z" }], {
+        headers: { Link: '<https://api.example.com/issues?page=2>; rel="next"' },
+      }),
+    );
+    fetcher.mockResolvedValueOnce(
+      Response.json([{ id: 2, title: "two", ts: "2026-01-02T00:00:00.000Z" }], {
+        headers: { Link: '<https://api.example.com/issues?page=3>; rel="next"' },
+      }),
+    );
+    fetcher.mockResolvedValueOnce(Response.json([{ id: 3, title: "three", ts: "2026-01-03T00:00:00.000Z" }]));
+
+    const items = await new DeclarativePlugin(manifest, {}, fetcher).pull();
+
+    expect(items.map((item) => item.id)).toEqual(["1", "2", "3"]);
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    expect(fetcher.mock.calls[1]?.[0]?.toString()).toBe("https://api.example.com/issues?page=2");
+  });
+
+  it("follows cursor pagination via cursorPath/param and stops once the response has no cursor", async () => {
+    const manifest: PluginManifest = {
+      version: 1,
+      id: "cursor-issues",
+      name: "Cursor issues",
+      format: "json",
+      url: "https://api.example.com/issues",
+      itemsPath: "items",
+      pagination: { type: "cursor", cursorPath: "nextCursor", param: "cursor" },
+      mapping: paginationMapping,
+    };
+    const fetcher = vi.fn<typeof fetch>();
+    fetcher.mockResolvedValueOnce(
+      Response.json({ items: [{ id: 1, title: "one", ts: "2026-01-01T00:00:00.000Z" }], nextCursor: "c2" }),
+    );
+    fetcher.mockResolvedValueOnce(
+      Response.json({ items: [{ id: 2, title: "two", ts: "2026-01-02T00:00:00.000Z" }], nextCursor: null }),
+    );
+
+    const items = await new DeclarativePlugin(manifest, {}, fetcher).pull();
+
+    expect(items.map((item) => item.id)).toEqual(["1", "2"]);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    const secondUrl = new URL(fetcher.mock.calls[1]?.[0] as string | URL);
+    expect(secondUrl.searchParams.get("cursor")).toBe("c2");
+  });
+
+  it("follows page pagination and stops on an empty page", async () => {
+    const manifest: PluginManifest = {
+      version: 1,
+      id: "page-issues",
+      name: "Page issues",
+      format: "json",
+      url: "https://api.example.com/issues",
+      pagination: { type: "page", param: "page", start: 1 },
+      mapping: paginationMapping,
+    };
+    const fetcher = vi.fn<typeof fetch>();
+    fetcher.mockResolvedValueOnce(Response.json([{ id: 1, title: "one", ts: "2026-01-01T00:00:00.000Z" }]));
+    fetcher.mockResolvedValueOnce(Response.json([{ id: 2, title: "two", ts: "2026-01-02T00:00:00.000Z" }]));
+    fetcher.mockResolvedValueOnce(Response.json([]));
+
+    const items = await new DeclarativePlugin(manifest, {}, fetcher).pull();
+
+    expect(items.map((item) => item.id)).toEqual(["1", "2"]);
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    expect(new URL(fetcher.mock.calls[2]?.[0] as string | URL).searchParams.get("page")).toBe("3");
+  });
+
+  it("caps at maxPages even when the source keeps offering a next link", async () => {
+    const manifest: PluginManifest = {
+      version: 1,
+      id: "capped-issues",
+      name: "Capped issues",
+      format: "json",
+      url: "https://api.example.com/issues",
+      pagination: { type: "link-header", maxPages: 2 },
+      mapping: paginationMapping,
+    };
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async (input) => {
+      const url = new URL(input as string | URL);
+      const page = Number(url.searchParams.get("page") ?? "1");
+      return Response.json([{ id: page, title: `page ${page}`, ts: "2026-01-01T00:00:00.000Z" }], {
+        headers: { Link: `<https://api.example.com/issues?page=${page + 1}>; rel="next"` },
+      });
+    });
+
+    const items = await new DeclarativePlugin(manifest, {}, fetcher).pull();
+
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(items.map((item) => item.id)).toEqual(["1", "2"]);
+  });
+
+  it("refuses a pagination next link on a different origin and never contacts it", async () => {
+    const manifest: PluginManifest = {
+      version: 1,
+      id: "hijack-issues",
+      name: "Hijack issues",
+      format: "json",
+      url: "https://api.example.com/issues",
+      pagination: { type: "link-header" },
+      mapping: paginationMapping,
+    };
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      Response.json([{ id: 1, title: "one", ts: "2026-01-01T00:00:00.000Z" }], {
+        headers: { Link: '<https://evil.example/collect>; rel="next"' },
+      }),
+    );
+
+    await expect(new DeclarativePlugin(manifest, {}, fetcher).pull()).rejects.toThrow(/different origin/);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("DeclarativePlugin.pull (fan-out)", () => {
+  it("fans out over a parent list, substituting placeholders and reading $parent fields in the mapping", async () => {
+    const manifest: PluginManifest = {
+      version: 1,
+      id: "course-assignments",
+      name: "Course assignments",
+      format: "json",
+      url: "https://api.example.com/courses/{{course.id}}/assignments",
+      itemsPath: "assignments",
+      fanOut: {
+        from: { url: "https://api.example.com/courses", itemsPath: "courses" },
+        as: "course",
+        max: 3,
+      },
+      mapping: {
+        id: { path: "id" },
+        kind: { value: "assignment" },
+        title: { path: "name" },
+        timestamp: { path: "due_at" },
+        body: { path: "$parent.code" },
+      },
+    };
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async (input) => {
+      const url = new URL(input as string | URL);
+      if (url.pathname === "/courses") {
+        return Response.json({
+          courses: [
+            { id: 1, code: "FIT2004" },
+            { id: 2, code: "FIT2099" },
+            { id: 3, code: "FIT1045" },
+          ],
+        });
+      }
+      const courseId = url.pathname.match(/\/courses\/(\d+)\/assignments/)?.[1];
+      return Response.json({
+        assignments: [{ id: `${courseId}-a1`, name: `Assignment for ${courseId}`, due_at: "2026-08-01T00:00:00.000Z" }],
+      });
+    });
+
+    const items = await new DeclarativePlugin(manifest, {}, fetcher).pull();
+
+    expect(items).toHaveLength(3);
+    expect(items.map((item) => item.body)).toEqual(["FIT2004", "FIT2099", "FIT1045"]);
+    expect(fetcher).toHaveBeenCalledTimes(4); // 1 parent-list fetch + 3 per-course fetches
+  });
+
+  it("fails loudly instead of truncating silently when a pull would exceed the 25-subrequest budget", async () => {
+    const manifest: PluginManifest = {
+      version: 1,
+      id: "budget-blowout",
+      name: "Budget blowout",
+      format: "json",
+      url: "https://api.example.com/courses/{{course.id}}/pages",
+      itemsPath: "items",
+      pagination: { type: "page", param: "page", start: 1, maxPages: 10 },
+      fanOut: {
+        from: { url: "https://api.example.com/courses", itemsPath: "courses" },
+        as: "course",
+        max: 20,
+      },
+      mapping: { id: { path: "id" }, kind: { value: "x" }, title: { path: "id" }, timestamp: { value: "2026-01-01T00:00:00.000Z" } },
+    };
+    let calls = 0;
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async (input) => {
+      calls += 1;
+      const url = new URL(input as string | URL);
+      if (url.pathname === "/courses") {
+        return Response.json({ courses: Array.from({ length: 20 }, (_, i) => ({ id: i + 1 })) });
+      }
+      return Response.json({ items: [{ id: calls }] }); // always non-empty: pagination never stops on its own
+    });
+
+    await expect(new DeclarativePlugin(manifest, {}, fetcher).pull()).rejects.toThrow(/subrequest budget/);
+    expect(fetcher).toHaveBeenCalledTimes(25);
+  });
+});
+
+describe("PluginManifest schema (pagination & fan-out)", () => {
+  const baseMapping = { id: { path: "id" }, kind: { value: "x" }, title: { path: "t" }, timestamp: { path: "ts" } };
+
+  it("rejects an unknown pagination type", () => {
+    const manifest = {
+      version: 1,
+      id: "bad-pg",
+      name: "x",
+      format: "json",
+      url: "https://api.example.com/x",
+      pagination: { type: "offset" },
+      mapping: baseMapping,
+    };
+    expect(() => parsePluginManifest(manifest)).toThrow();
+  });
+
+  it("rejects a maxPages of 0 and a maxPages over the hard cap of 10", () => {
+    const tooLow = {
+      version: 1, id: "pg-low", name: "x", format: "json", url: "https://api.example.com/x",
+      pagination: { type: "link-header", maxPages: 0 },
+      mapping: baseMapping,
+    };
+    const tooHigh = {
+      version: 1, id: "pg-high", name: "x", format: "json", url: "https://api.example.com/x",
+      pagination: { type: "link-header", maxPages: 11 },
+      mapping: baseMapping,
+    };
+    expect(() => parsePluginManifest(tooLow)).toThrow();
+    expect(() => parsePluginManifest(tooHigh)).toThrow();
+  });
+
+  it("rejects a fanOut.max of 0 and one over the cap of 20", () => {
+    const from = { url: "https://api.example.com/courses" };
+    const tooLow = {
+      version: 1, id: "fo-low", name: "x", format: "json", url: "https://api.example.com/{{c.id}}",
+      fanOut: { from, as: "c", max: 0 },
+      mapping: baseMapping,
+    };
+    const tooHigh = {
+      version: 1, id: "fo-high", name: "x", format: "json", url: "https://api.example.com/{{c.id}}",
+      fanOut: { from, as: "c", max: 21 },
+      mapping: baseMapping,
+    };
+    expect(() => parsePluginManifest(tooLow)).toThrow();
+    expect(() => parsePluginManifest(tooHigh)).toThrow();
+  });
+
+  it("rejects a manifest url placeholder that references an unknown var", () => {
+    const manifest = {
+      version: 1, id: "unk-var", name: "x", format: "json",
+      url: "https://api.example.com/{{course.id}}/x",
+      mapping: baseMapping,
+    };
+    expect(() => parsePluginManifest(manifest)).toThrow(/unknown placeholder var/);
+  });
+
+  it("rejects a placeholder whose var name does not match fanOut.as", () => {
+    const manifest = {
+      version: 1, id: "mismatch-var", name: "x", format: "json",
+      url: "https://api.example.com/{{other.id}}/x",
+      fanOut: { from: { url: "https://api.example.com/parents" }, as: "course", max: 5 },
+      mapping: baseMapping,
+    };
+    expect(() => parsePluginManifest(manifest)).toThrow(/unknown placeholder var/);
+  });
+
+  it("rejects a mapping $parent reference when the manifest has no fanOut", () => {
+    const manifest = {
+      version: 1, id: "orphan-parent", name: "x", format: "json", url: "https://api.example.com/x",
+      mapping: { ...baseMapping, body: { path: "$parent.code" } },
+    };
+    expect(() => parsePluginManifest(manifest)).toThrow(/\$parent/);
+  });
+
+  it("rejects pagination or fanOut on an rss manifest", () => {
+    const withPagination = {
+      version: 1, id: "rss-pg", name: "x", format: "rss", url: "https://example.com/feed.xml",
+      pagination: { type: "link-header" },
+      mapping: baseMapping,
+    };
+    // ZodError.message is JSON with escaped quotes, so match the unquoted words.
+    expect(() => parsePluginManifest(withPagination)).toThrow(/only support format/);
+  });
+
+  it("rejects fanOut on the mcp transport", () => {
+    const manifest = {
+      version: 1, id: "mcp-fanout", name: "x",
+      transport: { type: "mcp", url: "https://fake.example/mcp/v1", tool: "search" },
+      fanOut: { from: { url: "https://api.example.com/parents" }, as: "p", max: 5 },
+      mapping: baseMapping,
+    };
+    expect(() => parsePluginManifest(manifest)).toThrow(/mcp transport/);
+  });
+
+  it("accepts a valid paginated manifest and a valid fan-out manifest", () => {
+    const paginated = {
+      version: 1, id: "ok-pg", name: "x", format: "json", url: "https://api.example.com/x",
+      pagination: { type: "cursor", cursorPath: "next", param: "cursor" },
+      mapping: baseMapping,
+    };
+    const fannedOut = {
+      version: 1, id: "ok-fo", name: "x", format: "json",
+      url: "https://api.example.com/courses/{{course.id}}/assignments",
+      fanOut: { from: { url: "https://api.example.com/courses" }, as: "course", max: 10 },
+      mapping: { ...baseMapping, body: { path: "$parent.code" } },
+    };
+    expect(() => parsePluginManifest(paginated)).not.toThrow();
+    expect(() => parsePluginManifest(fannedOut)).not.toThrow();
+  });
+});
