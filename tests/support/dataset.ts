@@ -291,12 +291,18 @@ export function buildEmailSingleMentionFixture(): ItemInput {
   );
 }
 
-/** Mentions two course codes — deliberately ambiguous, left unlabeled. */
+/**
+ * Mentions two course codes — deliberately ambiguous, left unlabeled.
+ * Both codes must match extractUnitCodes' pattern (exactly three letters
+ * then four digits — deliberately stricter than courses.ts's own code
+ * pattern, see course-mention.ts), so this uses MAT1830 rather than
+ * Canvas's four-letter COMP1511.
+ */
 export function buildEmailTwoMentionsFixture(): ItemInput {
   return emailItem(
     "email:2",
-    "Timetable clash between FIT2004 and COMP1511",
-    "Please note the exam clash between FIT2004 and COMP1511 has been resolved.",
+    "Timetable clash between FIT2004 and MAT1830",
+    "Please note the exam clash between FIT2004 and MAT1830 has been resolved.",
     daysFromNow(-4),
   );
 }
