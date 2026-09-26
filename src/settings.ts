@@ -1,4 +1,6 @@
+import { renderConnectedApps } from "./oauth-server";
 import { htmlResponse, renderPage } from "./ui";
+import type { GrantSummary } from "@cloudflare/workers-oauth-provider";
 
 export interface AppSettings {
   retentionDays: number;
@@ -32,6 +34,9 @@ export interface SettingsRuntime {
   status: {
     schedulerRunning: boolean;
   };
+  // OAuth connectors (ADR-0035): grants issued by /authorize, for the "Connected apps" card.
+  // Optional so callers that predate connector support (and existing tests) don't need it.
+  oauth?: { grants: GrantSummary[] };
 }
 
 const DEFAULT_TIMEZONE = "Australia/Melbourne";
@@ -169,7 +174,7 @@ function renderGmailCard(connections: SettingsRuntime["connections"]): string {
 
 function renderSettings(
   settings: AppSettings,
-  runtime: Pick<SettingsRuntime, "connections" | "status">,
+  runtime: Pick<SettingsRuntime, "connections" | "status" | "oauth">,
   saved: boolean,
   error?: string,
 ): string {
@@ -207,6 +212,7 @@ function renderSettings(
       <div class="card-body"><ul class="rail rows">${schedulerRow}${rail}</ul></div>
     </section>
     ${renderGmailCard(connections)}
+    ${renderConnectedApps(runtime.oauth?.grants ?? [])}
     <section class="card" aria-labelledby="behavior-title">
       <div class="card-head"><h2 id="behavior-title">Behavior</h2></div>
       <div class="card-body">

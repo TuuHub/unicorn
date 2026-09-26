@@ -33,6 +33,11 @@
   "vars": {
     "MOODLE_BASE_URL": "https://learning.monash.edu"
   },
+  // OAuth authorization-server storage for connectors (ADR-0035, src/oauth-server.ts). No id:
+  // wrangler >=4.45 auto-provisions and binds a KV namespace with this name on `wrangler deploy`
+  // (and locally on `wrangler dev`), so `npm run upgrade` picks this up on an existing production
+  // deploy with no manual `wrangler kv namespace create` step.
+  "kv_namespaces": [{ "binding": "OAUTH_KV" }],
   "d1_databases": [
     {
       "binding": "DB",
