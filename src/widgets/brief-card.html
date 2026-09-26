@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Briefs</title>
+    <style>
+      /* UNICORN:THEME */
+    </style>
+    <style>
+      .brief-header {
+        margin-bottom: var(--u-space-4);
+      }
+      .brief-card.is-read {
+        opacity: 0.68;
+      }
+      .brief-body {
+        margin-top: var(--u-space-2);
+        font-size: 13.5px;
+      }
+      .brief-body :first-child {
+        margin-top: 0;
+      }
+      .brief-body :last-child {
+        margin-bottom: 0;
+      }
+      .brief-error {
+        margin-top: var(--u-space-2);
+        font-size: 12.5px;
+      }
+      .task-list {
+        list-style: none;
+        padding-left: 0;
+      }
+      .task-list li {
+        margin-bottom: 4px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="u-between brief-header">
+      <h1 id="brief-title">Briefs</h1>
+      <button id="mark-all" class="u-quiet" type="button">Mark all read</button>
+    </div>
+    <div id="brief-list" class="u-stack" role="list" aria-label="Briefs"></div>
+
+    <script>
+      /* UNICORN:SHARED */
+    </script>
+    <script>
+      (function () {
+        const { bridge } = window.Unicorn;
+        const { renderMarkdown, escapeHtml: esc } = window.Unicorn.markdown;
+        const { formatRelativeTime } = window.Unicorn.format;
+        const { discussBriefPrompt, ackBriefSummary, ackAllBriefsSummary } = window.Unicorn.prompts;
+
+        const listEl = document.getElementById("brief-list");
+        const titleEl = document.getElementById("brief-title");
+        const markAllBtn = document.getElementById("mark-all");
+
+        /** @type {{ briefs: any[], unread: number } | null} */
+        let data = null;
+
+        function kindLabel(kind) {
+          return kind
+            .split(/[-_]/)
+            .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+            .join(" ");
+        }
+
+        function briefCardHtml(brief) {
+          const isRead = !!brief.readAt;
+          const when = formatRelativeTime(brief.createdAt, new Date()) || "";
+          return `
+            <article class="u-card brief-card${isRead ? " is-read" : ""}" data-id="${esc(brief.id)}">
+              <div class="u-between">
+                <div class="u-wrap">
+                  <span class="u-chip u-chip-accent">${esc(kindLabel(brief.kind))}</span>
+                  <span class="u-muted">${esc(when)}</span>
+                </div>
+                <div class="u-row">
+                  ${bridge.capabilities.message ? '<button type="button" class="u-quiet discuss-one">Discuss this</button>' : ""}
+                  ${
+                    isRead
+                      ? '<span class="u-muted" style="font-size:12.5px;">Read</span>'
+                      : '<button type="button" class="u-quiet ack-one">Mark read</button>'
+                  }
+                </div>
+              </div>
+              <h2>${esc(brief.title)}</h2>
+              <div class="brief-body">${renderMarkdown(brief.body)}</div>
+              <div class="brief-error u-danger" hidden></div>
+            </article>
+          `;
+        }
+
+        function render() {
+          if (!data || data.briefs.length === 0) {
+            titleEl.textContent = "Briefs";
+            markAllBtn.hidden = true;
+            listEl.innerHTML = `
+              <div class="u-empty">
+                <div class="u-empty-title">Nothing new</div>
+                <div>You are caught up.</div>
+              </div>
+            `;
+            return;
+          }
+
+          titleEl.textContent = data.unread > 0 ? `Briefs (${data.unread} unread)` : "Briefs";
+          markAllBtn.hidden = false;
+          markAllBtn.disabled = data.unread === 0;
+          listEl.innerHTML = data.briefs.map(briefCardHtml).join("");
+
+          listEl.querySelectorAll(".ack-one").forEach((button) => {
+            const card = button.closest(".brief-card");
+            const id = card.dataset.id;
+            button.addEventListener("click", () => ackBriefs([id], card));
+          });
+
+          listEl.querySelectorAll(".discuss-one").forEach((button) => {
+            const card = button.closest(".brief-card");
+            const brief = data.briefs.find((item) => item.id === card.dataset.id);
+            button.addEventListener("click", () => bridge.sendMessage(discussBriefPrompt(brief)).catch(() => {}));
+          });
+        }
+
+        async function ackBriefs(ids, cardEl) {
+          const targets = data.briefs.filter((brief) => ids.includes(brief.id) && !brief.readAt);
+          if (targets.length === 0) return;
+          const now = new Date().toISOString();
+          for (const brief of targets) brief.readAt = now;
+          data.unread = Math.max(0, data.unread - targets.length);
+          render();
+
+          try {
+            await bridge.callTool("ack_briefs", { ids });
+            if (targets.length === 1) bridge.updateModelContext(ackBriefSummary(targets[0]));
+            else bridge.updateModelContext(ackAllBriefsSummary(targets.length));
+          } catch (err) {
+            for (const brief of targets) brief.readAt = null;
+            data.unread += targets.length;
+            render();
+            const errorTarget = cardEl ? listEl.querySelector(`[data-id="${cardEl.dataset.id}"] .brief-error`) : null;
+            const message = err && err.message ? err.message : "Could not mark as read. Try again.";
+            if (errorTarget) {
+              errorTarget.textContent = message;
+              errorTarget.hidden = false;
+            }
+          }
+        }
+
+        markAllBtn.addEventListener("click", () => {
+          if (!data) return;
+          const unreadIds = data.briefs.filter((brief) => !brief.readAt).map((brief) => brief.id);
+          if (unreadIds.length > 0) ackBriefs(unreadIds, null);
+        });
+
+        bridge.init({
+          onToolResult(structuredContent) {
+            data = structuredContent || { briefs: [], unread: 0 };
+            render();
+          },
+          onHostContext(context) {
+            if (context && context.theme) document.documentElement.dataset.theme = context.theme;
+          },
+        });
+        bridge.watchSize();
+      })();
+    </script>
+  </body>
+</html>

@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Changes</title>
+    <style>
+      /* UNICORN:THEME */
+    </style>
+    <style>
+      .changes-header {
+        margin-bottom: var(--u-space-4);
+      }
+      .counts-row {
+        margin-top: var(--u-space-1);
+      }
+      .course-group {
+        margin-bottom: var(--u-space-4);
+      }
+      .bucket-group {
+        margin-bottom: var(--u-space-2);
+      }
+      .bucket-group h3 {
+        margin: 0 0 var(--u-space-1);
+        font-size: 12.5px;
+        font-weight: 600;
+        color: var(--u-text-muted);
+      }
+      .event-line {
+        display: flex;
+        align-items: flex-start;
+        gap: var(--u-space-2);
+        padding: 5px 0;
+        font-size: 13.5px;
+      }
+      .event-glyph {
+        flex: none;
+        margin-top: 2px;
+      }
+      details.event-line summary {
+        list-style: none;
+        cursor: pointer;
+        display: flex;
+        gap: var(--u-space-2);
+        align-items: flex-start;
+      }
+      details.event-line summary::-webkit-details-marker {
+        display: none;
+      }
+      .diff-block {
+        margin: var(--u-space-2) 0 var(--u-space-2) 22px;
+        display: grid;
+        gap: var(--u-space-2);
+      }
+      .diff-block .u-label {
+        margin-bottom: 2px;
+      }
+      .diff-block div > div {
+        font-size: 12.5px;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+
+    <script>
+      /* UNICORN:SHARED */
+    </script>
+    <script>
+      (function () {
+        const { bridge } = window.Unicorn;
+        const { escapeHtml: esc } = window.Unicorn.markdown;
+        const { formatRelativeTime, phraseChange } = window.Unicorn.format;
+        const { whatMattersPrompt } = window.Unicorn.prompts;
+
+        const root = document.getElementById("root");
+        let data = null;
+
+        const COUNT_LABELS = {
+          "item.added": "added",
+          "item.archived": "archived",
+          "item.restored": "restored",
+          "deadline.changed": "deadline changes",
+          "state.changed": "state changes",
+          "grade.changed": "grade changes",
+          "content.changed": "content changes",
+          "notice.posted": "staff notices",
+        };
+
+        function glyph(type) {
+          const paths = {
+            "item.added": '<path d="M8 3v10M3 8h10"/>',
+            "item.archived": '<rect x="3" y="3" width="10" height="3"/><path d="M4 6.5v6.5a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V6.5"/><path d="M6.5 9h3"/>',
+            "item.restored": '<path d="M4 5.5A5 5 0 1 1 3 9"/><path d="M3 3v3h3"/>',
+            "deadline.changed": '<circle cx="8" cy="8.5" r="5"/><path d="M8 6v3l2 1.2"/>',
+            "state.changed": '<path d="M4 6h6M8 4l2 2-2 2"/><path d="M12 10H6M8 8l-2 2 2 2"/>',
+            "grade.changed": '<path d="M8 2.5 9.6 6l3.7.4-2.8 2.5.8 3.6L8 10.6l-3.3 1.9.8-3.6L2.7 6.4 6.4 6 8 2.5Z"/>',
+            "content.changed": '<path d="M11.5 2.5 13 4l-7 7-2.5.5.5-2.5 7-7Z"/>',
+            "notice.posted": '<path d="M3 8.5v-1A5 5 0 0 1 8 2.5h0a5 5 0 0 1 5 5v1"/><path d="M2.5 8.5h11v2a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1v-2Z"/><path d="M7 13.5a1 1 0 0 0 2 0"/>',
+          };
+          return `<svg class="u-icon event-glyph" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3">${paths[type] || '<circle cx="8" cy="8" r="3"/>'}</svg>`;
+        }
+
+        function bucketLabel(bucket) {
+          if (!bucket) return "Unlabeled";
+          if (bucket.startsWith("life/")) {
+            const rest = bucket.slice(5);
+            return rest.charAt(0).toUpperCase() + rest.slice(1);
+          }
+          const parts = bucket.split("/");
+          if (parts.length >= 3) return parts.slice(2).join("/").replace(/-/g, " ");
+          return bucket;
+        }
+
+        function jsonText(value) {
+          if (value === null || value === undefined) return "—";
+          return typeof value === "string" ? value : JSON.stringify(value, null, 2);
+        }
+
+        function eventLine(event) {
+          const when = formatRelativeTime(event.at, new Date()) || "";
+          const phrase = esc(phraseChange(event));
+
+          if (event.type === "content.changed") {
+            return `
+              <details class="event-line">
+                <summary>
+                  ${glyph(event.type)}
+                  <span style="flex:1;">${phrase} — <span class="item-title-line">${esc(event.title)}</span></span>
+                  <span class="u-muted" style="white-space:nowrap;">${esc(when)}</span>
+                </summary>
+                <div class="diff-block">
+                  <div><div class="u-label">Before</div><div class="u-muted">${esc(jsonText(event.before))}</div></div>
+                  <div><div class="u-label">After</div><div>${esc(jsonText(event.after))}</div></div>
+                </div>
+              </details>
+            `;
+          }
+
+          return `
+            <div class="event-line">
+              ${glyph(event.type)}
+              <span style="flex:1;">${phrase}${event.type !== "notice.posted" ? ` — <span class="item-title-line">${esc(event.title)}</span>` : ""}</span>
+              <span class="u-muted" style="white-space:nowrap;">${esc(when)}</span>
+            </div>
+          `;
+        }
+
+        function groupEvents(events) {
+          const courseOrder = [];
+          const courses = new Map();
+          for (const event of events) {
+            const courseKey = event.course || "Other";
+            if (!courses.has(courseKey)) {
+              courses.set(courseKey, new Map());
+              courseOrder.push(courseKey);
+            }
+            const buckets = courses.get(courseKey);
+            const bucketKey = event.bucket || "";
+            if (!buckets.has(bucketKey)) buckets.set(bucketKey, []);
+            buckets.get(bucketKey).push(event);
+          }
+          return courseOrder.map((courseKey) => ({ course: courseKey, buckets: courses.get(courseKey) }));
+        }
+
+        function render() {
+          if (!data) return;
+
+          if (data.events.length === 0) {
+            root.innerHTML = `
+              <div class="u-empty">
+                <div class="u-empty-title">Nothing changed</div>
+                <div>Check back after the next sync.</div>
+              </div>
+            `;
+            return;
+          }
+
+          const countEntries = Object.entries(data.counts).filter(([, count]) => count > 0);
+          const countsHtml = countEntries
+            .map(([type, count]) => `<span class="u-chip">${count} ${esc(COUNT_LABELS[type] || type)}</span>`)
+            .join("");
+
+          const groups = groupEvents(data.events);
+          const groupsHtml = groups
+            .map((group) => {
+              const bucketsHtml = [...group.buckets.entries()]
+                .map(
+                  ([bucketKey, events]) => `
+                    <div class="bucket-group">
+                      <h3>${esc(bucketLabel(bucketKey))}</h3>
+                      <div class="u-card" style="padding: var(--u-space-1) var(--u-space-3);">
+                        ${events.map(eventLine).join("")}
+                      </div>
+                    </div>
+                  `,
+                )
+                .join("");
+              return `
+                <section class="course-group">
+                  <h2>${esc(group.course)}</h2>
+                  ${bucketsHtml}
+                </section>
+              `;
+            })
+            .join("");
+
+          root.innerHTML = `
+            <div class="changes-header">
+              <div class="u-between">
+                <h1>What changed</h1>
+                ${bridge.capabilities.message ? '<button type="button" class="u-quiet" id="ask-matters">What matters here?</button>' : ""}
+              </div>
+              <div class="counts-row u-wrap">${countsHtml}</div>
+            </div>
+            ${groupsHtml}
+          `;
+
+          const askButton = document.getElementById("ask-matters");
+          if (askButton) askButton.addEventListener("click", () => bridge.sendMessage(whatMattersPrompt(data)).catch(() => {}));
+        }
+
+        bridge.init({
+          onToolResult(structuredContent) {
+            data = structuredContent;
+            render();
+          },
+          onHostContext(context) {
+            if (context && context.theme) document.documentElement.dataset.theme = context.theme;
+          },
+        });
+        bridge.watchSize();
+      })();
+    </script>
+  </body>
+</html>

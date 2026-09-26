@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Course</title>
+    <style>
+      /* UNICORN:THEME */
+    </style>
+    <style>
+      .course-header {
+        margin-bottom: var(--u-space-4);
+      }
+      .course-meta {
+        margin-top: var(--u-space-1);
+      }
+      .bucket-section {
+        margin-bottom: var(--u-space-4);
+      }
+      .bucket-title-row {
+        margin-bottom: var(--u-space-2);
+      }
+      details.item-row {
+        border-top: 1px solid var(--u-border);
+        padding: var(--u-space-2) 0;
+      }
+      details.item-row:first-of-type {
+        border-top: none;
+        padding-top: 0;
+      }
+      details.item-row summary {
+        list-style: none;
+        cursor: pointer;
+        display: flex;
+        align-items: flex-start;
+        gap: var(--u-space-2);
+      }
+      details.item-row summary::-webkit-details-marker {
+        display: none;
+      }
+      .item-icon {
+        margin-top: 3px;
+      }
+      .item-summary-text {
+        flex: 1;
+        min-width: 0;
+      }
+      .item-title-line {
+        font-weight: 500;
+      }
+      .item-detail {
+        margin-top: var(--u-space-2);
+        margin-left: 22px;
+        font-size: 13px;
+      }
+      .unlabeled-toggle summary {
+        cursor: pointer;
+        color: var(--u-text-muted);
+        font-size: 12.5px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+
+    <script>
+      /* UNICORN:SHARED */
+    </script>
+    <script>
+      (function () {
+        const { bridge } = window.Unicorn;
+        const { escapeHtml: esc } = window.Unicorn.markdown;
+        const { formatDateTime, formatRelativeTime } = window.Unicorn.format;
+        const { decomposeAssignmentPrompt, askStaffOpinionPrompt } = window.Unicorn.prompts;
+
+        const root = document.getElementById("root");
+        let data = null;
+
+        function icon(source) {
+          const s = String(source || "");
+          if (s.includes("moodle")) {
+            return '<svg class="u-icon item-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2 5.5 8 2l6 3.5-6 3.5-6-3.5Z"/><path d="M4 7v4c0 1.1 1.8 2 4 2s4-.9 4-2V7"/></svg>';
+          }
+          if (s.includes("ed")) {
+            return '<svg class="u-icon item-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2 3.5h12v7H6l-2.5 2.5V10.5H2v-7Z"/></svg>';
+          }
+          if (s.includes("canvas")) {
+            return '<svg class="u-icon item-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2.5" width="12" height="11" rx="1.5"/><path d="M2 6h12"/></svg>';
+          }
+          if (s.includes("gmail") || s.includes("mail")) {
+            return '<svg class="u-icon item-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="3.5" width="12" height="9" rx="1.2"/><path d="M2.5 4 8 8.5 13.5 4"/></svg>';
+          }
+          return '<svg class="u-icon item-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><circle cx="8" cy="8" r="5"/></svg>';
+        }
+
+        function stateChip(state) {
+          if (!state) return "";
+          const lower = state.toLowerCase();
+          let cls = "u-chip";
+          if (lower.includes("overdue") || lower.includes("missing")) cls += " u-chip-danger";
+          else if (lower.includes("submit") && !lower.includes("not")) cls += " u-chip-ok";
+          else if (lower.includes("grade")) cls += " u-chip-ok";
+          else if (lower.includes("not")) cls += " u-chip-warn";
+          return `<span class="${cls}">${esc(state)}</span>`;
+        }
+
+        function itemRow(item) {
+          const when = formatRelativeTime(item.timestamp, new Date()) || "";
+          return `
+            <details class="item-row">
+              <summary>
+                ${icon(item.source)}
+                <div class="item-summary-text">
+                  <div class="item-title-line">${esc(item.title)}</div>
+                  <div class="u-wrap u-muted" style="font-size:12.5px;">
+                    <span>${esc(when)}</span>
+                    ${item.staff ? '<span class="u-chip u-chip-accent">Staff</span>' : ""}
+                    ${item.state ? stateChip(item.state) : ""}
+                  </div>
+                </div>
+              </summary>
+              <div class="item-detail">
+                ${item.snippet ? `<p class="u-muted">${esc(item.snippet)}</p>` : ""}
+                ${item.url ? `<button type="button" class="u-quiet open-link" data-url="${esc(item.url)}">Open</button>` : ""}
+              </div>
+            </details>
+          `;
+        }
+
+        function bucketSection(bucket, bucketIndex) {
+          const due = bucket.dueAt
+            ? `<span class="u-muted">Due ${esc(formatDateTime(bucket.dueAt, undefined, { weekday: "short", day: "numeric", month: "short" }))} · ${esc(formatRelativeTime(bucket.dueAt, new Date()))}</span>`
+            : "";
+          const isAssignment = bucket.dueAt != null;
+          const askActions =
+            isAssignment && bridge.capabilities.message
+              ? `
+                <div class="u-wrap" style="margin-top: var(--u-space-2);">
+                  <button type="button" class="u-quiet decompose-bucket" data-bucket="${bucketIndex}">Break this down</button>
+                  <button type="button" class="u-quiet ask-staff" data-bucket="${bucketIndex}">What do staff say about this?</button>
+                </div>
+              `
+              : "";
+          return `
+            <section class="bucket-section">
+              <div class="u-between bucket-title-row">
+                <h2>${esc(bucket.label)}</h2>
+                ${bucket.state ? stateChip(bucket.state) : ""}
+              </div>
+              ${due ? `<div class="course-meta">${due}</div>` : ""}
+              <div class="u-card" style="margin-top: var(--u-space-2); padding: var(--u-space-2) var(--u-space-3);">
+                ${bucket.items.map(itemRow).join("") || '<p class="u-muted">Nothing here yet.</p>'}
+              </div>
+              ${askActions}
+            </section>
+          `;
+        }
+
+        function matchesList(matches) {
+          return matches
+            .map(
+              (match) => `
+                <div class="u-card u-row" style="margin-bottom: var(--u-space-2);">
+                  <div style="flex:1;">
+                    <div class="item-title-line">${esc(match.title)}</div>
+                    <div class="u-muted" style="font-size:12.5px;">${esc(match.code)}${match.term ? " · " + esc(match.term) : ""} · ${esc(match.source)}</div>
+                  </div>
+                  ${match.url ? `<button type="button" class="u-quiet open-link" data-url="${esc(match.url)}">Open</button>` : ""}
+                </div>
+              `,
+            )
+            .join("");
+        }
+
+        function render() {
+          if (!data) return;
+
+          if (data.ambiguous) {
+            root.innerHTML = `
+              <h1>Which "${esc(data.query)}"?</h1>
+              <p class="u-muted">A few courses matched. Pick one to see its buckets.</p>
+              <div class="u-stack" style="margin-top: var(--u-space-3);">${matchesList(data.matches)}</div>
+            `;
+            bindOpenLinks();
+            return;
+          }
+
+          if (!data.code) {
+            root.innerHTML = `
+              <div class="u-empty">
+                <div class="u-empty-title">No course matched "${esc(data.query)}"</div>
+                <div>Check the course code, or try the term.</div>
+              </div>
+            `;
+            return;
+          }
+
+          const sourcePills = data.sources
+            .map((source) => `<span class="u-chip">${esc(source)}</span>`)
+            .join("");
+
+          const buckets = data.buckets.map((bucket, index) => bucketSection(bucket, index)).join("") || '<p class="u-muted">No buckets yet.</p>';
+
+          const unlabeled =
+            data.unlabeled.length > 0
+              ? `
+                <details class="unlabeled-toggle" style="margin-top: var(--u-space-4);">
+                  <summary>Unlabeled (${data.unlabeled.length})</summary>
+                  <div class="u-card" style="margin-top: var(--u-space-2); padding: var(--u-space-2) var(--u-space-3);">
+                    ${data.unlabeled.map(itemRow).join("")}
+                  </div>
+                </details>
+              `
+              : "";
+
+          root.innerHTML = `
+            <div class="course-header">
+              <h1>${esc(data.code)}${data.title ? " — " + esc(data.title) : ""}</h1>
+              <div class="course-meta u-wrap">
+                ${data.term ? `<span class="u-muted">${esc(data.term)}</span>` : ""}
+                ${sourcePills}
+              </div>
+            </div>
+            ${buckets}
+            ${unlabeled}
+          `;
+          bindOpenLinks();
+          bindAskActions();
+        }
+
+        function bindOpenLinks() {
+          root.querySelectorAll(".open-link").forEach((button) => {
+            button.addEventListener("click", () => bridge.openLink(button.dataset.url));
+          });
+        }
+
+        // The decompose prompt needs a concrete item to anchor on: the
+        // bucket's own assessment when there is one, else its first item —
+        // never a bare bucket label the model would have to guess an id for.
+        function anchorItem(bucket) {
+          return bucket.items.find((item) => item.kind === "assessment") || bucket.items[0] || null;
+        }
+
+        function bindAskActions() {
+          root.querySelectorAll(".decompose-bucket").forEach((button) => {
+            const bucket = data.buckets[Number(button.dataset.bucket)];
+            const item = anchorItem(bucket);
+            if (!item) {
+              button.disabled = true;
+              return;
+            }
+            button.addEventListener("click", () =>
+              bridge.sendMessage(decomposeAssignmentPrompt({ code: data.code }, bucket, item)).catch(() => {}),
+            );
+          });
+          root.querySelectorAll(".ask-staff").forEach((button) => {
+            const bucket = data.buckets[Number(button.dataset.bucket)];
+            button.addEventListener("click", () =>
+              bridge.sendMessage(askStaffOpinionPrompt({ code: data.code }, bucket)).catch(() => {}),
+            );
+          });
+        }
+
+        bridge.init({
+          onToolResult(structuredContent) {
+            data = structuredContent;
+            render();
+          },
+          onHostContext(context) {
+            if (context && context.theme) document.documentElement.dataset.theme = context.theme;
+          },
+        });
+        bridge.watchSize();
+      })();
+    </script>
+  </body>
+</html>
