@@ -1,3 +1,9 @@
+import { CORRECTIONS_DOMAIN, recordCorrection } from "../corrections";
+import { D1ItemStore } from "../kernel/d1-item-store";
+import { STAFF_ROLES } from "../kernel/staff-roles";
+import type { ItemEvent, JsonValue, StoredItem } from "../kernel/types";
+import { D1MemoryStore, type MemoryNote } from "../memory";
+import { D1ManifestStore, type StoredPluginManifest } from "../plugins/declarative/store";
 import type {
   CourseAssessment,
   CourseEmailMention,
@@ -9,14 +15,7 @@ import type {
   RememberResult,
   SearchItemsQuery,
   StaffPostQuery,
-} from "../agent/tools";
-import { recordCorrection } from "../corrections";
-import { D1ItemStore } from "../kernel/d1-item-store";
-import type { ItemEvent, JsonValue, StoredItem } from "../kernel/types";
-import type { AgentJob, AgentJobConfig } from "../jobs/daily-digest";
-import { D1JobStore, type AgentJobRun } from "../jobs/d1-job-store";
-import { D1MemoryStore, type MemoryNote } from "../memory";
-import { D1ManifestStore, type StoredPluginManifest } from "../plugins/declarative/store";
+} from "./types";
 import type {
   EventQuery,
   ItemQuery,
@@ -27,10 +26,6 @@ import type {
   UpcomingQuery,
 } from "./server";
 
-// Author roles the Ed plugin reports (ed-plugin.ts's `authorRole` field) that
-// count as teaching staff for the forum-brief playbook. Ed's course-scoped
-// role is one of student/tutor/admin; older payloads may report "staff".
-const STAFF_ROLES = new Set(["admin", "tutor", "staff", "instructor"]);
 const DEFAULT_STAFF_POST_WINDOW_DAYS = 14;
 
 interface CourseIdentityRow {
@@ -94,18 +89,20 @@ interface UpcomingRow {
   due_at: string;
 }
 
-interface EventRow {
-  id: string;
+// Events v2 (ADR-0036): one row per entry in `changes`. No item id / capability
+// row-id concept survives here — `seq` is the cursor.
+interface ChangeRow {
+  seq: number;
   type: ItemEvent["type"];
   source: string;
   item_id: string;
-  primitive: ItemEvent["primitive"] | null;
-  capability: string | null;
-  facet_type: string | null;
+  kind: string;
+  title: string;
+  url: string | null;
   field: string | null;
   before_json: string | null;
   after_json: string | null;
-  changed_fields_json: string | null;
+  topic: string | null;
   created_at: string;
 }
 
@@ -123,13 +120,11 @@ interface RelationRow {
 export class D1McpRepository implements McpRepository {
   private readonly items: D1ItemStore;
   private readonly manifests: D1ManifestStore;
-  private readonly jobs: D1JobStore;
   private readonly memory: D1MemoryStore;
 
   constructor(private readonly db: D1Database) {
     this.items = new D1ItemStore(db);
     this.manifests = new D1ManifestStore(db);
-    this.jobs = new D1JobStore(db);
     this.memory = new D1MemoryStore(db);
   }
 
@@ -210,27 +205,27 @@ export class D1McpRepository implements McpRepository {
     const rows = query.since
       ? await this.db
           .prepare(
-            `SELECT * FROM events
+            `SELECT * FROM changes
              WHERE created_at >= ?
-             ORDER BY created_at DESC
+             ORDER BY seq DESC
              LIMIT ?`,
           )
           .bind(query.since, query.limit)
-          .all<EventRow>()
+          .all<ChangeRow>()
       : await this.db
-          .prepare("SELECT * FROM events ORDER BY created_at DESC LIMIT ?")
+          .prepare("SELECT * FROM changes ORDER BY seq DESC LIMIT ?")
           .bind(query.limit)
-          .all<EventRow>();
+          .all<ChangeRow>();
     return rows.results.map(parseEvent);
   }
 
-  // Oldest-first window used by the triage runner so an over-cap backlog is
-  // consumed in order and the watermark can chain across cycles.
+  // Oldest-first window, ordered by the `seq` cursor so a caller can chain
+  // "since the last seq I saw" across cycles without gaps or repeats.
   async listEventsAscending(since: string, limit: number): Promise<ItemEvent[]> {
     const rows = await this.db
-      .prepare("SELECT * FROM events WHERE created_at >= ? ORDER BY created_at ASC LIMIT ?")
+      .prepare("SELECT * FROM changes WHERE created_at >= ? ORDER BY seq ASC LIMIT ?")
       .bind(since, limit)
-      .all<EventRow>();
+      .all<ChangeRow>();
     return rows.results.map(parseEvent);
   }
 
@@ -306,31 +301,11 @@ export class D1McpRepository implements McpRepository {
     return this.manifests.upsert(manifest, enabled);
   }
 
-  listAgentJobs(): Promise<AgentJob[]> {
-    return this.jobs.list();
-  }
-
-  configureAgentJob(
-    id: string,
-    input: AgentJobConfig,
-  ): Promise<AgentJob> {
-    return this.jobs.configure(id, input);
-  }
-
-  listAgentJobRuns(id: string, limit: number): Promise<AgentJobRun[]> {
-    return this.jobs.listRuns(id, limit);
-  }
-
-  listMemory(): Promise<MemoryNote[]> {
-    return this.memory.list();
-  }
-
-  getMemory(domain: string): Promise<MemoryNote> {
-    return this.memory.get(domain);
-  }
-
-  saveMemory(domain: string, content: string, expectedUpdatedAt?: string): Promise<MemoryNote> {
-    return this.memory.save(domain, content, expectedUpdatedAt);
+  // ADR-0034: the only memory read left in the admin surface. Corrections are
+  // stored verbatim (zero-LLM) by `remember`; this just lets an operator see
+  // what has been recorded.
+  listCorrections(): Promise<MemoryNote> {
+    return this.memory.get(CORRECTIONS_DOMAIN);
   }
 
   async getSyncStatus(): Promise<JsonValue | null> {
@@ -395,6 +370,8 @@ export class D1McpRepository implements McpRepository {
   }
 
   async searchItems(query: SearchItemsQuery): Promise<StoredItem[]> {
+    // LIKE, not FTS5 (ADR-0036 leaves the FTS switch to door v2 work) — items_fts
+    // exists from migration 0012 onward but nothing here reads it yet.
     const conditions = ["archived_at IS NULL", "(title LIKE ? ESCAPE '\\' OR body LIKE ? ESCAPE '\\')"];
     const like = `%${escapeLike(query.query)}%`;
     const values: Array<string | number> = [like, like];
@@ -615,20 +592,19 @@ export class D1McpRepository implements McpRepository {
   }
 }
 
-function parseEvent(row: EventRow): ItemEvent {
+function parseEvent(row: ChangeRow): ItemEvent {
   return {
-    id: row.id,
     type: row.type,
     source: row.source,
     itemId: row.item_id,
+    kind: row.kind,
+    title: row.title,
+    url: row.url,
+    topic: row.topic,
+    field: row.field,
+    before: row.before_json ? (JSON.parse(row.before_json) as JsonValue) : null,
+    after: row.after_json ? (JSON.parse(row.after_json) as JsonValue) : null,
     createdAt: row.created_at,
-    ...(row.primitive ? { primitive: row.primitive } : {}),
-    ...(row.capability ? { capability: row.capability } : {}),
-    ...(row.facet_type ? { facetType: row.facet_type } : {}),
-    ...(row.field ? { field: row.field } : {}),
-    ...(row.before_json ? { before: JSON.parse(row.before_json) as JsonValue } : {}),
-    ...(row.after_json ? { after: JSON.parse(row.after_json) as JsonValue } : {}),
-    ...(row.changed_fields_json ? { changedFields: JSON.parse(row.changed_fields_json) as string[] } : {}),
   };
 }
 
