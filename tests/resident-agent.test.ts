@@ -361,7 +361,7 @@ describe("buildConversationSystemPrompt", () => {
     const prompt = buildConversationSystemPrompt(new Date("2026-09-16T03:00:00.000Z"));
 
     expect(prompt).toContain("2026-09-16T03:00:00.000Z");
-    expect(PLAYBOOKS).toHaveLength(3);
+    expect(PLAYBOOKS).toHaveLength(4);
     for (const playbook of PLAYBOOKS) {
       expect(prompt).toContain(playbook.title);
       expect(prompt).toContain(playbook.procedure);
