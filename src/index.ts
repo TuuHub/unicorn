@@ -71,12 +71,13 @@ async function handleDoor(request: Request, env: Env, _ctx: ExecutionContext): P
     enableJsonResponse: true,
     sessionIdGenerator: undefined,
   });
-  const server = createDoorMcpServer({
+  const server = await createDoorMcpServer({
     briefs: new D1BriefStore(env.DB),
     memory: new D1MemoryStore(env.DB),
     repo: new D1DoorRepository(env.DB),
     settings: new D1SettingsRepository(env.DB),
     schedulerStatus: async () => ({ running: (await operationalStatus(env)).schedulerRunning }),
+    db: env.DB,
   });
   await server.connect(transport);
   return transport.handleRequest(request);
@@ -226,7 +227,7 @@ async function defaultFetch(request: Request, env: Env, context: ExecutionContex
       enableJsonResponse: true,
       sessionIdGenerator: undefined,
     });
-    const server = createAdminMcpServer(new D1McpRepository(env.DB));
+    const server = createAdminMcpServer(new D1McpRepository(env.DB), { db: env.DB });
     await server.connect(transport);
     return transport.handleRequest(request);
   }

@@ -1,0 +1,9 @@
+{
+  "name": "next_lab",
+  "description": "The next few upcoming items for one course, soonest deadline first.",
+  "inputSchema": {
+    "course": { "type": "string", "description": "Unit code, e.g. \"FIT2004\"." },
+    "limit": { "type": "integer", "description": "Max rows to return.", "default": 5 }
+  },
+  "sql": "SELECT source, item_id, title, due_at, state, bucket FROM v_upcoming WHERE course = :course ORDER BY due_at LIMIT :limit"
+}

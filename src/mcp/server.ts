@@ -3,6 +3,8 @@ import { z } from "zod";
 import type { ItemEvent, JsonValue, StoredItem } from "../kernel/types";
 import { estimateTokens, MEMORY_TOKEN_CAP, type MemoryNote } from "../memory";
 import type { StoredPluginManifest } from "../plugins/declarative/store";
+import { buildPublishPayload, browseTools, installTool, resolveToolsRepo } from "../tools/library";
+import { ALLOWED_VIEWS, D1UserToolStore, toolErrorResult } from "../tools/user-tools";
 
 const READ_ONLY = { destructiveHint: false, readOnlyHint: true } as const;
 const WRITE = { destructiveHint: false, readOnlyHint: false } as const;
@@ -71,7 +73,15 @@ export interface McpRepository {
 // gone (no model runs in the Worker); list_corrections replaces them with a
 // read of the one memory domain that is still written (verbatim, zero-LLM).
 // See ./door.ts for the client-facing server mounted at /mcp.
-export function createAdminMcpServer(repository: McpRepository): McpServer {
+export interface AdminMcpDeps {
+  // D1 handle for the ADR-0035 user-tool admin surface (describe_schema,
+  // define_tool, list_tools, delete_tool, browse_tools, install_tool,
+  // publish_tool). Optional so existing callers/tests that only exercise
+  // the McpRepository-backed tools above don't need to touch D1 at all.
+  db: D1Database;
+}
+
+export function createAdminMcpServer(repository: McpRepository, deps?: AdminMcpDeps): McpServer {
   const server = new McpServer({ name: "unicorn-admin", version: "0.1.0" });
 
   server.registerTool(
@@ -256,6 +266,125 @@ export function createAdminMcpServer(repository: McpRepository): McpServer {
       return jsonResult({ updatedAt: note.updatedAt, tokens: estimateTokens(note.content), tokenCap: MEMORY_TOKEN_CAP, content: note.content });
     },
   );
+
+  // --- User-defined SQL tools (ADR-0035 §9) ---------------------------------
+  // Only registered when a D1 handle is supplied — see AdminMcpDeps above.
+  if (deps) {
+    const toolStore = new D1UserToolStore(deps.db);
+
+    server.registerTool(
+      "describe_schema",
+      {
+        annotations: READ_ONLY,
+        description: "The five views user-tool SQL may read from — columns plus one example row each — so an agent can write define_tool's SQL correctly on the first try.",
+      },
+      async () => {
+        const schema: Record<string, { columns: string[]; example: Record<string, unknown> | null }> = {};
+        for (const view of ALLOWED_VIEWS) {
+          const columns = await deps.db.prepare(`PRAGMA table_info(${view})`).all<{ name: string }>();
+          const example = await deps.db.prepare(`SELECT * FROM ${view} LIMIT 1`).first<Record<string, unknown>>();
+          schema[view] = { columns: columns.results.map((column) => column.name), example: example ?? null };
+        }
+        return jsonResult(schema);
+      },
+    );
+
+    server.registerTool(
+      "define_tool",
+      {
+        annotations: WRITE,
+        description:
+          "Define (or update) a user tool: a name, description, flat input schema and one read-only SELECT/WITH statement over describe_schema's views. Guards are mechanical, not judged — a rejection quotes the offending SQL fragment and says how to fix it, so fix and retry with the same call.",
+        inputSchema: {
+          name: z.string().trim().min(1),
+          description: z.string().trim().min(1),
+          inputSchema: z.record(
+            z.string(),
+            z.object({
+              type: z.enum(["string", "number", "integer", "boolean"]),
+              description: z.string().optional(),
+              enum: z.array(z.union([z.string(), z.number()])).optional(),
+              default: z.union([z.string(), z.number(), z.boolean()]).optional(),
+            }),
+          ),
+          sql: z.string().trim().min(1),
+        },
+      },
+      async ({ name, description, inputSchema, sql }) => {
+        try {
+          return jsonResult({ tool: await toolStore.define({ name, description, inputSchema, sql }) });
+        } catch (error) {
+          return toolErrorResult(error, "DEFINE_TOOL_FAILED");
+        }
+      },
+    );
+
+    server.registerTool(
+      "list_tools",
+      { annotations: READ_ONLY, description: "List every user-defined SQL tool (up to the cap of 20)." },
+      async () => jsonResult({ tools: await toolStore.list() }),
+    );
+
+    server.registerTool(
+      "delete_tool",
+      { annotations: WRITE, description: "Delete a user-defined SQL tool by name.", inputSchema: { name: z.string().trim().min(1) } },
+      async ({ name }) => jsonResult({ deleted: await toolStore.delete(name) }),
+    );
+
+    server.registerTool(
+      "browse_tools",
+      {
+        annotations: READ_ONLY,
+        description: "List tools available in the shared library (a GitHub repo's index.json, cached 10 minutes), optionally filtered by a text query.",
+        inputSchema: { query: z.string().trim().min(1).optional() },
+      },
+      async ({ query }) => {
+        try {
+          const repo = await resolveToolsRepo(deps.db);
+          const index = await browseTools(repo, fetch, query);
+          return jsonResult({ repo, ...index });
+        } catch (error) {
+          return toolErrorResult(error, "BROWSE_TOOLS_FAILED");
+        }
+      },
+    );
+
+    server.registerTool(
+      "install_tool",
+      {
+        annotations: WRITE,
+        description: "Install a tool from the shared library by name: fetches its definition and runs it through the same guards as define_tool.",
+        inputSchema: { name: z.string().trim().min(1) },
+      },
+      async ({ name }) => {
+        try {
+          const repo = await resolveToolsRepo(deps.db);
+          const tool = await installTool(repo, name, (input) => toolStore.define(input));
+          return jsonResult({ tool });
+        } catch (error) {
+          return toolErrorResult(error, "INSTALL_TOOL_FAILED");
+        }
+      },
+    );
+
+    server.registerTool(
+      "publish_tool",
+      {
+        annotations: READ_ONLY,
+        description:
+          "Prepare a pull request for a defined tool against the shared library: returns the file path, file content, the index.json entry to add, and the exact `gh` commands to run. The Worker never writes to GitHub itself — the caller's own agent runs these.",
+        inputSchema: { name: z.string().trim().min(1) },
+      },
+      async ({ name }) => {
+        const tool = await toolStore.get(name);
+        if (!tool) {
+          return toolErrorResult(new Error(`No user tool named "${name}".`), "TOOL_NOT_FOUND");
+        }
+        const repo = await resolveToolsRepo(deps.db);
+        return jsonResult(buildPublishPayload(repo, tool));
+      },
+    );
+  }
 
   return server;
 }

@@ -1,0 +1,8 @@
+{
+  "name": "week_ahead",
+  "description": "Items due within the next N days (default 7), across every course.",
+  "inputSchema": {
+    "days": { "type": "integer", "description": "How many days ahead to look.", "default": 7 }
+  },
+  "sql": "SELECT source, item_id, title, due_at, course, bucket FROM v_upcoming WHERE due_at BETWEEN datetime('now') AND datetime('now', '+' || :days || ' days') ORDER BY due_at"
+}

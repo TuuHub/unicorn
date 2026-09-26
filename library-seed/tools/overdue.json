@@ -1,0 +1,6 @@
+{
+  "name": "overdue",
+  "description": "Items with a missed deadline in the last 7 days, across every course.",
+  "inputSchema": {},
+  "sql": "SELECT source, item_id, title, due_at, course, bucket FROM v_upcoming WHERE due_at < datetime('now') ORDER BY due_at"
+}

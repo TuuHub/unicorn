@@ -1,0 +1,8 @@
+{
+  "tools": [
+    { "name": "next_lab", "description": "The next few upcoming items for one course, soonest deadline first.", "path": "tools/next_lab.json" },
+    { "name": "overdue", "description": "Items with a missed deadline in the last 7 days, across every course.", "path": "tools/overdue.json" },
+    { "name": "week_ahead", "description": "Items due within the next N days (default 7), across every course.", "path": "tools/week_ahead.json" },
+    { "name": "course_activity", "description": "The most recent changes recorded for one course.", "path": "tools/course_activity.json" }
+  ]
+}

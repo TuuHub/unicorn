@@ -34,6 +34,7 @@ import {
 } from "./door-contracts";
 import type { DoorRepository, LabelItemInput } from "./door-repository";
 import { registerWidgetResources, widgetToolMeta } from "../widgets";
+import { registerUserTools } from "../tools/user-tools";
 
 const READ_ONLY = { destructiveHint: false, readOnlyHint: true } as const;
 const WRITE = { destructiveHint: false, readOnlyHint: false } as const;
@@ -45,6 +46,10 @@ export interface DoorDeps {
   settings: SettingsRepository;
   schedulerStatus: () => Promise<{ running: boolean }>;
   now?: () => Date;
+  // D1 handle for the ADR-0035 user-defined tools registered below. Optional
+  // so existing callers/tests that don't touch D1 keep working unchanged;
+  // production always supplies it (see src/index.ts).
+  db?: D1Database;
 }
 
 const INSTRUCTIONS = [
@@ -55,7 +60,12 @@ const INSTRUCTIONS = [
   "Every result's `Next:` line lists concrete follow-up calls computed from the data — prefer those over guessing arguments.",
 ].join("\n");
 
-export function createDoorMcpServer(deps: DoorDeps): McpServer {
+// Async because registering ADR-0035 user tools means re-listing user_tools
+// from D1 before the server starts handling requests — see the marked call
+// below. Every caller already awaits somewhere in the same async function
+// (src/index.ts's fetch handler, tests/mcp-door.test.ts's connectClient), so
+// this stays a one-line ripple, not a redesign.
+export async function createDoorMcpServer(deps: DoorDeps): Promise<McpServer> {
   const server = new McpServer({ name: "unicorn-door", version: "0.2.0" }, { instructions: INSTRUCTIONS });
 
   registerWidgetResources(server);
@@ -358,6 +368,9 @@ export function createDoorMcpServer(deps: DoorDeps): McpServer {
   }
 
   // user-defined tools (ADR-0035) are registered here
+  if (deps.db) {
+    await registerUserTools(server, { db: deps.db });
+  }
 
   return server;
 }
