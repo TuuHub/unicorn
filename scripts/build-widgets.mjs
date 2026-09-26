@@ -111,7 +111,7 @@ function buildPreviewHtml(inlinedHtml, structuredContent, theme) {
   const fixture = JSON.stringify({
     structuredContent,
     hostContext: { theme },
-    hostCapabilities: { experimental: { messages: true, updateModelContext: true } },
+    hostCapabilities: { message: { text: {} }, updateModelContext: { text: {} } },
   });
   const script = `<script>window.__UNICORN_PREVIEW__ = ${fixture};</script>`;
   return inlinedHtml.replace("<head>", `<head>\n    ${script}`);
