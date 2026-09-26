@@ -3,6 +3,7 @@ import { D1BriefStore } from "./briefs";
 import { D1MemoryStore } from "./memory";
 import { D1McpRepository } from "./mcp/d1-repository";
 import { createDoorMcpServer } from "./mcp/door";
+import { D1DoorRepository } from "./mcp/door-repository";
 import { createAdminMcpServer } from "./mcp/server";
 import { MoodleProbeError, probeMoodle } from "./moodle-probe";
 import { D1OAuthTokenStore, handleCallback, OAuthError, startAuthorization, type OAuthEnv } from "./oauth";
@@ -164,6 +165,9 @@ export default {
       const server = createDoorMcpServer({
         briefs: new D1BriefStore(env.DB),
         memory: new D1MemoryStore(env.DB),
+        repo: new D1DoorRepository(env.DB),
+        settings: new D1SettingsRepository(env.DB),
+        schedulerStatus: async () => ({ running: (await operationalStatus(env)).schedulerRunning }),
       });
       await server.connect(transport);
       return transport.handleRequest(request);
