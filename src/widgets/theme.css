@@ -1,0 +1,356 @@
+/* Shared design tokens for unicorn's MCP Apps widgets (ADR-0037).
+ *
+ * Palette: ink-navy text on a cool off-white surface, one indigo accent —
+ * deliberately not the warm-cream/terracotta or acid-green/near-black
+ * defaults. Serif for titles (a student's own material: course names, brief
+ * subjects, item titles), system sans for UI chrome, both from the system
+ * stack only — no web fonts, no CDN, so this must render offline inside a
+ * sandboxed iframe.
+ *
+ * Custom properties resolve to the host's own injected variables first
+ * (ui/notifications/host-context-changed -> styles.variables, e.g.
+ * --color-background-primary) and fall back to our tokens otherwise, so a
+ * widget inherits the chat client's palette when the host provides one.
+ */
+
+:root {
+  --u-bg: var(--color-background-primary, #f6f6f3);
+  --u-surface: var(--color-background-secondary, #ffffff);
+  --u-border: var(--color-border-primary, #e3e1dc);
+  --u-text: var(--color-text-primary, #1f2430);
+  --u-text-muted: var(--color-text-secondary, #6b6f76);
+  --u-accent: var(--color-accent, #5b5bd6);
+  --u-accent-contrast: #ffffff;
+  --u-danger: #c4433e;
+  --u-ok: #3f7d5c;
+  --u-warn: #a8710f;
+
+  --u-font-body: var(--font-sans, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif);
+  --u-font-title: "Iowan Old Style", "Palatino Linotype", Georgia, "Times New Roman", serif;
+  --u-font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --u-radius: var(--border-radius-md, 8px);
+  --u-radius-sm: 5px;
+  --u-space-1: 4px;
+  --u-space-2: 8px;
+  --u-space-3: 12px;
+  --u-space-4: 16px;
+  --u-space-5: 24px;
+  --u-space-6: 32px;
+
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --u-bg: var(--color-background-primary, #14151a);
+    --u-surface: var(--color-background-secondary, #1c1d24);
+    --u-border: var(--color-border-primary, #2c2e37);
+    --u-text: var(--color-text-primary, #e7e7ea);
+    --u-text-muted: var(--color-text-secondary, #93949c);
+    --u-accent: var(--color-accent, #8b8bf0);
+    --u-danger: #ff8178;
+    --u-ok: #6fcb9a;
+    --u-warn: #e0a941;
+  }
+}
+
+/* The host may state its theme explicitly (ui/notifications/host-context-changed
+   -> theme) rather than leaving it to the OS; each widget's script sets this
+   attribute from that message, which then wins over prefers-color-scheme. */
+:root[data-theme="dark"] {
+  --u-bg: var(--color-background-primary, #14151a);
+  --u-surface: var(--color-background-secondary, #1c1d24);
+  --u-border: var(--color-border-primary, #2c2e37);
+  --u-text: var(--color-text-primary, #e7e7ea);
+  --u-text-muted: var(--color-text-secondary, #93949c);
+  --u-accent: var(--color-accent, #8b8bf0);
+  --u-danger: #ff8178;
+  --u-ok: #6fcb9a;
+  --u-warn: #e0a941;
+}
+
+:root[data-theme="light"] {
+  --u-bg: var(--color-background-primary, #f6f6f3);
+  --u-surface: var(--color-background-secondary, #ffffff);
+  --u-border: var(--color-border-primary, #e3e1dc);
+  --u-text: var(--color-text-primary, #1f2430);
+  --u-text-muted: var(--color-text-secondary, #6b6f76);
+  --u-accent: var(--color-accent, #5b5bd6);
+  --u-danger: #c4433e;
+  --u-ok: #3f7d5c;
+  --u-warn: #a8710f;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--u-bg);
+  color: var(--u-text);
+}
+
+body {
+  padding: var(--u-space-4);
+  min-width: 280px;
+  font-family: var(--u-font-body);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3 {
+  margin: 0 0 var(--u-space-1);
+  font-family: var(--u-font-title);
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+h1 {
+  font-size: 19px;
+}
+h2 {
+  font-size: 16px;
+}
+h3 {
+  font-size: 14px;
+}
+
+/* Section labels stay sentence case and small, distinguished by color and
+   weight rather than tracked-out capitals. */
+.u-label {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--u-text-muted);
+  margin: 0 0 var(--u-space-2);
+}
+
+p {
+  margin: 0 0 var(--u-space-2);
+}
+ul,
+ol {
+  margin: 0 0 var(--u-space-2);
+  padding-left: var(--u-space-5);
+}
+a {
+  color: var(--u-accent);
+  text-decoration: none;
+}
+a:hover {
+  text-decoration: underline;
+}
+code {
+  font-family: var(--u-font-mono);
+  font-size: 0.9em;
+  background: var(--u-bg);
+  border: 1px solid var(--u-border);
+  border-radius: 4px;
+  padding: 0.05em 0.35em;
+}
+
+/* Dates and counts read better tabular — nothing jumps sideways as digits change. */
+time,
+.u-num {
+  font-variant-numeric: tabular-nums;
+}
+
+button {
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--u-text);
+  background: var(--u-surface);
+  border: 1px solid var(--u-border);
+  border-radius: var(--u-radius-sm);
+  padding: var(--u-space-2) var(--u-space-3);
+  cursor: pointer;
+  transition: background-color 120ms ease, opacity 120ms ease;
+}
+button:hover {
+  background: var(--u-border);
+}
+button:active {
+  opacity: 0.8;
+}
+button.u-primary {
+  background: var(--u-accent);
+  color: var(--u-accent-contrast);
+  border-color: transparent;
+}
+button.u-primary:hover {
+  filter: brightness(1.06);
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+button.u-quiet {
+  background: transparent;
+  border-color: transparent;
+  color: var(--u-text-muted);
+}
+button.u-quiet:hover {
+  background: var(--u-bg);
+  color: var(--u-text);
+}
+
+input[type="checkbox"] {
+  accent-color: var(--u-accent);
+  width: 15px;
+  height: 15px;
+}
+
+:focus-visible {
+  outline: 2px solid var(--u-accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.u-card {
+  background: var(--u-surface);
+  border: 1px solid var(--u-border);
+  border-radius: var(--u-radius);
+  padding: var(--u-space-4);
+  transition: opacity 160ms ease, transform 160ms ease;
+}
+
+.u-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 2px var(--u-space-2);
+  border-radius: 999px;
+  background: var(--u-bg);
+  border: 1px solid var(--u-border);
+  color: var(--u-text-muted);
+  white-space: nowrap;
+}
+.u-chip.u-chip-accent {
+  color: var(--u-accent);
+  border-color: color-mix(in srgb, var(--u-accent) 35%, var(--u-border));
+}
+.u-chip.u-chip-danger {
+  color: var(--u-danger);
+  border-color: color-mix(in srgb, var(--u-danger) 35%, var(--u-border));
+}
+.u-chip.u-chip-ok {
+  color: var(--u-ok);
+  border-color: color-mix(in srgb, var(--u-ok) 35%, var(--u-border));
+}
+.u-chip.u-chip-warn {
+  color: var(--u-warn);
+  border-color: color-mix(in srgb, var(--u-warn) 35%, var(--u-border));
+}
+
+.u-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+.u-dot.u-ok {
+  background: var(--u-ok);
+}
+.u-dot.u-warn {
+  background: var(--u-warn);
+}
+.u-dot.u-danger {
+  background: var(--u-danger);
+}
+.u-dot.u-off {
+  background: var(--u-text-muted);
+  opacity: 0.5;
+}
+
+.u-muted {
+  color: var(--u-text-muted);
+}
+.u-danger {
+  color: var(--u-danger);
+}
+.u-ok {
+  color: var(--u-ok);
+}
+
+.u-empty {
+  color: var(--u-text-muted);
+  text-align: center;
+  padding: var(--u-space-6) var(--u-space-4);
+}
+.u-empty .u-empty-title {
+  font-family: var(--u-font-title);
+  font-size: 16px;
+  color: var(--u-text);
+  margin-bottom: var(--u-space-1);
+}
+
+.u-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--u-space-3);
+}
+.u-row {
+  display: flex;
+  align-items: center;
+  gap: var(--u-space-2);
+}
+.u-between {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--u-space-2);
+}
+.u-wrap {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--u-space-1) var(--u-space-2);
+}
+
+.u-divider {
+  border: none;
+  border-top: 1px solid var(--u-border);
+  margin: var(--u-space-3) 0;
+}
+
+.u-icon {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  color: var(--u-text-muted);
+}
+
+/* State transitions the user's own action triggers — a card leaving after
+   "mark read", a checklist row's checkmark — are the only motion; nothing
+   animates on load. */
+.u-leaving {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
+@media (max-width: 360px) {
+  body {
+    padding: var(--u-space-3);
+    font-size: 13px;
+  }
+  h1 {
+    font-size: 17px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}

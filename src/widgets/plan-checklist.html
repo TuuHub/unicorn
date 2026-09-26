@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Plan</title>
+    <style>
+      /* UNICORN:THEME */
+    </style>
+    <style>
+      .plan-header {
+        margin-bottom: var(--u-space-3);
+      }
+      .plan-subject {
+        margin-top: 2px;
+      }
+      .progress-track {
+        height: 6px;
+        border-radius: 999px;
+        background: var(--u-border);
+        overflow: hidden;
+        margin: var(--u-space-2) 0 var(--u-space-1);
+      }
+      .progress-fill {
+        height: 100%;
+        background: var(--u-accent);
+        border-radius: 999px;
+        transition: width 200ms ease;
+      }
+      .progress-text {
+        font-size: 12.5px;
+      }
+      #plan-body {
+        margin-top: var(--u-space-4);
+      }
+      #plan-body .task-list {
+        list-style: none;
+        padding-left: 0;
+      }
+      #plan-body .task-list li {
+        margin-bottom: 6px;
+      }
+      #plan-body .task-list label {
+        display: flex;
+        align-items: flex-start;
+        gap: var(--u-space-2);
+        cursor: pointer;
+      }
+      #plan-body .task-list input {
+        margin-top: 2px;
+      }
+      .save-status {
+        margin-top: var(--u-space-3);
+        font-size: 12.5px;
+        min-height: 1.2em;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+
+    <script>
+      /* UNICORN:SHARED */
+    </script>
+    <script>
+      (function () {
+        const { bridge } = window.Unicorn;
+        const { renderMarkdown, escapeHtml: esc } = window.Unicorn.markdown;
+        const { listChecklistItems, toggleChecklistLine, checklistProgress } = window.Unicorn.checklist;
+        const { formatRelativeTime } = window.Unicorn.format;
+        const { replanRestPrompt, checklistToggleSummary } = window.Unicorn.prompts;
+
+        const root = document.getElementById("root");
+        let plan = null;
+        let saveTimer = null;
+
+        function subjectLabel(planData) {
+          if (planData.kind === "weekly") return `Week of ${planData.subject}`;
+          return planData.subject;
+        }
+
+        function render() {
+          if (!plan) {
+            root.innerHTML = `
+              <div class="u-empty">
+                <div class="u-empty-title">No plan yet</div>
+                <div>Ask your agent to plan the week or break down an assignment.</div>
+              </div>
+            `;
+            return;
+          }
+
+          const { done, total } = checklistProgress(plan.content);
+          const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+
+          root.innerHTML = `
+            <div class="plan-header">
+              <div class="u-between">
+                <h1>${esc(plan.kind === "weekly" ? "Weekly plan" : "Assignment plan")}</h1>
+                ${
+                  total > 0 && bridge.capabilities.message
+                    ? '<button type="button" class="u-quiet" id="replan-rest">Replan the rest</button>'
+                    : ""
+                }
+              </div>
+              <div class="plan-subject u-muted">${esc(subjectLabel(plan))} · updated ${esc(formatRelativeTime(plan.updatedAt, new Date()) || "just now")}</div>
+              ${
+                total > 0
+                  ? `
+                    <div class="progress-track"><div class="progress-fill" style="width:${pct}%"></div></div>
+                    <div class="progress-text u-muted"><span class="u-num">${done}/${total}</span> done</div>
+                  `
+                  : ""
+              }
+            </div>
+            <div id="plan-body"></div>
+            <div id="save-status" class="save-status u-muted"></div>
+          `;
+
+          document.getElementById("plan-body").innerHTML = renderMarkdown(plan.content);
+          bindCheckboxes();
+
+          const replanButton = document.getElementById("replan-rest");
+          if (replanButton) {
+            replanButton.addEventListener("click", () => {
+              const remaining = listChecklistItems(plan.content)
+                .filter((item) => !item.checked)
+                .map((item) => item.text);
+              bridge.sendMessage(replanRestPrompt(plan, remaining)).catch(() => {});
+            });
+          }
+        }
+
+        function bindCheckboxes() {
+          const items = listChecklistItems(plan.content);
+          const boxes = document.querySelectorAll("#plan-body .task-list input[type=checkbox]");
+          boxes.forEach((box, index) => {
+            const item = items[index];
+            if (!item) return;
+            box.disabled = false;
+            box.addEventListener("change", () => onToggle(item));
+          });
+        }
+
+        function setStatus(state, message) {
+          const el = document.getElementById("save-status");
+          if (!el) return;
+          if (state === "saving") el.textContent = "Saving…";
+          else if (state === "saved") el.textContent = "Saved";
+          else if (state === "error") el.innerHTML = `<span class="u-danger">${esc(message || "Could not save. Retrying on the next change.")}</span>`;
+          else el.textContent = "";
+        }
+
+        function onToggle(item) {
+          plan.content = toggleChecklistLine(plan.content, item.line);
+          const updated = listChecklistItems(plan.content).find((candidate) => candidate.line === item.line);
+          const { done, total } = checklistProgress(plan.content);
+          const fill = document.querySelector(".progress-fill");
+          const text = document.querySelector(".progress-text");
+          if (fill && total > 0) fill.style.width = `${Math.round((done / total) * 100)}%`;
+          if (text) text.innerHTML = `<span class="u-num">${done}/${total}</span> done`;
+          if (updated) bridge.updateModelContext(checklistToggleSummary(plan, updated, updated.checked, done, total));
+          scheduleSave();
+        }
+
+        function scheduleSave() {
+          clearTimeout(saveTimer);
+          setStatus("saving");
+          saveTimer = setTimeout(save, 600);
+        }
+
+        async function save() {
+          try {
+            await bridge.callTool("save_plan", { kind: plan.kind, subject: plan.subject, content: plan.content });
+            setStatus("saved");
+          } catch (err) {
+            setStatus("error", err && err.message);
+          }
+        }
+
+        bridge.init({
+          onToolResult(structuredContent) {
+            plan = structuredContent ? structuredContent.plan : null;
+            render();
+          },
+          onHostContext(context) {
+            if (context && context.theme) document.documentElement.dataset.theme = context.theme;
+          },
+        });
+        bridge.watchSize();
+      })();
+    </script>
+  </body>
+</html>

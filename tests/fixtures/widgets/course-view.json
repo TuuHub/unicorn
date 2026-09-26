@@ -1,0 +1,97 @@
+{
+  "query": "FIT3175",
+  "code": "FIT3175",
+  "title": "Software Engineering: Process and Tools",
+  "term": "2026 S2",
+  "ambiguous": false,
+  "matches": [],
+  "sources": ["campus-moodle", "campus-ed", "campus-canvas"],
+  "buckets": [
+    {
+      "bucket": "course/FIT3175/assignment-2",
+      "label": "Assignment 2",
+      "dueAt": "2026-10-06T09:00:00.000Z",
+      "state": "not submitted",
+      "items": [
+        {
+          "source": "campus-canvas",
+          "itemId": "assess-882",
+          "kind": "assessment",
+          "title": "Assignment 2: Team project",
+          "url": "https://canvas.example.edu/courses/1/assignments/882",
+          "timestamp": "2026-09-01T00:00:00.000Z",
+          "dueAt": "2026-10-06T09:00:00.000Z",
+          "state": "not submitted",
+          "course": "FIT3175",
+          "bucket": "course/FIT3175/assignment-2",
+          "topic": null,
+          "labeledBy": "structure",
+          "unlabeled": false,
+          "staff": false,
+          "snippet": "Design and implement a small service with your team, following the process outlined in week 4."
+        },
+        {
+          "source": "campus-ed",
+          "itemId": "thread-501",
+          "kind": "thread",
+          "title": "Clarification on group sizes",
+          "url": "https://ed.example.edu/t/501",
+          "timestamp": "2026-09-24T03:12:00.000Z",
+          "dueAt": null,
+          "state": null,
+          "course": "FIT3175",
+          "bucket": "course/FIT3175/assignment-2",
+          "topic": null,
+          "labeledBy": "structure",
+          "unlabeled": false,
+          "staff": true,
+          "snippet": "Groups can have 3-4 students this term; let us know if yours is uneven."
+        }
+      ]
+    },
+    {
+      "bucket": "course/FIT3175/general",
+      "label": "General",
+      "dueAt": null,
+      "state": null,
+      "items": [
+        {
+          "source": "campus-moodle",
+          "itemId": "ann-77",
+          "kind": "announcement",
+          "title": "Guest lecture next week",
+          "url": "https://moodle.example.edu/course/view.php?id=1#ann-77",
+          "timestamp": "2026-09-25T22:00:00.000Z",
+          "dueAt": null,
+          "state": null,
+          "course": "FIT3175",
+          "bucket": "course/FIT3175/general",
+          "topic": null,
+          "labeledBy": "structure",
+          "unlabeled": false,
+          "staff": true,
+          "snippet": "An industry guest will join week 10's lecture to talk about CI/CD at scale."
+        }
+      ]
+    }
+  ],
+  "unlabeled": [
+    {
+      "source": "gmail",
+      "itemId": "msg-99",
+      "kind": "email",
+      "title": "Re: FIT3175 extension request",
+      "url": null,
+      "timestamp": "2026-09-23T11:00:00.000Z",
+      "dueAt": null,
+      "state": null,
+      "course": "FIT3175",
+      "bucket": null,
+      "topic": null,
+      "labeledBy": null,
+      "unlabeled": true,
+      "staff": true,
+      "snippet": "Your extension has been approved until Friday."
+    }
+  ]
+}
