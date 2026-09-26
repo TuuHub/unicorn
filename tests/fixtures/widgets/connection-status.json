@@ -1,0 +1,39 @@
+{
+  "timezone": "Australia/Melbourne",
+  "latestCursor": "418",
+  "scheduler": { "running": true, "lastCycleAt": "2026-09-26T21:05:00.000Z" },
+  "sources": [
+    {
+      "id": "campus-moodle",
+      "label": "Moodle",
+      "configured": true,
+      "lastSyncAt": "2026-09-26T21:05:00.000Z",
+      "lastError": null,
+      "items": 214
+    },
+    {
+      "id": "campus-ed",
+      "label": "Ed",
+      "configured": true,
+      "lastSyncAt": "2026-09-26T18:00:00.000Z",
+      "lastError": null,
+      "items": 96
+    },
+    {
+      "id": "campus-canvas",
+      "label": "Canvas",
+      "configured": true,
+      "lastSyncAt": "2026-09-25T09:00:00.000Z",
+      "lastError": "401 Unauthorized — personal token expired",
+      "items": 58
+    },
+    {
+      "id": "gmail",
+      "label": "Gmail",
+      "configured": false,
+      "lastSyncAt": null,
+      "lastError": null,
+      "items": 0
+    }
+  ]
+}

@@ -1,0 +1,76 @@
+{
+  "nextCursor": "418",
+  "hasMore": false,
+  "counts": {
+    "deadline.changed": 1,
+    "grade.changed": 1,
+    "notice.posted": 1,
+    "content.changed": 1
+  },
+  "events": [
+    {
+      "cursor": "415",
+      "type": "deadline.changed",
+      "at": "2026-09-26T04:00:00.000Z",
+      "source": "campus-canvas",
+      "itemId": "assess-882",
+      "kind": "assessment",
+      "title": "Assignment 2: Team project",
+      "url": "https://canvas.example.edu/courses/1/assignments/882",
+      "course": "FIT3175",
+      "bucket": "course/FIT3175/assignment-2",
+      "topic": null,
+      "field": "dueAt",
+      "before": "2026-10-03T23:55:00.000Z",
+      "after": "2026-10-06T09:00:00.000Z"
+    },
+    {
+      "cursor": "416",
+      "type": "grade.changed",
+      "at": "2026-09-25T20:00:00.000Z",
+      "source": "campus-moodle",
+      "itemId": "assess-410",
+      "kind": "assessment",
+      "title": "Quiz 3",
+      "url": "https://moodle.example.edu/mod/quiz/view.php?id=410",
+      "course": "FIT2004",
+      "bucket": "course/FIT2004/quiz-3",
+      "topic": null,
+      "field": "grade",
+      "before": 78,
+      "after": 84
+    },
+    {
+      "cursor": "417",
+      "type": "notice.posted",
+      "at": "2026-09-25T10:00:00.000Z",
+      "source": "campus-ed",
+      "itemId": "thread-501",
+      "kind": "thread",
+      "title": "Clarification on group sizes",
+      "url": "https://ed.example.edu/t/501",
+      "course": "FIT3175",
+      "bucket": "course/FIT3175/assignment-2",
+      "topic": null,
+      "field": null,
+      "before": null,
+      "after": null
+    },
+    {
+      "cursor": "418",
+      "type": "content.changed",
+      "at": "2026-09-24T08:00:00.000Z",
+      "source": "campus-moodle",
+      "itemId": "ann-77",
+      "kind": "announcement",
+      "title": "Guest lecture next week",
+      "url": "https://moodle.example.edu/course/view.php?id=1#ann-77",
+      "course": "FIT3175",
+      "bucket": "course/FIT3175/general",
+      "topic": null,
+      "field": "body",
+      "before": "An industry guest will join a future lecture.",
+      "after": "An industry guest will join week 10's lecture to talk about CI/CD at scale."
+    }
+  ]
+}
