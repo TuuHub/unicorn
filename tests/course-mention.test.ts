@@ -23,11 +23,11 @@ describe("extractUnitCodes", () => {
 });
 
 describe("courseMentionFacet", () => {
-  it("builds a course-mention facet with the mentions-course relation capability", () => {
+  it("builds a course-mention facet with no capability binding (structure, not a behavior primitive)", () => {
     expect(courseMentionFacet(["FIT2004"])).toEqual({
       type: "course-mention",
       data: { codes: ["FIT2004"] },
-      capabilities: [{ name: "mentions-course", primitive: "relation", field: "codes" }],
+      capabilities: [],
     });
   });
 

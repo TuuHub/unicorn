@@ -236,7 +236,7 @@ describe("DeclarativePlugin.pull (MCP transport)", () => {
           {
             type: "course-mention",
             data: { codes: ["FIT2004"] },
-            capabilities: [{ name: "mentions-course", primitive: "relation", field: "codes" }],
+            capabilities: [],
           },
         ],
       }),
