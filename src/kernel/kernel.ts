@@ -1,4 +1,9 @@
-import type { Facet, IngestResult, ItemEvent, ItemInput, ItemStore, JsonValue, StoredItem } from "./types";
+import { isStaffAuthored } from "./staff-roles";
+import type { ChangeType, Facet, IngestResult, ItemEvent, ItemInput, ItemStore, JsonValue, StoredItem } from "./types";
+
+// A capability name matching this counts as a grade change regardless of its
+// primitive (a numeric mark, a letter grade, a released/withheld state).
+const GRADE_CAPABILITY_PATTERN = /grade|mark|score/i;
 
 export class Kernel {
   constructor(
@@ -15,9 +20,12 @@ export class Kernel {
       const stored = await this.store.find(input.source, input.id);
       const existing = stored ? normalizeStoredItem(stored) : null;
       if (existing) {
+        const wasArchived = Boolean(existing.archivedAt);
         if (equal(existingContent(existing), input)) {
-          if (existing.archivedAt) {
-            await this.store.commit({ ...existing, archivedAt: undefined }, []);
+          const events: ItemEvent[] = wasArchived ? [restoredEvent(input, this.now().toISOString())] : [];
+          if (wasArchived) {
+            await this.store.commit({ ...existing, archivedAt: undefined }, events);
+            result.events.push(...events);
           }
           result.unchanged += 1;
           continue;
@@ -25,6 +33,9 @@ export class Kernel {
 
         const updatedAt = this.now().toISOString();
         const events = diffEvents(existing, input, updatedAt);
+        if (wasArchived) {
+          events.unshift(restoredEvent(input, updatedAt));
+        }
         await this.store.commit(
           { ...structuredClone(input), createdAt: existing.createdAt, updatedAt },
           events,
@@ -36,13 +47,7 @@ export class Kernel {
 
       const createdAt = this.now().toISOString();
       const item: StoredItem = { ...structuredClone(input), createdAt, updatedAt: createdAt };
-      const event: ItemEvent = {
-        id: crypto.randomUUID(),
-        type: "item.created",
-        source: input.source,
-        itemId: input.id,
-        createdAt,
-      };
+      const event = creationEvent(input, createdAt);
       await this.store.commit(item, [event]);
       result.created += 1;
       result.events.push(event);
@@ -120,35 +125,55 @@ function isTimestamp(value: string): boolean {
   return /^\d{4}-\d{2}-\d{2}T/.test(value) && !Number.isNaN(Date.parse(value));
 }
 
+// A fresh item is `item.added`, unless the author is teaching staff — then it
+// is `notice.posted` (topic is left null until the triage routine assigns
+// one; see ADR-0034/0036).
+function creationEvent(input: ItemInput, createdAt: string): ItemEvent {
+  const type: ChangeType = isStaffAuthored(input.facets) ? "notice.posted" : "item.added";
+  return baseEvent(input, type, createdAt);
+}
+
+function restoredEvent(input: ItemInput, createdAt: string): ItemEvent {
+  return baseEvent(input, "item.restored", createdAt);
+}
+
+function baseEvent(
+  input: ItemInput,
+  type: ChangeType,
+  createdAt: string,
+  extra: Partial<Pick<ItemEvent, "field" | "before" | "after" | "topic">> = {},
+): ItemEvent {
+  return {
+    type,
+    source: input.source,
+    itemId: input.id,
+    kind: input.kind,
+    title: input.title,
+    url: input.url ?? null,
+    topic: extra.topic ?? null,
+    field: extra.field ?? null,
+    before: extra.before ?? null,
+    after: extra.after ?? null,
+    createdAt,
+  };
+}
+
+// The feed is typed by what a student would ask about, not by which column
+// changed: a moved deadline, a released grade, or edited prose are events; a
+// view-count tick, a relation, an actor, or a raw-only source change are not
+// (the item still updates in the store — see diffEvents' caller).
 function diffEvents(existing: StoredItem, input: ItemInput, createdAt: string): ItemEvent[] {
-  const events = diffCapabilities(existing, input, createdAt);
-  const changedFields: string[] = (["kind", "title", "timestamp", "url", "body", "raw"] as const).filter(
-    (field) => !equal(existing[field], input[field]),
-  );
+  const events: ItemEvent[] = [...diffCapabilities(existing, input, createdAt)];
 
-  const timestampCapabilityChanged = events.some(
-    (event) => event.primitive === "temporal" && equal(event.before, existing.timestamp) && equal(event.after, input.timestamp),
-  );
-  if (timestampCapabilityChanged) {
-    const index = changedFields.indexOf("timestamp");
-    if (index !== -1) {
-      changedFields.splice(index, 1);
-    }
-  }
-
-  if (!equal(unboundFacetData(existing.facets), unboundFacetData(input.facets))) {
-    changedFields.push("facets");
-  }
-
-  if (changedFields.length) {
-    events.push({
-      id: crypto.randomUUID(),
-      type: "item.updated",
-      source: input.source,
-      itemId: input.id,
-      createdAt,
-      changedFields,
-    });
+  const titleChanged = existing.title !== input.title;
+  const bodyChanged = (existing.body ?? "") !== (input.body ?? "");
+  if (titleChanged || bodyChanged) {
+    events.push(
+      baseEvent(input, "content.changed", createdAt, {
+        before: { title: existing.title, body: existing.body ?? null },
+        after: { title: input.title, body: input.body ?? null },
+      }),
+    );
   }
 
   return events;
@@ -167,26 +192,42 @@ function diffCapabilities(existing: StoredItem, input: ItemInput, createdAt: str
     }
 
     const binding = after ?? before!;
-    events.push({
-      id: crypto.randomUUID(),
-      type: "capability.changed",
-      source: input.source,
-      itemId: input.id,
-      createdAt,
-      primitive: binding.primitive,
-      capability: binding.capability,
-      facetType: binding.facetType,
-      field: binding.field,
-      ...(before === undefined ? {} : { before: before.value }),
-      ...(after === undefined ? {} : { after: after.value }),
-    });
+    const type = changeTypeForCapability(binding.capability, binding.primitive);
+    if (!type) {
+      // relation / actor / scalar changes are not news (ADR-0036) — the item
+      // still updates in the store, just with no event.
+      continue;
+    }
+    events.push(
+      baseEvent(input, type, createdAt, {
+        field: binding.capability,
+        before: before?.value ?? null,
+        after: after?.value ?? null,
+      }),
+    );
   }
 
   return events;
 }
 
+// Order matters: a grade-shaped capability name wins regardless of primitive
+// (ADR-0036), then temporal, then other state capabilities. Relation, actor
+// and scalar capabilities that are not grade-shaped produce no event.
+function changeTypeForCapability(capabilityName: string, primitive: string): ChangeType | null {
+  if (GRADE_CAPABILITY_PATTERN.test(capabilityName)) {
+    return "grade.changed";
+  }
+  if (primitive === "temporal") {
+    return "deadline.changed";
+  }
+  if (primitive === "state") {
+    return "state.changed";
+  }
+  return null;
+}
+
 interface BoundCapabilityValue {
-  primitive: ItemEvent["primitive"] & string;
+  primitive: string;
   capability: string;
   facetType: string;
   field: string;
@@ -208,16 +249,6 @@ function capabilityValues(facets: Facet[]): Map<string, BoundCapabilityValue> {
     }
   }
   return values;
-}
-
-function unboundFacetData(facets: Facet[]): JsonValue {
-  return facets.map((facet) => {
-    const boundFields = new Set(facet.capabilities.map((capability) => capability.field));
-    return {
-      type: facet.type,
-      data: Object.fromEntries(Object.entries(facet.data).filter(([field]) => !boundFields.has(field))),
-    };
-  });
 }
 
 function existingContent(item: StoredItem): ItemInput {

@@ -33,21 +33,31 @@ export interface StoredItem extends ItemInput {
   archivedAt?: string;
 }
 
-export type ItemEventType = "item.created" | "item.updated" | "capability.changed";
+// Events v2 (ADR-0036): typed by what a student would ask about, not by which
+// column changed. Never pruned; retention archives Items and emits
+// item.archived. `changes.seq` (the D1 autoincrement id) is the cursor.
+export type ChangeType =
+  | "item.added"
+  | "item.archived"
+  | "item.restored"
+  | "deadline.changed"
+  | "state.changed"
+  | "grade.changed"
+  | "content.changed"
+  | "notice.posted";
 
 export interface ItemEvent {
-  id: string;
-  type: ItemEventType;
+  type: ChangeType;
   source: string;
   itemId: string;
+  kind: string;
+  title: string;
+  url: string | null;
+  topic: string | null;
+  field: string | null;
+  before: JsonValue | null;
+  after: JsonValue | null;
   createdAt: string;
-  primitive?: Primitive;
-  capability?: string;
-  facetType?: string;
-  field?: string;
-  before?: JsonValue;
-  after?: JsonValue;
-  changedFields?: string[];
 }
 
 export interface IngestResult {
