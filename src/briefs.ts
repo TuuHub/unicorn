@@ -1,7 +1,17 @@
-// ADR-0031 briefs: durable output of scheduled playbooks and the daily digest.
-// This is the one inbox the door's get_briefs/ack_briefs tools (ADR-0030) read from.
+// ADR-0031/0035 briefs: durable output of scheduled playbooks and the daily
+// digest. This is the one inbox the door's get_briefs/ack_briefs/write_brief
+// tools read from and write to.
 
-export type BriefKind = "weekly-plan" | "assignment-plan" | "forum-brief" | "digest";
+// The four built-in kinds, plus any kebab-case slug a routine names through
+// write_brief (ADR-0035) — migration 0012 dropped the old closed CHECK
+// constraint on `briefs.kind` for exactly this reason.
+export type BriefKind = "weekly-plan" | "assignment-plan" | "forum-brief" | "digest" | string;
+
+// write_brief's id scheme (ADR-0035): a repeated idempotencyKey is a no-op
+// because D1BriefStore.insert() is idempotent on `id`.
+export function routineBriefId(kind: string, idempotencyKey: string): string {
+  return `routine:${kind}:${idempotencyKey}`;
+}
 
 export interface Brief {
   id: string;
