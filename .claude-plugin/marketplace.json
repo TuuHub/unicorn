@@ -1,0 +1,15 @@
+{
+  "name": "unicorn",
+  "owner": {
+    "name": "bunizao",
+    "url": "https://github.com/TuuHub/unicorn"
+  },
+  "description": "The unicorn Claude Code plugin: door MCP tools, playbooks as skills, and a briefs SessionStart hook for your self-deployed unicorn Worker.",
+  "plugins": [
+    {
+      "name": "unicorn",
+      "source": "./claude-plugin",
+      "description": "Door MCP tools, the four playbooks as skills, and a SessionStart hook that pulls unread briefs from your self-deployed unicorn Worker."
+    }
+  ]
+}
