@@ -80,6 +80,26 @@ export interface MappingSpec {
   facets?: ManifestFacet[];
 }
 
+// Planned extension (ARCHITECTURE §5, ADR-0017/0038): pagination and fan-out for
+// Tier-1 HTTP/JSON sources, so most REST APIs (Canvas-shaped: paged course lists,
+// per-course assignment lists) fit without a Tier-2 code plugin. Deliberately no
+// expression language — three fixed shapes cover the pagination styles seen in the
+// wild (GitHub/Canvas link headers, cursor APIs, plain page numbers).
+export type PaginationSpec =
+  | { type: "link-header"; maxPages?: number }
+  | { type: "cursor"; cursorPath: string; param: string; maxPages?: number }
+  | { type: "page"; param: string; start: number; maxPages?: number };
+
+// Fan-out: fetch a parent list once, then run the main request once per parent
+// element, substituting `{{<as>.<path>}}` placeholders into the main URL. Item
+// mapping can reach into the current parent record with a `$parent.<path>` ValueSpec
+// path (see readSpec) — the same dot-path mechanism the mapping already uses.
+export interface FanOutSpec {
+  from: { url: string; itemsPath?: string; pagination?: PaginationSpec };
+  as: string;
+  max: number;
+}
+
 // A manifest is either the original HTTP/RSS pull (format + url) or a remote-MCP pull
 // (transport). The two are mutually exclusive at the top level; everything else
 // (id, name, itemsPath, mapping) is shared.
@@ -91,6 +111,8 @@ export interface PluginManifestHttp {
   url: string;
   itemsPath?: string;
   auth?: ManifestAuth;
+  pagination?: PaginationSpec;
+  fanOut?: FanOutSpec;
   mapping: MappingSpec;
 }
 
@@ -154,16 +176,89 @@ const transportAuthSchema = z.union([
   z.object({ type: z.literal("oauth"), provider: z.literal("google") }),
 ]);
 
-const httpManifestSchema = z.object({
-  version: z.literal(1),
-  id: idSchema,
-  name: nameSchema,
-  format: z.enum(["json", "rss"]),
-  url: httpsUrlSchema("Plugin URLs must use HTTPS."),
-  itemsPath: z.string().trim().min(1).optional(),
-  auth: httpAuthSchema.optional(),
-  mapping: mappingSchema,
+// maxPages: default 5 applied at pull time (see clampMaxPages), hard cap 10 here.
+const paginationMaxPagesSchema = z.number().int().min(1).max(10).optional();
+
+const paginationSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("link-header"), maxPages: paginationMaxPagesSchema }),
+  z.object({
+    type: z.literal("cursor"),
+    cursorPath: z.string().trim().min(1),
+    param: z.string().trim().min(1),
+    maxPages: paginationMaxPagesSchema,
+  }),
+  z.object({
+    type: z.literal("page"),
+    param: z.string().trim().min(1),
+    start: z.number().int().min(0),
+    maxPages: paginationMaxPagesSchema,
+  }),
+]);
+
+const fanOutSchema = z.object({
+  from: z.object({
+    url: httpsUrlSchema("Fan-out source URLs must use HTTPS."),
+    itemsPath: z.string().trim().min(1).optional(),
+    pagination: paginationSchema.optional(),
+  }),
+  // A simple identifier: it appears verbatim inside `{{as.field}}` in the main URL.
+  as: z.string().trim().regex(/^[a-zA-Z][a-zA-Z0-9_]{0,31}$/, "fanOut.as must be a simple identifier."),
+  max: z.number().int().min(1).max(20),
 });
+
+// `{{name.path}}` placeholders in a manifest URL. Matched eagerly against fanOut.as
+// below so a typo'd or made-up var name fails validation instead of silently
+// fetching a literal "{{course.id}}" segment.
+const PLACEHOLDER_PATTERN = /\{\{([a-zA-Z][a-zA-Z0-9_]*)\.([a-zA-Z0-9_.]+)\}\}/g;
+
+function placeholderVars(url: string): string[] {
+  return Array.from(url.matchAll(PLACEHOLDER_PATTERN), (match) => match[1]);
+}
+
+const PARENT_PATH_PREFIX = "$parent.";
+
+// Every ValueSpec path in a mapping (including facet fields), so we can reject a
+// `$parent.` reference when there is no fanOut to supply a parent record.
+function mappingPathSpecs(mapping: z.infer<typeof mappingSchema>): string[] {
+  const specs: ValueSpec[] = [mapping.id, mapping.kind, mapping.title, mapping.timestamp];
+  if (mapping.url) specs.push(mapping.url);
+  if (mapping.body) specs.push(mapping.body);
+  for (const facet of mapping.facets ?? []) {
+    if ("fields" in facet) {
+      specs.push(...Object.values(facet.fields));
+    }
+  }
+  return specs.filter((spec): spec is { path: string } => "path" in spec).map((spec) => spec.path);
+}
+
+const httpManifestSchema = z
+  .object({
+    version: z.literal(1),
+    id: idSchema,
+    name: nameSchema,
+    format: z.enum(["json", "rss"]),
+    url: httpsUrlSchema("Plugin URLs must use HTTPS."),
+    itemsPath: z.string().trim().min(1).optional(),
+    auth: httpAuthSchema.optional(),
+    pagination: paginationSchema.optional(),
+    fanOut: fanOutSchema.optional(),
+    mapping: mappingSchema,
+  })
+  .superRefine((manifest, ctx) => {
+    if ((manifest.pagination || manifest.fanOut) && manifest.format !== "json") {
+      ctx.addIssue({ code: "custom", message: 'pagination and fanOut only support format "json".' });
+    }
+    const knownVar = manifest.fanOut?.as;
+    for (const name of placeholderVars(manifest.url)) {
+      if (name !== knownVar) {
+        ctx.addIssue({ code: "custom", message: `Manifest URL references unknown placeholder var "${name}".` });
+      }
+    }
+    const referencesParent = mappingPathSpecs(manifest.mapping).some((path) => path.startsWith(PARENT_PATH_PREFIX));
+    if (referencesParent && !manifest.fanOut) {
+      ctx.addIssue({ code: "custom", message: "mapping references $parent but the manifest has no fanOut." });
+    }
+  });
 
 const mcpManifestSchema = z.object({
   version: z.literal(1),
@@ -182,6 +277,11 @@ const mcpManifestSchema = z.object({
 
 export function parsePluginManifest(value: unknown): PluginManifest {
   const isMcp = Boolean(value && typeof value === "object" && "transport" in value);
+  // Pagination/fan-out only make sense for a paged HTTP fetch; give a clear error
+  // instead of letting zod silently drop the unknown keys on the mcp schema.
+  if (isMcp && value && typeof value === "object" && ("pagination" in value || "fanOut" in value)) {
+    throw new Error("pagination and fanOut are not supported on the mcp transport.");
+  }
   return (isMcp ? mcpManifestSchema.parse(value) : httpManifestSchema.parse(value)) as PluginManifest;
 }
 
@@ -230,19 +330,121 @@ export class DeclarativePlugin implements Plugin {
   }
 
   private async pullHttp(manifest: PluginManifestHttp): Promise<ItemInput[]> {
-    const url = new URL(manifest.url);
-    const headers: Record<string, string> = { Accept: manifest.format === "rss" ? "application/rss+xml" : "application/json" };
-    this.applyHttpAuth(url, headers, manifest.auth);
-    const response = await this.fetcher(url, { headers, redirect: "manual", signal: AbortSignal.timeout(15_000) });
-    if (!response.ok) {
-      throw new Error(`Declarative plugin ${this.id} returned HTTP ${response.status}.`);
+    if (manifest.format === "rss") {
+      // RSS never paginates or fans out (the schema rejects that combination), so
+      // this stays the original single-fetch path, untouched.
+      const url = new URL(manifest.url);
+      const headers: Record<string, string> = { Accept: "application/rss+xml" };
+      this.applyHttpAuth(url, headers, manifest.auth);
+      const response = await this.fetcher(url, { headers, redirect: "manual", signal: AbortSignal.timeout(15_000) });
+      if (!response.ok) {
+        throw new Error(`Declarative plugin ${this.id} returned HTTP ${response.status}.`);
+      }
+      const records = parseFeed(await response.text());
+      return records.map((record) => this.mapItem(record));
     }
-    const payload = manifest.format === "rss" ? parseFeed(await response.text()) : await response.json();
-    const records = manifest.itemsPath ? readPath(payload, manifest.itemsPath) : payload;
-    if (!Array.isArray(records)) {
-      throw new Error(`Declarative plugin ${this.id} itemsPath did not resolve to an array.`);
+
+    const budget = new SubrequestBudget(this.id);
+    if (manifest.fanOut) {
+      return this.pullFanOut(manifest, manifest.fanOut, budget);
     }
+    const records = await this.fetchPaginatedJson(new URL(manifest.url), manifest.auth, manifest.itemsPath, manifest.pagination, budget);
     return records.map((record) => this.mapItem(record));
+  }
+
+  private async pullFanOut(manifest: PluginManifestHttp, fanOut: FanOutSpec, budget: SubrequestBudget): Promise<ItemInput[]> {
+    const parents = await this.fetchPaginatedJson(
+      new URL(fanOut.from.url),
+      manifest.auth,
+      fanOut.from.itemsPath,
+      fanOut.from.pagination,
+      budget,
+    );
+    const items: ItemInput[] = [];
+    for (const parent of parents.slice(0, fanOut.max)) {
+      const mainUrl = new URL(substitutePlaceholders(manifest.url, fanOut.as, parent));
+      const records = await this.fetchPaginatedJson(mainUrl, manifest.auth, manifest.itemsPath, manifest.pagination, budget);
+      for (const record of records) {
+        items.push(this.mapItem(record, parent));
+      }
+    }
+    return items;
+  }
+
+  // Fetches one JSON resource, following `pagination` (if any) up to its maxPages
+  // cap, and concatenates every page's itemsPath-resolved records before mapping.
+  // Shared by the plain pull, fan-out's parent-list fetch, and fan-out's per-parent
+  // main fetch — all three are "one paginated JSON list", just with different URLs.
+  private async fetchPaginatedJson(
+    initialUrl: URL,
+    auth: ManifestAuth | undefined,
+    itemsPath: string | undefined,
+    pagination: PaginationSpec | undefined,
+    budget: SubrequestBudget,
+  ): Promise<unknown[]> {
+    const baseOrigin = initialUrl.origin;
+    const maxPages = pagination ? Math.min(pagination.maxPages ?? 5, 10) : 1;
+    const records: unknown[] = [];
+    let nextUrl: URL | null = initialUrl;
+    let pageParam = pagination?.type === "page" ? pagination.start : undefined;
+
+    for (let page = 0; page < maxPages && nextUrl; page++) {
+      const url = new URL(nextUrl);
+      if (pagination?.type === "page") {
+        url.searchParams.set(pagination.param, String(pageParam));
+      }
+      const headers: Record<string, string> = { Accept: "application/json" };
+      this.applyHttpAuth(url, headers, auth);
+      budget.consume();
+      const response = await this.fetcher(url, { headers, redirect: "manual", signal: AbortSignal.timeout(15_000) });
+      if (!response.ok) {
+        throw new Error(`Declarative plugin ${this.id} returned HTTP ${response.status}.`);
+      }
+      const payload = await response.json();
+      const pageRecords = itemsPath ? readPath(payload, itemsPath) : payload;
+      if (!Array.isArray(pageRecords)) {
+        throw new Error(`Declarative plugin ${this.id} itemsPath did not resolve to an array.`);
+      }
+      if (pagination?.type === "page" && pageRecords.length === 0) {
+        break;
+      }
+      records.push(...pageRecords);
+      if (!pagination) {
+        break;
+      }
+      nextUrl = this.resolveNextPageUrl(pagination, response, payload, url, baseOrigin);
+      if (pagination.type === "page") {
+        pageParam = (pageParam ?? pagination.start) + 1;
+      }
+    }
+    return records;
+  }
+
+  private resolveNextPageUrl(pagination: PaginationSpec, response: Response, payload: unknown, currentUrl: URL, baseOrigin: string): URL | null {
+    if (pagination.type === "page") {
+      return currentUrl; // param/increment handled by the caller; loop stops on an empty page or maxPages.
+    }
+    if (pagination.type === "cursor") {
+      const next = readPath(payload, pagination.cursorPath);
+      if (next === undefined || next === null || next === "") {
+        return null;
+      }
+      const url = new URL(currentUrl);
+      url.searchParams.set(pagination.param, String(next));
+      return url;
+    }
+    // link-header: the *response* names the next URL, so it is untrusted input —
+    // refuse anything off the manifest's origin rather than forward the auth header
+    // to a host the manifest never declared (SSRF / credential-leak guard).
+    const link = response.headers.get("Link") ?? response.headers.get("link");
+    const next = link ? parseLinkHeaderNext(link, currentUrl) : null;
+    if (!next) {
+      return null;
+    }
+    if (next.origin !== baseOrigin) {
+      throw new Error(`Declarative plugin ${this.id} refused a pagination link to a different origin (${next.origin}).`);
+    }
+    return next;
   }
 
   private async pullMcp(transport: ManifestTransport): Promise<ItemInput[]> {
@@ -343,11 +545,13 @@ export class DeclarativePlugin implements Plugin {
     headers.Authorization = `Bearer ${token}`;
   }
 
-  private mapItem(record: unknown): ItemInput {
+  // `parent` is the current fan-out parent record (undefined outside fan-out); a
+  // mapping ValueSpec path prefixed `$parent.` reads from it instead of `record`.
+  private mapItem(record: unknown, parent?: unknown): ItemInput {
     const mapping = this.manifest.mapping;
-    const title = requiredString(readSpec(record, mapping.title), "title");
-    const url = mapping.url ? optionalString(readSpec(record, mapping.url)) : undefined;
-    const body = mapping.body ? optionalString(readSpec(record, mapping.body)) : undefined;
+    const title = requiredString(readSpec(record, mapping.title, parent), "title");
+    const url = mapping.url ? optionalString(readSpec(record, mapping.url, parent)) : undefined;
+    const body = mapping.body ? optionalString(readSpec(record, mapping.body, parent)) : undefined;
     const facets: Facet[] = [];
     for (const facetSpec of mapping.facets ?? []) {
       if ("derive" in facetSpec) {
@@ -362,24 +566,73 @@ export class DeclarativePlugin implements Plugin {
         type: facetSpec.type,
         data: Object.fromEntries(
           Object.entries(facetSpec.fields)
-            .map(([field, spec]) => [field, readSpec(record, spec)] as const)
+            .map(([field, spec]) => [field, readSpec(record, spec, parent)] as const)
             .filter((entry): entry is readonly [string, JsonValue] => entry[1] !== undefined),
         ),
         capabilities: structuredClone(facetSpec.capabilities),
       });
     }
     return {
-      id: requiredString(readSpec(record, mapping.id), "id"),
+      id: requiredString(readSpec(record, mapping.id, parent), "id"),
       source: this.id,
-      kind: requiredString(readSpec(record, mapping.kind), "kind"),
+      kind: requiredString(readSpec(record, mapping.kind, parent), "kind"),
       title,
-      timestamp: requiredString(readSpec(record, mapping.timestamp), "timestamp"),
+      timestamp: requiredString(readSpec(record, mapping.timestamp, parent), "timestamp"),
       ...(url ? { url } : {}),
       ...(body ? { body } : {}),
       raw: toJson(record),
       facets,
     };
   }
+}
+
+// Cloudflare Workers' free plan allows 50 subrequests per Worker invocation, shared
+// across every plugin a sync cycle runs; 25 per declarative-plugin pull leaves
+// headroom for the rest. `pull()`'s return type (ItemInput[]) has no channel back to
+// the sync summary for a partial-result warning, and runtime/cycle.ts (which owns
+// that summary) is out of scope for this change — so failing loudly, the same way an
+// HTTP error or a bad itemsPath already does, is the only correct option here:
+// cycle.ts already turns a pull() rejection into a per-plugin `pull:*` sync error
+// instead of silently truncating a source's data.
+const MAX_SUBREQUESTS_PER_PULL = 25;
+
+class SubrequestBudget {
+  private used = 0;
+  constructor(private readonly pluginId: string) {}
+
+  consume(): void {
+    this.used += 1;
+    if (this.used > MAX_SUBREQUESTS_PER_PULL) {
+      throw new Error(
+        `Declarative plugin ${this.pluginId} exceeded its subrequest budget (${MAX_SUBREQUESTS_PER_PULL} per pull).`,
+      );
+    }
+  }
+}
+
+// RFC 8288: `<url>; rel="next", <url2>; rel="prev"`. Resolved against `base` so a
+// relative next-link (some APIs emit one) still works.
+function parseLinkHeaderNext(header: string, base: URL): URL | null {
+  for (const part of header.split(",")) {
+    const match = part.match(/<([^>]+)>\s*;\s*rel="?next"?/i);
+    if (match) {
+      return new URL(match[1], base);
+    }
+  }
+  return null;
+}
+
+// Substitutes `{{<varName>.<path>}}` in a URL template with the parent record's
+// field at `path`, URL-encoded. Validation already ensured every placeholder in the
+// manifest names `varName`, so this never needs to fail — just recomputed per parent.
+function substitutePlaceholders(template: string, varName: string, parent: unknown): string {
+  return template.replace(PLACEHOLDER_PATTERN, (full, name: string, path: string) => {
+    if (name !== varName) {
+      return full;
+    }
+    const value = optionalString(toJsonOrUndefined(readPath(parent, path))) ?? "";
+    return encodeURIComponent(value);
+  });
 }
 
 function isUnauthorized(error: unknown): boolean {
@@ -438,8 +691,14 @@ function asArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [value];
 }
 
-function readSpec(record: unknown, spec: ValueSpec): JsonValue | undefined {
-  return "value" in spec ? spec.value : toJsonOrUndefined(readPath(record, spec.path));
+function readSpec(record: unknown, spec: ValueSpec, parent?: unknown): JsonValue | undefined {
+  if ("value" in spec) {
+    return spec.value;
+  }
+  if (spec.path.startsWith(PARENT_PATH_PREFIX)) {
+    return toJsonOrUndefined(readPath(parent, spec.path.slice(PARENT_PATH_PREFIX.length)));
+  }
+  return toJsonOrUndefined(readPath(record, spec.path));
 }
 
 // Dot-separated path resolution, with numeric segments indexing into arrays (e.g.
