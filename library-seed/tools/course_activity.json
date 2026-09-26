@@ -1,0 +1,9 @@
+{
+  "name": "course_activity",
+  "description": "The most recent changes recorded for one course.",
+  "inputSchema": {
+    "course": { "type": "string", "description": "Unit code, e.g. \"FIT2004\"." },
+    "limit": { "type": "integer", "description": "Max rows to return.", "default": 20 }
+  },
+  "sql": "SELECT seq, type, at, item_id, title, field FROM v_changes WHERE course = :course ORDER BY seq DESC LIMIT :limit"
+}
