@@ -3,13 +3,13 @@ import { runDailyDigest, type DigestOutcome } from "../digest";
 import { D1ItemStore } from "../kernel/d1-item-store";
 import { labelStructure } from "../kernel/courses";
 import { Kernel, type InvalidItemError } from "../kernel/kernel";
-import { EdPlugin } from "../plugins/campus/ed-plugin";
-import { MoodlePlugin } from "../plugins/campus/moodle-plugin";
 import { DeclarativePlugin, pluginBindings } from "../plugins/declarative/plugin";
 import { D1ManifestStore } from "../plugins/declarative/store";
+import { buildGmailQuery, defaultUniversityDomains, loadKnownCourseCodes, withGmailQuery } from "../plugins/gmail-query";
 import type { Plugin } from "../plugins/plugin";
 import { D1RetentionRepository, runRetention } from "../retention";
-import { D1SettingsRepository } from "../settings";
+import { buildSourcePlugins, D1SourceCredentialStore } from "../sources";
+import { D1SettingsRepository, type AppSettings } from "../settings";
 import { getAccessToken } from "../oauth";
 import { MoodleProbeError } from "../moodle-probe";
 
@@ -21,6 +21,8 @@ export interface Env {
   MCP_TOKEN: string;
   MOODLE_BASE_URL: string;
   MOODLE_SESSION?: string;
+  CANVAS_BASE_URL?: string;
+  PLUGIN_SECRET_CANVAS_TOKEN?: string;
   SCHEDULER: DurableObjectNamespace;
   PLUGIN_SECRET_GOOGLE_CLIENT_ID?: string;
   PLUGIN_SECRET_GOOGLE_CLIENT_SECRET?: string;
@@ -103,7 +105,7 @@ export class Scheduler {
 export async function runCycle(env: Env, forceSync: boolean, now: () => Date = () => new Date()): Promise<CycleResult> {
   const settings = await new D1SettingsRepository(env.DB).get();
   const skipped = !forceSync && !settings.syncEnabled;
-  const sources = skipped ? [] : await syncSources(env);
+  const sources = skipped ? [] : await syncSources(env, settings);
 
   const { labeled } = await labelStructure(env.DB).catch((error): { labeled: number } => {
     console.error(JSON.stringify({ event: "label_structure_failed", message: errorMessage(error) }));
@@ -144,21 +146,32 @@ async function recordCycle(db: D1Database, cycle: CycleResult): Promise<void> {
   }
 }
 
-async function syncSources(env: Env): Promise<SourceCycleResult[]> {
-  const plugins: Plugin[] = [];
-  if (env.MOODLE_SESSION) {
-    plugins.push(new MoodlePlugin({ baseUrl: env.MOODLE_BASE_URL, session: env.MOODLE_SESSION }));
-  }
-  if (env.ED_API_TOKEN) {
-    plugins.push(new EdPlugin({ token: env.ED_API_TOKEN }));
-  }
+async function syncSources(env: Env, settings: AppSettings): Promise<SourceCycleResult[]> {
+  // Ed, Moodle, Canvas: built from env-or-D1 credentials (ADR-0038 onboarding by
+  // source) — see src/sources.ts for the precedence rule.
+  const credentials = new D1SourceCredentialStore(env.DB, env.ADMIN_TOKEN);
+  const plugins: Plugin[] = await buildSourcePlugins(env, credentials);
+
   const manifests = await new D1ManifestStore(env.DB).list(true);
   const bindings = pluginBindings(env as unknown as Record<string, unknown>);
+  // Gmail scope (ADR-0036): the installed manifest carries a static default
+  // query; the effective query is recomputed every cycle from current /settings
+  // scope plus every course code unicorn currently knows about.
+  const knownCourseCodes = await loadKnownCourseCodes(env.DB);
+  const gmailDomains =
+    settings.gmailDomains.length > 0 ? settings.gmailDomains : defaultUniversityDomains([env.MOODLE_BASE_URL, env.CANVAS_BASE_URL]);
   // OAuth-backed MCP sources (ADR-0033) resolve their access token from D1 at pull time.
   plugins.push(
-    ...manifests.map(
-      ({ manifest }) => new DeclarativePlugin(manifest, bindings, undefined, (pluginId) => getAccessToken(pluginId, env)),
-    ),
+    ...manifests.map(({ manifest }) => {
+      const effectiveManifest =
+        manifest.id === "gmail"
+          ? withGmailQuery(
+              manifest,
+              buildGmailQuery({ domains: gmailDomains, courseCodes: knownCourseCodes, allowlist: settings.gmailAllowlist, windowDays: 14 }),
+            )
+          : manifest;
+      return new DeclarativePlugin(effectiveManifest, bindings, undefined, (pluginId) => getAccessToken(pluginId, env));
+    }),
   );
 
   const kernel = new Kernel(new D1ItemStore(env.DB));
