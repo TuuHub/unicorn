@@ -16,7 +16,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-type DatabaseSync = DatabaseSyncType;
+export type DatabaseSync = DatabaseSyncType;
 
 const MIGRATIONS_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "migrations");
 
@@ -191,13 +191,33 @@ export function wrapSqliteD1(db: DatabaseSync): D1Database {
  * would. Each test gets its own fresh, isolated database.
  */
 export async function createTestDb(): Promise<D1Database> {
-  const DatabaseSync = await loadDatabaseSync();
-  const sqlite = new DatabaseSync(":memory:");
-  const files = readdirSync(MIGRATIONS_DIR)
-    .filter((name) => name.endsWith(".sql"))
-    .sort();
-  for (const file of files) {
-    sqlite.exec(readFileSync(join(MIGRATIONS_DIR, file), "utf8"));
+  const sqlite = await openRawSqlite();
+  for (const file of listMigrationFiles()) {
+    applyMigrationFile(sqlite, file);
   }
   return wrapSqliteD1(sqlite);
+}
+
+/** Every migration filename in `migrations/`, in the order wrangler applies them. */
+export function listMigrationFiles(): string[] {
+  return readdirSync(MIGRATIONS_DIR)
+    .filter((name) => name.endsWith(".sql"))
+    .sort();
+}
+
+/** Runs a single migration file (by the name listMigrationFiles() returns) against an open connection. */
+export function applyMigrationFile(sqlite: DatabaseSync, file: string): void {
+  sqlite.exec(readFileSync(join(MIGRATIONS_DIR, file), "utf8"));
+}
+
+/**
+ * Opens a fresh in-memory node:sqlite connection with no migrations applied.
+ * Exposed (alongside listMigrationFiles/applyMigrationFile) so tests that
+ * need to inspect state *between* migrations — e.g. 0012's events->changes
+ * copy — can apply a prefix, seed data on the pre-migration schema, then
+ * continue. Most tests want createTestDb() instead.
+ */
+export async function openRawSqlite(): Promise<DatabaseSync> {
+  const DatabaseSync = await loadDatabaseSync();
+  return new DatabaseSync(":memory:");
 }
