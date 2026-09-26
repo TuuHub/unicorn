@@ -34,24 +34,8 @@ describe("unicorn admin MCP server", () => {
     ]);
   });
 
-  it("rejects enabling an agent job when no AI key is configured", async () => {
-    const repository = {
-      configureAgentJob: vi.fn(),
-    } as unknown as McpRepository;
-    const client = await connectClient(repository, { aiConfigured: false });
-
-    const result = await client.callTool({
-      name: "configure_agent_job",
-      arguments: { id: "daily-digest", enabled: true, model: "gpt-5-mini", monthlyTokenCap: 100000 },
-    });
-
-    expect(result.isError).toBe(true);
-    expect(repository.configureAgentJob).not.toHaveBeenCalled();
-    expect(JSON.stringify(readToolJson(result))).toContain("AI_API_KEY");
-  });
-
   it("reports the last sync cycle through get_sync_status", async () => {
-    const cycle = { at: "2026-07-19T00:00:00.000Z", errors: [], results: [] };
+    const cycle = { at: "2026-07-19T00:00:00.000Z", sources: [] };
     const repository = {
       getSyncStatus: vi.fn().mockResolvedValue(cycle),
     } as unknown as McpRepository;
@@ -62,38 +46,22 @@ describe("unicorn admin MCP server", () => {
     expect(readToolJson(result)).toEqual(cycle);
   });
 
-  it("configures the resident-agent job through the existing job policy tool", async () => {
-    const configured = {
-      id: "resident-agent",
-      enabled: true,
-      model: "gpt-5-mini",
-      monthlyTokenCap: 200000,
-      scheduleHourUtc: 0,
-      credentialPreference: "byok" as const,
-    };
+  it("reads the corrections inbox through list_corrections", async () => {
+    const note = { domain: "corrections", content: "- [2026-07-19] FIT2099 quizzes don't count.", updatedAt: "2026-07-19T00:00:00.000Z" };
     const repository = {
-      configureAgentJob: vi.fn().mockResolvedValue(configured),
+      listCorrections: vi.fn().mockResolvedValue(note),
     } as unknown as McpRepository;
     const client = await connectClient(repository);
 
-    const result = await client.callTool({
-      name: "configure_agent_job",
-      arguments: configured,
-    });
+    const result = await client.callTool({ name: "list_corrections", arguments: {} });
 
-    expect(repository.configureAgentJob).toHaveBeenCalledWith("resident-agent", {
-      enabled: true,
-      model: "gpt-5-mini",
-      monthlyTokenCap: 200000,
-      scheduleHourUtc: 0,
-      credentialPreference: "byok",
-    });
-    expect(readToolJson(result)).toEqual(configured);
+    expect(repository.listCorrections).toHaveBeenCalled();
+    expect(readToolJson(result)).toMatchObject({ updatedAt: note.updatedAt, content: note.content });
   });
 });
 
-async function connectClient(repository: McpRepository, options?: { aiConfigured?: boolean }): Promise<Client> {
-  const server = createAdminMcpServer(repository, options);
+async function connectClient(repository: McpRepository): Promise<Client> {
+  const server = createAdminMcpServer(repository);
   const client = new Client({ name: "unicorn-test", version: "0.0.0" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport);

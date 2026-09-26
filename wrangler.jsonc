@@ -8,18 +8,11 @@
   "observability": {
     "enabled": true
   },
-  "ai": {
-    "binding": "AI"
-  },
   "durable_objects": {
     "bindings": [
       {
         "name": "SCHEDULER",
         "class_name": "Scheduler"
-      },
-      {
-        "name": "AGENT_SESSIONS",
-        "class_name": "AgentSession"
       }
     ]
   },
@@ -31,10 +24,13 @@
     {
       "tag": "v2",
       "new_sqlite_classes": ["AgentSession"]
+    },
+    {
+      "tag": "v3",
+      "deleted_classes": ["AgentSession"]
     }
   ],
   "vars": {
-    "AI_BASE_URL": "https://api.openai.com/v1",
     "MOODLE_BASE_URL": "https://learning.monash.edu"
   },
   "d1_databases": [

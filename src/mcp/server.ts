@@ -1,8 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { ItemEvent, JsonValue, StoredItem } from "../kernel/types";
-import type { AgentJob, AgentJobConfig } from "../jobs/daily-digest";
-import type { AgentJobRun } from "../jobs/d1-job-store";
 import { estimateTokens, MEMORY_TOKEN_CAP, type MemoryNote } from "../memory";
 import type { StoredPluginManifest } from "../plugins/declarative/store";
 
@@ -65,24 +63,16 @@ export interface McpRepository {
   linkItems(input: LinkItemsInput): Promise<ItemRelation>;
   listPluginManifests(): Promise<StoredPluginManifest[]>;
   putPluginManifest(manifest: unknown, enabled: boolean): Promise<StoredPluginManifest>;
-  listAgentJobs(): Promise<AgentJob[]>;
-  configureAgentJob(
-    id: string,
-    input: AgentJobConfig,
-  ): Promise<AgentJob>;
-  listAgentJobRuns(id: string, limit: number): Promise<AgentJobRun[]>;
-  listMemory(): Promise<MemoryNote[]>;
-  getMemory(domain: string): Promise<MemoryNote>;
-  saveMemory(domain: string, content: string, expectedUpdatedAt?: string): Promise<MemoryNote>;
+  listCorrections(): Promise<MemoryNote>;
   getSyncStatus(): Promise<JsonValue | null>;
 }
 
-// ADR-0030: the operator surface. Unchanged tool set, now mounted at /mcp/admin
-// (bearer ADMIN_TOKEN) rather than /mcp — client agents never see these ~15 tools;
-// see ./door.ts for the four-tool client-facing server.
-export function createAdminMcpServer(repository: McpRepository, options?: { aiConfigured?: boolean }): McpServer {
+// ADR-0030/0034: the operator surface. Agent-job and judgment-memory tools are
+// gone (no model runs in the Worker); list_corrections replaces them with a
+// read of the one memory domain that is still written (verbatim, zero-LLM).
+// See ./door.ts for the client-facing server mounted at /mcp.
+export function createAdminMcpServer(repository: McpRepository): McpServer {
   const server = new McpServer({ name: "unicorn-admin", version: "0.1.0" });
-  const aiConfigured = options?.aiConfigured ?? true;
 
   server.registerTool(
     "list_items",
@@ -142,7 +132,7 @@ export function createAdminMcpServer(repository: McpRepository, options?: { aiCo
     {
       annotations: READ_ONLY,
       description:
-        "List item and capability change events, newest first. `since` must be an ISO 8601 UTC timestamp (e.g. 2026-07-01T00:00:00Z); other formats silently match nothing.",
+        "List item change events (ADR-0036), newest first. `since` must be an ISO 8601 UTC timestamp (e.g. 2026-07-01T00:00:00Z); other formats silently match nothing.",
       inputSchema: {
         since: z
           .string()
@@ -154,13 +144,13 @@ export function createAdminMcpServer(repository: McpRepository, options?: { aiCo
     },
     async ({ since, limit }) => {
       const events = await repository.listEvents({ since, limit });
-      // Projection: the row UUID means nothing to a client, and before/after can be
-      // arbitrarily large source values — clip them to what a judgment needs.
+      // Projection: before/after can be arbitrarily large source values — clip
+      // them to what a judgment needs.
       return jsonResult(
-        events.map(({ id: _id, before, after, ...event }) => ({
+        events.map(({ before, after, ...event }) => ({
           ...event,
-          ...(before !== undefined ? { before: clipJson(before) } : {}),
-          ...(after !== undefined ? { after: clipJson(after) } : {}),
+          ...(before !== null ? { before: clipJson(before) } : {}),
+          ...(after !== null ? { after: clipJson(after) } : {}),
         })),
       );
     },
@@ -237,80 +227,6 @@ export function createAdminMcpServer(repository: McpRepository, options?: { aiCo
   );
 
   server.registerTool(
-    "list_agent_jobs",
-    {
-      annotations: READ_ONLY,
-      description: "List optional server-side agent jobs and their budget configuration.",
-    },
-    async () => jsonResult(await repository.listAgentJobs()),
-  );
-
-  server.registerTool(
-    "configure_agent_job",
-    {
-      annotations: WRITE,
-      description:
-        "Configure an agent job's model and monthly token cap, and enable or disable it. Use an @cf/... model for the default Workers AI binding; AI_API_KEY overrides it for BYOK. scheduleHourUtc applies to daily-digest only (the UTC hour after which it may run once per day); triage and resident-agent ignore it.",
-      inputSchema: {
-        id: z.enum(["daily-digest", "triage", "resident-agent"]),
-        enabled: z.boolean(),
-        model: z.string().trim().min(1).max(100),
-        monthlyTokenCap: z.number().int().positive().max(100_000_000),
-        scheduleHourUtc: z.number().int().min(0).max(23).optional().default(0),
-        credentialPreference: z.literal("byok").optional().default("byok"),
-      },
-    },
-    async ({ id, enabled, model, monthlyTokenCap, scheduleHourUtc, credentialPreference }) => {
-      // Enabling an LLM job with no runtime configured "succeeds" and then silently
-      // never runs — reject it here with the fix instead.
-      if (enabled && !aiConfigured) {
-        return jsonError(
-          `Cannot enable ${id}: no model runtime is configured. Add the Workers AI binding or run 'wrangler secret put AI_API_KEY' (and set AI_BASE_URL if not using OpenAI), redeploy, then retry.`,
-        );
-      }
-      try {
-        return jsonResult(
-          await repository.configureAgentJob(id, {
-            enabled,
-            model,
-            monthlyTokenCap,
-            scheduleHourUtc,
-            credentialPreference,
-          }),
-        );
-      } catch (error) {
-        return jsonError(error instanceof Error ? error.message : "Failed to configure agent job.");
-      }
-    },
-  );
-
-  server.registerTool(
-    "list_agent_job_runs",
-    {
-      annotations: READ_ONLY,
-      description:
-        "List recent runs for an agent job: status, token usage, and a clipped output preview. Set fullOutput to true to include complete outputs (a digest run can be long).",
-      inputSchema: {
-        id: z.enum(["daily-digest", "triage", "resident-agent"]),
-        limit: z.number().int().positive().max(100).optional().default(20),
-        fullOutput: z.boolean().optional().default(false),
-      },
-    },
-    async ({ id, limit, fullOutput }) => {
-      const runs = await repository.listAgentJobRuns(id, limit);
-      if (fullOutput) {
-        return jsonResult(runs);
-      }
-      return jsonResult(
-        runs.map((run) => ({
-          ...run,
-          ...(run.output && run.output.length > 300 ? { output: `${run.output.slice(0, 299)}…`, outputTruncated: true } : {}),
-        })),
-      );
-    },
-  );
-
-  server.registerTool(
     "get_sync_status",
     {
       annotations: READ_ONLY,
@@ -329,64 +245,15 @@ export function createAdminMcpServer(repository: McpRepository, options?: { aiCo
   );
 
   server.registerTool(
-    "list_memory",
+    "list_corrections",
     {
       annotations: READ_ONLY,
       description:
-        "List memory note summaries: domain, last update, token usage against the 4000-token cap, and a short preview. Use get_memory to read a note in full.",
+        "Read the corrections inbox: verbatim, dated user corrections and standing preferences (e.g. \"FIT2099 quizzes don't count toward the final grade\"), newest last. Stored zero-LLM by the door's remember tool.",
     },
     async () => {
-      const notes = await repository.listMemory();
-      // Projection, not dump (ADR-0026): full notes can be 4k tokens each; the
-      // caller only needs enough to decide which domain to open.
-      return jsonResult(
-        notes.map((note) => ({
-          domain: note.domain,
-          updatedAt: note.updatedAt,
-          tokens: estimateTokens(note.content),
-          tokenCap: MEMORY_TOKEN_CAP,
-          preview: note.content.length > 200 ? `${note.content.slice(0, 199)}…` : note.content,
-        })),
-      );
-    },
-  );
-
-  server.registerTool(
-    "get_memory",
-    {
-      annotations: READ_ONLY,
-      description: "Read one memory note in full by domain (for example 'preferences'). Includes token usage against the 4000-token cap.",
-      inputSchema: { domain: z.string().trim().min(1).max(63) },
-    },
-    async ({ domain }) => {
-      try {
-        const note = await repository.getMemory(domain);
-        return jsonResult({ ...note, tokens: estimateTokens(note.content), tokenCap: MEMORY_TOKEN_CAP });
-      } catch (error) {
-        return jsonError(error instanceof Error ? error.message : "Failed to read memory.");
-      }
-    },
-  );
-
-  server.registerTool(
-    "update_memory",
-    {
-      annotations: WRITE,
-      description:
-        "Rewrite a memory note in full (no partial patch — read it with get_memory first, then write the merged result). Pass ifUnmodifiedSince from get_memory's updatedAt to fail safely instead of clobbering a concurrent edit. Save empty content to delete a domain. The 4000-token cap covers ALL domains combined (every note is read in full on each triage call); at the cap, consolidate: merge duplicates, drop judgments about ended courses, keep one line per rule.",
-      inputSchema: {
-        domain: z.string().trim().min(1).max(63),
-        content: z.string().max(20_000),
-        ifUnmodifiedSince: z.string().trim().min(1).optional(),
-      },
-    },
-    async ({ domain, content, ifUnmodifiedSince }) => {
-      try {
-        const note = await repository.saveMemory(domain, content, ifUnmodifiedSince);
-        return jsonResult({ ...note, tokens: estimateTokens(note.content), tokenCap: MEMORY_TOKEN_CAP });
-      } catch (error) {
-        return jsonError(error instanceof Error ? error.message : "Failed to update memory.");
-      }
+      const note = await repository.listCorrections();
+      return jsonResult({ updatedAt: note.updatedAt, tokens: estimateTokens(note.content), tokenCap: MEMORY_TOKEN_CAP, content: note.content });
     },
   );
 
