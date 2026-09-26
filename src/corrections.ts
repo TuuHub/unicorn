@@ -1,10 +1,9 @@
 import { MemoryCapExceededError, MemoryConflictError, type MemoryStore } from "./memory";
 
-// The corrections inbox: raw, dated, verbatim user feedback captured from the IM
-// face ("quiz 不算分", "stop pinging me about tutorials"). Zero-LLM on the write
-// path — the user's wording is the judgment, stored as-is where the triage judge
-// reads it next cycle. The consolidation pass later distills entries into concise
-// rules (the OpenClaw daily-notes -> MEMORY.md promotion pattern).
+// The corrections inbox: raw, dated, verbatim user feedback ("quiz 不算分",
+// "stop pinging me about tutorials"), captured via the door's `remember` tool.
+// Zero-LLM on the write path (ADR-0034) — the user's wording is stored as-is,
+// for the client's own agent to read back via get_memory / list_corrections.
 export const CORRECTIONS_DOMAIN = "corrections";
 const MAX_CORRECTION_CHARS = 500;
 
@@ -22,8 +21,8 @@ export async function recordCorrection(
   // Two attempts: a concurrent write (e.g. consolidation) invalidates the first.
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const note = await store.get(CORRECTIONS_DOMAIN);
-    // Telegram retries a webhook delivery the Worker failed to ack; text-level
-    // dedupe absorbs the replay without needing update_id bookkeeping.
+    // A client can retry a tool call it didn't get a clean response for;
+    // text-level dedupe absorbs the replay without needing request-id bookkeeping.
     if (note.content.includes(clipped)) {
       return "duplicate";
     }

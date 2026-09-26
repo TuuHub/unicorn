@@ -59,6 +59,12 @@ describe("MoodlePlugin.pull", () => {
       source: "campus-moodle",
       kind: "course",
       title: "FIT2099 Object-Oriented Design and Implementation",
+      facets: [
+        expect.objectContaining({
+          type: "course-identity",
+          data: expect.objectContaining({ code: "FIT2099_S1_2026", term: "S1 2026" }),
+        }),
+      ],
     });
     expect(items[1]).toMatchObject({
       id: "assessment:99",
@@ -95,6 +101,29 @@ describe("MoodlePlugin.pull", () => {
       args: { limitnum?: number };
     }>;
     expect(requestBody[1]?.args.limitnum).toBe(50);
+  });
+
+  it("omits term when the shortname carries no session+year suffix", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response('<script>M.cfg = {"sesskey":"fresh-key"};</script>'))
+      .mockResolvedValueOnce(
+        Response.json([
+          {
+            error: false,
+            data: { courses: [{ id: 1, shortname: "SANDBOX", fullname: "Sandbox", startdate: 0, visible: true }] },
+          },
+          { error: false, data: { events: [] } },
+        ]),
+      );
+    const plugin = new MoodlePlugin({ baseUrl: "https://learning.example.edu", session: "session-secret", fetch: fetcher });
+
+    const items = await plugin.pull();
+
+    const identity = (items[0] as { facets: Array<{ type: string; data: Record<string, unknown> }> }).facets.find(
+      (facet) => facet.type === "course-identity",
+    );
+    expect(identity?.data).not.toHaveProperty("term");
   });
 
   it("invokes an injected fetch function without using the plugin as its receiver", async () => {

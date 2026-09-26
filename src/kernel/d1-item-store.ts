@@ -157,27 +157,28 @@ export class D1ItemStore implements ItemStore {
       );
     }
 
+    // Events v2 (ADR-0036): `changes` has no FK to items and is never pruned —
+    // its `seq` autoincrement is the door's cursor. kind/title/url are the
+    // item's state at this moment, not looked up later.
     for (const event of events) {
       statements.push(
         this.db
           .prepare(
-            `INSERT INTO events (
-               id, type, source, item_id, primitive, capability, facet_type, field,
-               before_json, after_json, changed_fields_json, created_at
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO changes (
+               type, source, item_id, kind, title, url, field, before_json, after_json, topic, created_at
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .bind(
-            event.id,
             event.type,
             event.source,
             event.itemId,
-            event.primitive ?? null,
-            event.capability ?? null,
-            event.facetType ?? null,
-            event.field ?? null,
-            event.before === undefined ? null : JSON.stringify(event.before),
-            event.after === undefined ? null : JSON.stringify(event.after),
-            event.changedFields ? JSON.stringify(event.changedFields) : null,
+            event.kind,
+            event.title,
+            event.url,
+            event.field,
+            event.before === null ? null : JSON.stringify(event.before),
+            event.after === null ? null : JSON.stringify(event.after),
+            event.topic,
             event.createdAt,
           ),
       );

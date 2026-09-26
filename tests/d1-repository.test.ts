@@ -317,6 +317,95 @@ describe("D1McpRepository plans", () => {
   });
 });
 
+describe("D1McpRepository.listEvents", () => {
+  const changeRow = {
+    seq: 42,
+    type: "grade.changed",
+    source: "campus-moodle",
+    item_id: "assessment:1",
+    kind: "assessment",
+    title: "Assignment 1",
+    url: null,
+    field: "grade",
+    before_json: "70",
+    after_json: "82.5",
+    topic: null,
+    created_at: "2026-09-20T00:00:00.000Z",
+  };
+
+  it("parses newest-first changes rows into ItemEvent", async () => {
+    const { db, calls } = fakeDb([{ match: "ORDER BY seq DESC", rows: [changeRow] }]);
+    const repo = new D1McpRepository(db);
+
+    const events = await repo.listEvents({ limit: 10 });
+
+    expect(events).toEqual([
+      {
+        type: "grade.changed",
+        source: "campus-moodle",
+        itemId: "assessment:1",
+        kind: "assessment",
+        title: "Assignment 1",
+        url: null,
+        topic: null,
+        field: "grade",
+        before: 70,
+        after: 82.5,
+        createdAt: "2026-09-20T00:00:00.000Z",
+      },
+    ]);
+    const call = calls.find((entry) => entry.sql.includes("ORDER BY seq DESC"));
+    expect(call?.sql).not.toContain("WHERE");
+    expect(call?.values).toEqual([10]);
+  });
+
+  it("filters by created_at when since is given", async () => {
+    const { db, calls } = fakeDb([{ match: "ORDER BY seq DESC", rows: [changeRow] }]);
+    const repo = new D1McpRepository(db);
+
+    await repo.listEvents({ since: "2026-09-19T00:00:00.000Z", limit: 5 });
+
+    const call = calls.find((entry) => entry.sql.includes("ORDER BY seq DESC"));
+    expect(call?.sql).toContain("WHERE created_at >= ?");
+    expect(call?.values).toEqual(["2026-09-19T00:00:00.000Z", 5]);
+  });
+});
+
+describe("D1McpRepository.listEventsAscending", () => {
+  it("reads the changes table oldest-first by seq for cursor-based paging", async () => {
+    const { db, calls } = fakeDb([
+      {
+        match: "ORDER BY seq ASC",
+        rows: [
+          {
+            seq: 1,
+            type: "item.added",
+            source: "campus-ed",
+            item_id: "thread:1",
+            kind: "thread",
+            title: "Welcome",
+            url: null,
+            field: null,
+            before_json: null,
+            after_json: null,
+            topic: null,
+            created_at: "2026-09-01T00:00:00.000Z",
+          },
+        ],
+      },
+    ]);
+    const repo = new D1McpRepository(db);
+
+    const events = await repo.listEventsAscending("2026-08-31T00:00:00.000Z", 100);
+
+    expect(events).toEqual([
+      expect.objectContaining({ type: "item.added", itemId: "thread:1", before: null, after: null }),
+    ]);
+    const call = calls.find((entry) => entry.sql.includes("ORDER BY seq ASC"));
+    expect(call?.values).toEqual(["2026-08-31T00:00:00.000Z", 100]);
+  });
+});
+
 describe("D1McpRepository.remember", () => {
   it("delegates to recordCorrection against the underlying memory store", async () => {
     const { db, run } = fakeDb([{ match: "FROM agent_notes", row: null }]);

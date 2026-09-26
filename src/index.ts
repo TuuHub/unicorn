@@ -1,13 +1,8 @@
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
-import { AgentSession } from "./agent/session";
-import { piModelConfigured } from "./agent/pi-model";
-import { normalizeConversationId } from "./agent/resident-agent";
 import { D1BriefStore } from "./briefs";
-import { renderDigestReport } from "./digest-report";
-import { D1JobStore } from "./jobs/d1-job-store";
 import { D1MemoryStore } from "./memory";
 import { D1McpRepository } from "./mcp/d1-repository";
-import { createDoorMcpServer, type AgentSessionClient, type AgentSessionResponse, type AgentTurnAnswer } from "./mcp/door";
+import { createDoorMcpServer } from "./mcp/door";
 import { createAdminMcpServer } from "./mcp/server";
 import { MoodleProbeError, probeMoodle } from "./moodle-probe";
 import { D1OAuthTokenStore, handleCallback, OAuthError, startAuthorization, type OAuthEnv } from "./oauth";
@@ -16,43 +11,24 @@ import gmailPreset from "./plugins/presets/gmail.json";
 import { runCycle, Scheduler, type Env } from "./runtime/cycle";
 import { constantTimeEqual, D1SettingsRepository, handleSettings, isBasicAuthorized } from "./settings";
 
-export { AgentSession, Scheduler };
+export { Scheduler };
 
 function json(value: unknown, status = 200): Response {
   return Response.json(value, { status });
 }
 
-// Live operational state shared by /health and /settings: is the hourly scheduler
-// alarm set, and how many notifications have permanently failed. Both checks are
-// best-effort — a failure reports as degraded rather than throwing.
-async function operationalStatus(env: Env): Promise<{
-  schedulerRunning: boolean;
-  failedNotifications: number;
-  residentAgentEnabled: boolean;
-}> {
-  let schedulerRunning = false;
+// Live operational state shared by /health and /settings: is the hourly
+// scheduler alarm set? Best-effort — a failure reports as degraded rather
+// than throwing.
+async function operationalStatus(env: Env): Promise<{ schedulerRunning: boolean }> {
   try {
     const id = env.SCHEDULER.idFromName("primary");
     const response = await env.SCHEDULER.get(id).fetch(new Request("https://scheduler/status"));
     const body = (await response.json()) as { scheduled?: boolean };
-    schedulerRunning = body.scheduled === true;
+    return { schedulerRunning: body.scheduled === true };
   } catch {
-    schedulerRunning = false;
+    return { schedulerRunning: false };
   }
-  let failedNotifications = 0;
-  try {
-    const row = await env.DB.prepare("SELECT COUNT(*) AS n FROM notifications_outbox WHERE status = 'failed'").first<{ n: number }>();
-    failedNotifications = row?.n ?? 0;
-  } catch {
-    failedNotifications = 0;
-  }
-  let residentAgentEnabled = false;
-  try {
-    residentAgentEnabled = (await new D1JobStore(env.DB).get("resident-agent"))?.enabled === true;
-  } catch {
-    residentAgentEnabled = false;
-  }
-  return { schedulerRunning, failedNotifications, residentAgentEnabled };
 }
 
 // Bearer routes compare against the secret in constant time so a response-timing
@@ -91,74 +67,10 @@ export default {
           database,
           scheduler: status.schedulerRunning ? "running" : "stopped",
           mcp: { door: "/mcp", admin: "/mcp/admin" },
-          agent: {
-            endpoint: "/agent",
-            configured: piModelConfigured(env),
-            enabled: status.residentAgentEnabled,
-          },
           settings: "/settings",
-          digest: "/digest",
         },
         database ? 200 : 503,
       );
-    }
-
-    if (url.pathname === "/agent") {
-      if (!bearerOk(request, env.ADMIN_TOKEN)) {
-        return json({ error: "unauthorized" }, 401);
-      }
-      if (request.method === "POST") {
-        let body: { message?: unknown; conversationId?: unknown; idempotencyKey?: unknown };
-        try {
-          body = (await request.json()) as typeof body;
-        } catch {
-          return json({ error: "invalid_turn" }, 400);
-        }
-        const conversationId = parseConversationId(body.conversationId ?? "operator");
-        if (!conversationId) {
-          return json({ error: "invalid_turn" }, 400);
-        }
-        const id = env.AGENT_SESSIONS.idFromName(conversationId);
-        return env.AGENT_SESSIONS.get(id).fetch(
-          new Request("https://agent-session/turn", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({
-              conversationId,
-              message: body.message,
-              ...(body.idempotencyKey !== undefined ? { idempotencyKey: body.idempotencyKey } : {}),
-            }),
-          }),
-        );
-      }
-      if (request.method === "DELETE") {
-        const conversationId = parseConversationId(url.searchParams.get("conversationId") ?? "operator");
-        if (!conversationId) {
-          return json({ error: "invalid_turn" }, 400);
-        }
-        const id = env.AGENT_SESSIONS.idFromName(conversationId);
-        return env.AGENT_SESSIONS.get(id).fetch(
-          new Request(`https://agent-session/conversation?conversationId=${encodeURIComponent(conversationId)}`, {
-            method: "DELETE",
-          }),
-        );
-      }
-      return new Response(JSON.stringify({ error: "method_not_allowed" }), {
-        status: 405,
-        headers: { "content-type": "application/json", allow: "POST, DELETE" },
-      });
-    }
-
-    if (request.method === "GET" && url.pathname === "/digest") {
-      // The digest is personal academic data; gate it behind the same Basic auth as
-      // /settings rather than serving it on a guessable public workers.dev URL.
-      if (!isBasicAuthorized(request.headers.get("authorization"), env.ADMIN_TOKEN)) {
-        return new Response("Authentication required.", {
-          status: 401,
-          headers: { "www-authenticate": 'Basic realm="unicorn digest", charset="UTF-8"' },
-        });
-      }
-      return renderDigestReport(env.DB);
     }
 
     // --- Gmail/Google OAuth (ADR-0033): begin ---
@@ -217,8 +129,6 @@ export default {
           moodle: Boolean(env.MOODLE_SESSION),
           ed: Boolean(env.ED_API_TOKEN),
           mcp: Boolean(env.MCP_TOKEN),
-          agent: piModelConfigured(env),
-          notifier: Boolean(env.NOTIFIER_URL || (env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_CHAT_ID) || (env.RESEND_API_KEY && env.EMAIL_FROM && env.EMAIL_TO)),
           google: Boolean((env as unknown as OAuthEnv).PLUGIN_SECRET_GOOGLE_CLIENT_ID && (env as unknown as OAuthEnv).PLUGIN_SECRET_GOOGLE_CLIENT_SECRET),
           gmailConnected: await new D1OAuthTokenStore(env.DB).has("gmail"),
         },
@@ -236,7 +146,8 @@ export default {
     }
 
     if (url.pathname === "/mcp") {
-      // The door (ADR-0030): four tools for a client agent, bearer MCP_TOKEN.
+      // The door (ADR-0030/0034): a memory-layer tool set for a client agent,
+      // bearer MCP_TOKEN.
       if (!bearerOk(request, env.MCP_TOKEN)) {
         return json({ error: "unauthorized" }, 401);
       }
@@ -251,7 +162,6 @@ export default {
         sessionIdGenerator: undefined,
       });
       const server = createDoorMcpServer({
-        agentSessions: agentSessionClient(env),
         briefs: new D1BriefStore(env.DB),
         memory: new D1MemoryStore(env.DB),
       });
@@ -260,8 +170,8 @@ export default {
     }
 
     if (url.pathname === "/mcp/admin") {
-      // The operator surface (ADR-0030): the pre-existing ~15 kernel-shaped tools,
-      // bearer ADMIN_TOKEN. Client agents never mount this.
+      // The operator surface (ADR-0030): the kernel-shaped tools, bearer
+      // ADMIN_TOKEN. Client agents never mount this.
       if (!bearerOk(request, env.ADMIN_TOKEN)) {
         return json({ error: "unauthorized" }, 401);
       }
@@ -275,7 +185,7 @@ export default {
         enableJsonResponse: true,
         sessionIdGenerator: undefined,
       });
-      const server = createAdminMcpServer(new D1McpRepository(env.DB), { aiConfigured: piModelConfigured(env) });
+      const server = createAdminMcpServer(new D1McpRepository(env.DB));
       await server.connect(transport);
       return transport.handleRequest(request);
     }
@@ -304,47 +214,9 @@ export default {
         return json({ error: "unauthorized" }, 401);
       }
       const cycle = await runCycle(env, true);
-      return json(cycle, cycle.errors.length ? 207 : 200);
+      return json(cycle, cycle.sources.some((source) => source.lastError) ? 207 : 200);
     }
 
     return json({ error: "not_found" }, 404);
   },
 } satisfies ExportedHandler<Env>;
-
-function parseConversationId(value: unknown): string | null {
-  try {
-    return normalizeConversationId(value);
-  } catch {
-    return null;
-  }
-}
-
-// The door's `ask` tool forwards to the AgentSession Durable Object exactly like
-// POST /agent does: same request shape, same per-conversation routing. Errors come
-// back as a ResidentAgentError code (session.ts already turned it into {error, status}),
-// which the door re-maps into an MCP tool error instead of an HTTP one.
-function agentSessionClient(env: Env): AgentSessionClient {
-  return {
-    async runTurn(conversationId: string, message: string): Promise<AgentSessionResponse> {
-      const id = env.AGENT_SESSIONS.idFromName(conversationId);
-      const response = await env.AGENT_SESSIONS.get(id).fetch(
-        new Request("https://agent-session/turn", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ conversationId, message }),
-        }),
-      );
-      const body = (await response.json()) as Record<string, unknown>;
-      if (!response.ok) {
-        return { ok: false, code: typeof body.error === "string" ? body.error : "internal_error" };
-      }
-      const usage = body.usage as AgentTurnAnswer["usage"] | undefined;
-      return {
-        ok: true,
-        answer: String(body.answer ?? ""),
-        toolsUsed: Array.isArray(body.toolsUsed) ? (body.toolsUsed as string[]) : [],
-        usage: usage ?? { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-      };
-    },
-  };
-}

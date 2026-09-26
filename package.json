@@ -7,8 +7,6 @@
     "node": ">=22.19.0"
   },
   "dependencies": {
-    "@earendil-works/pi-agent-core": "0.83.0",
-    "@earendil-works/pi-ai": "0.83.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "fast-xml-parser": "^5.10.0",
     "zod": "^4.4.3"

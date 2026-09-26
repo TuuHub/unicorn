@@ -3,7 +3,9 @@ import { htmlResponse, renderPage } from "./ui";
 export interface AppSettings {
   retentionDays: number;
   syncEnabled: boolean;
-  notificationsEnabled: boolean;
+  // IANA timezone (e.g. "Australia/Melbourne"), used to gate the daily digest
+  // to a user-local time of day (ADR-0034).
+  timezone: string;
 }
 
 export interface SettingsRepository {
@@ -18,8 +20,6 @@ export interface SettingsRuntime {
     moodle: boolean;
     ed: boolean;
     mcp: boolean;
-    agent: boolean;
-    notifier: boolean;
     // Google OAuth client secrets configured (ADR-0033) — optional so callers that
     // predate the Gmail source (and existing tests) don't have to supply it.
     google?: boolean;
@@ -28,18 +28,18 @@ export interface SettingsRuntime {
     gmailConnected?: boolean;
   };
   // Live operational state, fetched by the route handler: whether the hourly
-  // scheduler alarm is set, and how many notifications have permanently failed.
+  // scheduler alarm is set.
   status: {
     schedulerRunning: boolean;
-    failedNotifications: number;
-    residentAgentEnabled: boolean;
   };
 }
+
+const DEFAULT_TIMEZONE = "Australia/Melbourne";
 
 const DEFAULT_SETTINGS: AppSettings = {
   retentionDays: 180,
   syncEnabled: true,
-  notificationsEnabled: true,
+  timezone: DEFAULT_TIMEZONE,
 };
 
 export class D1SettingsRepository implements SettingsRepository {
@@ -89,10 +89,14 @@ export async function handleSettings(request: Request, runtime: SettingsRuntime)
     if (!Number.isInteger(retentionDays) || retentionDays < 7 || retentionDays > 3650) {
       return htmlResponse(renderSettings(await runtime.repository.get(), runtime, false, "Retention must be between 7 and 3650 days."), 400);
     }
+    const timezone = String(form.get("timezone") ?? "").trim();
+    if (!isValidTimeZone(timezone)) {
+      return htmlResponse(renderSettings(await runtime.repository.get(), runtime, false, "Timezone must be a valid IANA name, e.g. Australia/Melbourne."), 400);
+    }
     await runtime.repository.save({
       retentionDays,
       syncEnabled: form.get("syncEnabled") === "on",
-      notificationsEnabled: form.get("notificationsEnabled") === "on",
+      timezone,
     });
     return new Response(null, { status: 303, headers: { location: "/settings?saved=1" } });
   }
@@ -103,12 +107,24 @@ export async function handleSettings(request: Request, runtime: SettingsRuntime)
 function parseSettings(value: unknown): AppSettings {
   const record = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
   const retentionDays = Number(record.retentionDays);
+  const timezone = typeof record.timezone === "string" ? record.timezone : "";
   return {
     retentionDays: Number.isInteger(retentionDays) && retentionDays >= 7 && retentionDays <= 3650 ? retentionDays : DEFAULT_SETTINGS.retentionDays,
     syncEnabled: typeof record.syncEnabled === "boolean" ? record.syncEnabled : DEFAULT_SETTINGS.syncEnabled,
-    notificationsEnabled:
-      typeof record.notificationsEnabled === "boolean" ? record.notificationsEnabled : DEFAULT_SETTINGS.notificationsEnabled,
+    timezone: isValidTimeZone(timezone) ? timezone : DEFAULT_SETTINGS.timezone,
   };
+}
+
+function isValidTimeZone(timezone: string): boolean {
+  if (!timezone) {
+    return false;
+  }
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: timezone });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function isBasicAuthorized(header: string | null, token: string): boolean {
@@ -162,8 +178,6 @@ function renderSettings(
     ["Moodle", connections.moodle],
     ["Ed Discussion", connections.ed],
     ["MCP", connections.mcp],
-    ["Pi model", connections.agent],
-    ["Notifier", connections.notifier],
   ] as const;
   const rail = sources
     .map(
@@ -181,15 +195,6 @@ function renderSettings(
         <span class="source-name">Hourly scheduler</span>
         <span class="source-state">${status.schedulerRunning ? "Running" : "Stopped"}</span>
       </li>`;
-  const agentRow = `<li class="source">
-        <span class="dot ${status.residentAgentEnabled ? "is-live" : "is-off"}" aria-hidden="true"></span>
-        <span class="source-name">Resident agent</span>
-        <span class="source-state">${status.residentAgentEnabled ? "Enabled" : "Disabled"}</span>
-      </li>`;
-  const failedNotice =
-    status.failedNotifications > 0
-      ? `<p class="notice error" role="alert">${status.failedNotifications} notification${status.failedNotifications === 1 ? "" : "s"} permanently failed to deliver. Check the channel configuration, then re-save it and new messages will flow again.</p>`
-      : "";
   const schedulerNotice = !status.schedulerRunning
     ? `<p class="notice error" role="alert">The hourly scheduler is not running — nothing will sync. Start it with <code>curl -X POST https://&lt;your-worker&gt;/schedule -H "Authorization: Bearer &lt;ADMIN_TOKEN&gt;"</code>.</p>`
     : "";
@@ -197,10 +202,9 @@ function renderSettings(
     ${saved ? '<p class="notice" role="status">Changes saved.</p>' : ""}
     ${error ? `<p class="notice error" role="alert">${error}</p>` : ""}
     ${schedulerNotice}
-    ${failedNotice}
     <section class="card" aria-labelledby="connections-title">
       <div class="card-head"><h2 id="connections-title">Status</h2><p class="card-sub">Secrets are read from the Worker — configure with <code>wrangler secret put</code>, never stored here.</p></div>
-      <div class="card-body"><ul class="rail rows">${schedulerRow}${agentRow}${rail}</ul></div>
+      <div class="card-body"><ul class="rail rows">${schedulerRow}${rail}</ul></div>
     </section>
     ${renderGmailCard(connections)}
     <section class="card" aria-labelledby="behavior-title">
@@ -217,8 +221,8 @@ function renderSettings(
               <input id="syncEnabled" class="switch" name="syncEnabled" type="checkbox" ${settings.syncEnabled ? "checked" : ""}>
             </div>
             <div class="field">
-              <div class="field-text"><label for="notificationsEnabled">Notifications</label><p class="hint">Deliver triage alerts and digests to configured channels.</p></div>
-              <input id="notificationsEnabled" class="switch" name="notificationsEnabled" type="checkbox" ${settings.notificationsEnabled ? "checked" : ""}>
+              <div class="field-text"><label for="timezone">Timezone</label><p class="hint">IANA name, e.g. Australia/Melbourne. The daily digest runs once this local time reaches 07:00.</p></div>
+              <div class="field-input"><input id="timezone" name="timezone" type="text" value="${settings.timezone}" required></div>
             </div>
           </div>
           <div class="actions"><button type="submit">Save changes</button></div>
@@ -239,6 +243,7 @@ function renderSettings(
       .hint{margin:1px 0 0;color:var(--muted);font-size:13px}
       .field-input{display:flex;align-items:center;gap:8px;flex:none}
       input[type=number]{width:84px;border:1px solid var(--border);background:var(--bg);color:var(--ink);padding:7px 10px;border-radius:8px;font:inherit;font-size:14px;font-variant-numeric:tabular-nums;text-align:right}
+      input[type=text]{width:220px;border:1px solid var(--border);background:var(--bg);color:var(--ink);padding:7px 10px;border-radius:8px;font:inherit;font-size:14px}
       .unit{color:var(--muted);font-size:13px}
       .switch{appearance:none;flex:none;width:38px;height:22px;margin:0;border-radius:999px;background:var(--track);cursor:pointer;position:relative;transition:background .15s ease-out}
       .switch::after{content:"";position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.25);transition:translate .15s ease-out}
