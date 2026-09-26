@@ -3,6 +3,7 @@ import { z } from "zod";
 import { recordCorrection } from "../corrections";
 import type { MemoryStore } from "../memory";
 import type { BriefStore } from "../briefs";
+import { registerUserTools } from "../tools/user-tools";
 
 const READ_ONLY = { destructiveHint: false, readOnlyHint: true } as const;
 const WRITE = { destructiveHint: false, readOnlyHint: false } as const;
@@ -10,6 +11,10 @@ const WRITE = { destructiveHint: false, readOnlyHint: false } as const;
 export interface DoorDeps {
   briefs: BriefStore;
   memory: MemoryStore;
+  // D1 handle for the ADR-0035 user-defined tools registered below. Optional
+  // so existing callers/tests that don't touch D1 keep working unchanged;
+  // production always supplies it (see src/index.ts).
+  db?: D1Database;
 }
 
 // ADR-0034: unicorn does no reasoning itself now — it is a memory layer the
@@ -22,7 +27,12 @@ const INSTRUCTIONS = [
   "Call remember whenever the user corrects unicorn or states a standing preference about their courses — it is stored verbatim for unicorn's own future structured output.",
 ].join("\n");
 
-export function createDoorMcpServer(deps: DoorDeps): McpServer {
+// Async because registering ADR-0035 user tools means re-listing user_tools
+// from D1 before the server starts handling requests — see the marked call
+// below. Every caller already awaits somewhere in the same async function
+// (src/index.ts's fetch handler, tests/mcp-door.test.ts's connectClient), so
+// this stays a one-line ripple, not a redesign.
+export async function createDoorMcpServer(deps: DoorDeps): Promise<McpServer> {
   const server = new McpServer({ name: "unicorn-door", version: "0.1.0" }, { instructions: INSTRUCTIONS });
 
   server.registerTool(
@@ -59,6 +69,11 @@ export function createDoorMcpServer(deps: DoorDeps): McpServer {
     },
     async ({ text }) => jsonResult({ result: await recordCorrection(deps.memory, text) }),
   );
+
+  // user-defined tools (ADR-0035) are registered here
+  if (deps.db) {
+    await registerUserTools(server, { db: deps.db });
+  }
 
   return server;
 }

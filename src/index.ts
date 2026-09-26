@@ -161,9 +161,10 @@ export default {
         enableJsonResponse: true,
         sessionIdGenerator: undefined,
       });
-      const server = createDoorMcpServer({
+      const server = await createDoorMcpServer({
         briefs: new D1BriefStore(env.DB),
         memory: new D1MemoryStore(env.DB),
+        db: env.DB,
       });
       await server.connect(transport);
       return transport.handleRequest(request);
@@ -185,7 +186,7 @@ export default {
         enableJsonResponse: true,
         sessionIdGenerator: undefined,
       });
-      const server = createAdminMcpServer(new D1McpRepository(env.DB));
+      const server = createAdminMcpServer(new D1McpRepository(env.DB), { db: env.DB });
       await server.connect(transport);
       return transport.handleRequest(request);
     }
