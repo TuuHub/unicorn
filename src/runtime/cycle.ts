@@ -26,6 +26,8 @@ export interface Env {
   SCHEDULER: DurableObjectNamespace;
   PLUGIN_SECRET_GOOGLE_CLIENT_ID?: string;
   PLUGIN_SECRET_GOOGLE_CLIENT_SECRET?: string;
+  // The OAuth authorization server's token/grant/client store (ADR-0035, src/oauth-server.ts).
+  OAUTH_KV: KVNamespace;
 }
 
 export interface SourceCycleResult {

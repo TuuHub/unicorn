@@ -1,0 +1,32 @@
+{
+  "unread": 2,
+  "briefs": [
+    {
+      "id": "brief-1",
+      "kind": "digest",
+      "subject": "FIT3175",
+      "title": "Your Friday digest",
+      "body": "## Since yesterday\n\n- **FIT3175**: Assignment 2 due date moved to *6 Oct*.\n- Staff posted in the [forum thread](https://ed.example.edu/t/42) about the group project.\n- No new grades.\n\nHave a good weekend.",
+      "createdAt": "2026-09-26T21:00:00.000Z",
+      "readAt": null
+    },
+    {
+      "id": "brief-2",
+      "kind": "forum-brief",
+      "subject": "FIT2004",
+      "title": "Forum catch-up: FIT2004",
+      "body": "Three new threads since Monday:\n\n1. Exam format clarified by staff\n2. Tutorial 9 solutions posted\n3. A student asked about extension policy (unanswered)",
+      "createdAt": "2026-09-26T09:15:00.000Z",
+      "readAt": null
+    },
+    {
+      "id": "brief-3",
+      "kind": "weekly-plan",
+      "subject": "2026-W39",
+      "title": "Plan for week 39",
+      "body": "- [x] Review lecture 8 slides\n- [x] Draft assignment outline\n- [ ] Submit peer review",
+      "createdAt": "2026-09-21T07:00:00.000Z",
+      "readAt": "2026-09-22T08:30:00.000Z"
+    }
+  ]
+}

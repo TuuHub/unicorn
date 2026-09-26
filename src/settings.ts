@@ -1,3 +1,4 @@
+import { renderConnectedApps } from "./oauth-server";
 import { escapeHtml, htmlResponse, renderPage } from "./ui";
 import {
   buildSourceStatuses,
@@ -10,6 +11,7 @@ import {
   type SourceId,
   type SourceStatus,
 } from "./sources";
+import type { GrantSummary } from "@cloudflare/workers-oauth-provider";
 
 export interface AppSettings {
   retentionDays: number;
@@ -59,6 +61,9 @@ export interface SettingsRuntime {
   // POST /settings/sync-now: runs a forced cycle. Optional so tests that don't
   // exercise that route can omit it.
   runSync?: () => Promise<{ ok: boolean; error?: string }>;
+  // OAuth connectors (ADR-0035): grants issued by /authorize, for the "Connected apps" card.
+  // Optional so callers that predate connector support (and existing tests) don't need it.
+  oauth?: { grants: GrantSummary[] };
 }
 
 const DEFAULT_TIMEZONE = "Australia/Melbourne";
@@ -410,7 +415,7 @@ async function renderSettingsPage(settings: AppSettings, runtime: SettingsRuntim
     ${renderTimezoneCard(settings, csrf)}
     ${renderGmailScopeCard(settings, csrf)}
     ${renderConnectAgentCard(doorUrl, runtime.mcpToken)}
-    <!-- connected-apps -->
+    ${renderConnectedApps(runtime.oauth?.grants ?? [])}
     ${renderMaintenanceCard(settings, csrf)}
     ${PAGE_STYLE}
     ${PAGE_SCRIPT}`;

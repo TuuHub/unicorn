@@ -43,8 +43,45 @@ describe("settings", () => {
     expect(html).toContain("Hourly scheduler");
     expect(html).toContain("Running");
     expect(html).toContain("Connect your agent");
-    expect(html).toContain("<!-- connected-apps -->");
+    expect(html).toContain("Connected apps");
     expect(html).not.toContain("admin-secret");
+  });
+
+  it("renders the empty-state hint when no OAuth connector has been granted yet", async () => {
+    const response = await handleSettings(
+      new Request("https://unicorn.example/settings", { headers: { authorization: basic("admin-secret") } }),
+      runtime(),
+    );
+    const html = await response.text();
+
+    expect(html).toContain("No connected apps yet");
+  });
+
+  it("renders a connected app with its name and a revoke action", async () => {
+    const response = await handleSettings(
+      new Request("https://unicorn.example/settings", { headers: { authorization: basic("admin-secret") } }),
+      {
+        ...runtime(),
+        oauth: {
+          grants: [
+            {
+              id: "grant-1",
+              clientId: "client-abc",
+              userId: "door",
+              scope: ["mcp"],
+              metadata: { clientName: "Claude" },
+              createdAt: 1_700_000_000,
+            },
+          ],
+        },
+      },
+    );
+    const html = await response.text();
+
+    expect(html).toContain("Claude");
+    expect(html).toContain('action="/settings/oauth/apps/revoke"');
+    expect(html).toContain('value="grant-1"');
+    expect(html).not.toContain("No connected apps yet");
   });
 
   it("never renders the raw MCP token attribute-escaped incorrectly, but does surface it for the Claude Code command", async () => {
