@@ -33,6 +33,13 @@ export interface CourseMentionFacet extends Facet {
  * Builds a `course-mention` facet from already-extracted unit codes. Returns
  * undefined when there are none — an item with no mention should carry no
  * facet at all, rather than an empty one (ADR-0016: facets are optional).
+ *
+ * No capability binding: `codes` is a list, not a single relation value (the
+ * kernel's `relation` primitive expects one non-empty string — see
+ * validPrimitiveValue in src/kernel/kernel.ts), and this facet only feeds
+ * labelStructure's course resolution, never a change event. Same rationale
+ * as ed-plugin.ts's `discussion-category` facet: structure, not a behavior
+ * primitive.
  */
 export function courseMentionFacet(codes: string[]): CourseMentionFacet | undefined {
   if (codes.length === 0) {
@@ -41,6 +48,6 @@ export function courseMentionFacet(codes: string[]): CourseMentionFacet | undefi
   return {
     type: "course-mention",
     data: { codes },
-    capabilities: [{ name: "mentions-course", primitive: "relation", field: "codes" }],
+    capabilities: [],
   };
 }

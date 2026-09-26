@@ -1,6 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
-import type { Brief, BriefStore } from "../src/briefs";
-import { localDateParts, loadDigestSections, renderDigest, runDailyDigest } from "../src/digest";
+import { describe, expect, it } from "vitest";
+import { localDateParts, renderDigest } from "../src/digest";
+
+// loadDigestSections and runDailyDigest (the D1-touching half) are covered
+// against the real schema in tests/integration/digest.test.ts — their old
+// SQL-substring-fake tests here were strictly redundant with that and just as
+// brittle, so they were deleted rather than duplicated.
 
 describe("renderDigest", () => {
   it("returns null when every section is empty", () => {
@@ -52,93 +56,3 @@ describe("localDateParts", () => {
   });
 });
 
-function fakeDb(routes: Array<{ match: string; rows: unknown[] }>): D1Database {
-  return {
-    prepare: (sql: string) => ({
-      bind: () => ({
-        all: async () => ({ results: routes.find((route) => sql.includes(route.match))?.rows ?? [] }),
-      }),
-      all: async () => ({ results: routes.find((route) => sql.includes(route.match))?.rows ?? [] }),
-    }),
-  } as unknown as D1Database;
-}
-
-describe("loadDigestSections", () => {
-  it("splits changes into notices and the deadline/grade/content bucket", async () => {
-    const db = fakeDb([
-      { match: "BETWEEN julianday", rows: [{ title: "Assignment 2", url: null, due_at: "2026-09-30T00:00:00.000Z" }] },
-      { match: "type = 'notice.posted'", rows: [{ title: "Lecture moved", type: "notice.posted", url: null }] },
-      { match: "IN ('deadline.changed'", rows: [{ title: "Assignment 3", type: "deadline.changed", url: null }] },
-    ]);
-
-    const sections = await loadDigestSections(db, "2026-09-25T00:00:00.000Z");
-
-    expect(sections.dueSoon).toEqual([{ title: "Assignment 2", url: null, dueAt: "2026-09-30T00:00:00.000Z" }]);
-    expect(sections.notices).toEqual([{ title: "Lecture moved", type: "notice.posted", url: null }]);
-    expect(sections.changes).toEqual([{ title: "Assignment 3", type: "deadline.changed", url: null }]);
-  });
-});
-
-function fakeBriefs(overrides: Partial<BriefStore> = {}): BriefStore {
-  return {
-    insert: vi.fn().mockImplementation(async (input) => ({ ...input, readAt: null }) as Brief),
-    list: vi.fn().mockResolvedValue([]),
-    markRead: vi.fn().mockResolvedValue(0),
-    prune: vi.fn().mockResolvedValue(0),
-    exists: vi.fn().mockResolvedValue(false),
-    latestByKind: vi.fn().mockResolvedValue(null),
-    ...overrides,
-  };
-}
-
-describe("runDailyDigest", () => {
-  it("skips before 07:00 local time without touching the database", async () => {
-    const briefs = fakeBriefs();
-    const db = fakeDb([]);
-
-    const result = await runDailyDigest(db, briefs, "UTC", new Date("2026-09-26T06:59:00.000Z"));
-
-    expect(result).toEqual({ status: "skipped", reason: "not_due" });
-    expect(briefs.exists).not.toHaveBeenCalled();
-  });
-
-  it("skips when today's digest already exists", async () => {
-    const briefs = fakeBriefs({ exists: vi.fn().mockResolvedValue(true) });
-    const db = fakeDb([]);
-
-    const result = await runDailyDigest(db, briefs, "UTC", new Date("2026-09-26T07:30:00.000Z"));
-
-    expect(result).toEqual({ status: "skipped", reason: "already_done" });
-    expect(briefs.insert).not.toHaveBeenCalled();
-  });
-
-  it("skips and writes nothing when every section is empty", async () => {
-    const briefs = fakeBriefs();
-    const db = fakeDb([
-      { match: "BETWEEN julianday", rows: [] },
-      { match: "type = 'notice.posted'", rows: [] },
-      { match: "IN ('deadline.changed'", rows: [] },
-    ]);
-
-    const result = await runDailyDigest(db, briefs, "UTC", new Date("2026-09-26T07:30:00.000Z"));
-
-    expect(result).toEqual({ status: "skipped", reason: "empty" });
-    expect(briefs.insert).not.toHaveBeenCalled();
-  });
-
-  it("writes an idempotent digest:YYYY-MM-DD brief when there is something to report", async () => {
-    const briefs = fakeBriefs();
-    const db = fakeDb([
-      { match: "BETWEEN julianday", rows: [{ title: "Assignment 2", url: null, due_at: "2026-09-30T00:00:00.000Z" }] },
-      { match: "type = 'notice.posted'", rows: [] },
-      { match: "IN ('deadline.changed'", rows: [] },
-    ]);
-
-    const result = await runDailyDigest(db, briefs, "UTC", new Date("2026-09-26T07:30:00.000Z"));
-
-    expect(result).toEqual({ status: "written" });
-    expect(briefs.insert).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "digest:2026-09-26", kind: "digest", subject: "2026-09-26" }),
-    );
-  });
-});
