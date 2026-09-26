@@ -16,9 +16,12 @@ import type {
   LabeledBy,
   LifeView,
   Plan,
-  PlanKind,
 } from "./door-contracts";
 import { LIFE_BUCKETS } from "./door-contracts";
+
+// door-contracts defines Plan but not this alias — kept local so the fixed
+// contract module needs no edit for it.
+export type PlanKind = Plan["kind"];
 
 export interface ChangesSinceInput {
   cursor?: string;
@@ -74,7 +77,7 @@ export interface DoorRepository {
   labelItems(inputs: LabelItemInput[], by: LabeledBy): Promise<LabelItemsResult>;
   listKnownCourseCodes(): Promise<string[]>;
   unlabeledItems(limit: number): Promise<ItemSummary[]>;
-  sourceStatus(): Promise<{ sources: RepoSourceStatus[]; latestCursor: string }>;
+  sourceStatus(): Promise<{ sources: RepoSourceStatus[]; latestCursor: string; lastCycleAt: string | null }>;
 }
 
 // --- shared item-summary projection -----------------------------------------
@@ -376,6 +379,7 @@ interface StoredCycleSource {
 }
 
 interface StoredCycle {
+  at?: string;
   sources?: StoredCycleSource[];
 }
 
@@ -767,7 +771,7 @@ export class D1DoorRepository implements DoorRepository {
     return rows.results.map(parseItemSummary);
   }
 
-  async sourceStatus(): Promise<{ sources: RepoSourceStatus[]; latestCursor: string }> {
+  async sourceStatus(): Promise<{ sources: RepoSourceStatus[]; latestCursor: string; lastCycleAt: string | null }> {
     const [countRows, cursorRow, lastCycleRow] = await Promise.all([
       this.db.prepare("SELECT source, COUNT(*) AS n FROM items WHERE archived_at IS NULL GROUP BY source").all<{ source: string; n: number }>(),
       this.db.prepare("SELECT MAX(seq) AS latest FROM changes").first<{ latest: number | null }>(),
@@ -789,6 +793,6 @@ export class D1DoorRepository implements DoorRepository {
           items: counts.get(id) ?? 0,
         };
       });
-    return { sources, latestCursor: String(cursorRow?.latest ?? 0) };
+    return { sources, latestCursor: String(cursorRow?.latest ?? 0), lastCycleAt: cycle.at ?? null };
   }
 }
