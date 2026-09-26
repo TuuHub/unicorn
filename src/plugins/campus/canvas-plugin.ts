@@ -26,6 +26,11 @@ import { asArray, asBoolean, asNumber, asOptionalNumber, asRecord, asString, toJ
 // Worst case for a 6-course student: COURSE_PAGE_CAP + 3 * PER_COURSE_PAGE_CAP * 6
 // = 2 + 3*2*6 = 38, comfortably under 50. A typical course fits one page per
 // endpoint, so a real pull costs roughly 1 + 3*6 = 19 subrequests.
+//
+// Every next-page URL is checked against baseUrl's origin before it's ever
+// fetched (see isTrustedOrigin): the bearer token must never be sent to a
+// host other than the configured Canvas instance, even if a paginated
+// response tries to hand back a Link header pointing elsewhere.
 const PER_PAGE = 100;
 const COURSE_PAGE_CAP = 2;
 const PER_COURSE_PAGE_CAP = 2;
@@ -59,9 +64,11 @@ export class CanvasPlugin implements Plugin {
   private readonly now: () => Date;
   private readonly announcementWindowDays: number;
   private readonly discussionLimit: number;
+  private readonly origin: string;
 
   constructor(options: CanvasPluginOptions) {
     this.baseUrl = options.baseUrl.replace(/\/$/, "");
+    this.origin = new URL(this.baseUrl).origin;
     this.token = options.token;
     if (options.fetch) {
       const injectedFetch = options.fetch;
@@ -157,10 +164,25 @@ export class CanvasPlugin implements Plugin {
     while (next && pages < pageCap) {
       const page = await this.getPage(next);
       items.push(...page.items);
-      next = page.next;
+      // The Link header's next URL is server-supplied. Canvas always keeps
+      // pagination on the same host, but never follow it (and never send the
+      // bearer token) anywhere else — a compromised or misconfigured Canvas
+      // instance must not be able to redirect the token to a third party.
+      next = page.next && this.isTrustedOrigin(page.next) ? page.next : null;
+      if (page.next && !next) {
+        console.error(JSON.stringify({ event: "canvas_cross_origin_next_link_dropped" }));
+      }
       pages += 1;
     }
     return items;
+  }
+
+  private isTrustedOrigin(url: string): boolean {
+    try {
+      return new URL(url).origin === this.origin;
+    } catch {
+      return false;
+    }
   }
 
   private async getPage(url: string): Promise<{ items: unknown[]; next: string | null }> {
