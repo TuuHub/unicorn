@@ -10,7 +10,14 @@ describe("EdPlugin.pull", () => {
           user: { id: 7, name: "Student" },
           courses: [
             {
-              course: { id: 100, code: "FIT2099 S1 2026", name: "Object-Oriented Design", status: "active" },
+              course: {
+                id: 100,
+                code: "FIT2099 S1 2026",
+                name: "Object-Oriented Design",
+                status: "active",
+                session: "S1",
+                year: "2026",
+              },
               role: { role: "student" },
             },
             {
@@ -64,7 +71,12 @@ describe("EdPlugin.pull", () => {
     const items = await plugin.pull();
 
     expect(items).toHaveLength(3);
-    expect(items[0]).toMatchObject({ id: "course:100", source: "campus-ed", kind: "course" });
+    expect(items[0]).toMatchObject({
+      id: "course:100",
+      source: "campus-ed",
+      kind: "course",
+      facets: [expect.objectContaining({ type: "course-identity", data: expect.objectContaining({ term: "S1 2026" }) })],
+    });
     expect(items[1]).toMatchObject({
       id: "thread:5001",
       source: "campus-ed",
@@ -83,14 +95,19 @@ describe("EdPlugin.pull", () => {
           type: "engagement",
           data: { replies: 3, votes: 5, views: 150, stars: 2 },
         }),
+        expect.objectContaining({
+          type: "discussion-category",
+          data: { category: "Assignments" },
+          capabilities: [],
+        }),
       ]),
     });
     expect(String(fetcher.mock.calls[1]?.[0])).toContain("courses/100/threads?limit=30");
     expect(fetcher.mock.calls[0]?.[1]?.headers).toMatchObject({ Authorization: "Bearer ed-secret" });
     expect(items[2]).not.toHaveProperty("body");
-    const authorFacet = (items[2] as { facets: Array<{ type: string; data: Record<string, unknown> }> }).facets.find(
-      (facet) => facet.type === "author",
-    );
+    const thread2Facets = (items[2] as { facets: Array<{ type: string; data: Record<string, unknown> }> }).facets;
+    const authorFacet = thread2Facets.find((facet) => facet.type === "author");
     expect(authorFacet?.data).toEqual({ actor: "ed-user:100" });
+    expect(thread2Facets.find((facet) => facet.type === "discussion-category")).toBeUndefined();
   });
 });

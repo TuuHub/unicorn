@@ -1,3 +1,4 @@
+import { normalizeTerm } from "../../kernel/courses";
 import type { Facet, ItemInput } from "../../kernel/types";
 import { parseSesskey } from "../../moodle-probe";
 import type { Plugin } from "../plugin";
@@ -109,11 +110,13 @@ export class MoodlePlugin implements Plugin {
     const startdate = asNumber(course.startdate);
     const visible = asBoolean(course.visible, true);
     const status = visible ? "active" : "hidden";
+    const shortname = asString(course.shortname);
+    const term = parseShortnameTerm(shortname);
     return {
       id: `course:${id}`,
       source: this.id,
       kind: "course",
-      title: asString(course.fullname) || asString(course.shortname) || `Moodle course ${id}`,
+      title: asString(course.fullname) || shortname || `Moodle course ${id}`,
       timestamp: startdate > 0 ? new Date(startdate * 1000).toISOString() : "1970-01-01T00:00:00.000Z",
       url: `${this.baseUrl}/course/view.php?id=${id}`,
       raw: toJson(course),
@@ -123,8 +126,9 @@ export class MoodlePlugin implements Plugin {
           data: {
             platform: "moodle",
             platformId: String(id),
-            code: asString(course.shortname),
+            code: shortname,
             status,
+            ...(term ? { term } : {}),
           },
           capabilities: [{ name: "has-visibility", primitive: "state", field: "status" }],
         },
@@ -180,6 +184,14 @@ export class MoodlePlugin implements Plugin {
       facets,
     };
   }
+}
+
+// A Moodle shortname often ends in a session+year suffix like "_S1_2026" or
+// "_T3_2025" (e.g. "FIT3175_S2_2026"); when present it is the course's term
+// (ADR-0036). Omitted when the shortname carries no such suffix.
+function parseShortnameTerm(shortname: string): string | null {
+  const match = shortname.match(/[_-]([A-Za-z]+\d*)[_-](\d{4})$/);
+  return match ? normalizeTerm(`${match[1]} ${match[2]}`) : null;
 }
 
 function isAssessmentEvent(event: Record<string, unknown>): boolean {

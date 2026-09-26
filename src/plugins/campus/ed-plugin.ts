@@ -1,3 +1,4 @@
+import { normalizeTerm } from "../../kernel/courses";
 import type { Facet, ItemInput } from "../../kernel/types";
 import type { Plugin } from "../plugin";
 import { asArray, asBoolean, asNumber, asRecord, asString, toJson } from "../source-values";
@@ -74,6 +75,10 @@ export class EdPlugin implements Plugin {
     const id = asNumber(course.id);
     const status = asString(course.status) || "active";
     const year = asString(course.year);
+    // Ed reports the offering as separate `session` ("S1") and `year` ("2026")
+    // fields; either alone is still a usable term (ADR-0036).
+    const session = asString(course.session);
+    const term = normalizeTerm(session && year ? `${session} ${year}` : session || year || null);
     return {
       id: `course:${id}`,
       source: this.id,
@@ -90,6 +95,7 @@ export class EdPlugin implements Plugin {
             platformId: String(id),
             code: asString(course.code),
             status,
+            ...(term ? { term } : {}),
           },
           capabilities: [{ name: "has-course-status", primitive: "state", field: "status" }],
         },
@@ -147,6 +153,18 @@ export class EdPlugin implements Plugin {
         ],
       },
     ];
+    // ADR-0036: Ed's thread category (e.g. "Assignments") feeds structural
+    // bucket labelling by matching it against a course's assessment titles.
+    // No capabilities — this is structure, not a behavior primitive.
+    const category = asString(thread.category);
+    if (category) {
+      const subcategory = asString(thread.subcategory);
+      facets.push({
+        type: "discussion-category",
+        data: { category, ...(subcategory ? { subcategory } : {}) },
+        capabilities: [],
+      });
+    }
     const createdAt = asString(thread.created_at) || this.now().toISOString();
     const body = asString(thread.document);
     return {
