@@ -1,250 +1,306 @@
 import { describe, expect, it, vi } from "vitest";
 import { CanvasPlugin } from "../src/plugins/campus/canvas-plugin";
 
-describe("CanvasPlugin.pull", () => {
-  it("maps courses (with and without term), paginated assignments across every submission state, staff announcements and discussion topics", async () => {
-    const fetcher = vi.fn<typeof fetch>(async (input) => {
-      const url = String(input);
-      if (url.includes("/api/v1/courses?")) {
-        return Response.json([
-          {
-            id: 100,
-            name: "FIT2099 Object-Oriented Design and Implementation",
-            course_code: "FIT2099",
-            workflow_state: "available",
-            start_at: "2026-07-13T00:00:00Z",
-            term: { id: 5001, name: "Term 3 2026", start_at: "2026-07-13T00:00:00Z" },
-          },
-          {
-            id: 200,
-            name: "FIT2004 Algorithms and Data Structures",
-            course_code: "FIT2004",
-            workflow_state: "available",
-            start_at: "2026-07-13T00:00:00Z",
-          },
-        ]);
-      }
-      if (url.includes("/courses/100/assignments?")) {
-        if (url.includes("page=2")) {
-          return Response.json([
-            {
-              id: 9002,
-              name: "Assignment 2: Implementation",
-              due_at: "2026-09-20T13:00:00Z",
-              submission: { workflow_state: "submitted", missing: false, late: false, score: null },
-            },
-          ]);
-        }
-        return Response.json(
-          [
-            {
-              id: 9001,
-              name: "Assignment 1: Design Document",
-              due_at: "2026-08-15T13:00:00Z",
-              html_url: "https://learning.example.edu/courses/100/assignments/9001",
-              submission: { workflow_state: "graded", missing: false, late: false, score: 87.5, grade: "87.5" },
-            },
-          ],
-          {
-            headers: {
-              Link: '<https://learning.example.edu/api/v1/courses/100/assignments?page=2&per_page=100>; rel="next"',
-            },
-          },
-        );
-      }
-      if (url.includes("/api/v1/announcements?") && url.includes("course_100")) {
-        return Response.json([
-          {
-            id: 7001,
-            title: "Assignment 1 extension",
-            message: "<p>The deadline has been <strong>extended</strong> to Friday.</p>",
-            posted_at: "2026-08-10T09:00:00Z",
-            html_url: "https://learning.example.edu/courses/100/discussion_topics/7001",
-            author: { id: 55, display_name: "Dr. Chen" },
-          },
-        ]);
-      }
-      if (url.includes("/courses/100/discussion_topics?")) {
-        return Response.json([
-          {
-            id: 8001,
-            title: "Week 5 general discussion",
-            message: "<p>Post your questions about week 5 here.</p>",
-            posted_at: "2026-08-05T09:00:00Z",
-            html_url: "https://learning.example.edu/courses/100/discussion_topics/8001",
-            is_announcement: false,
-            author: { id: 300, display_name: "Some Student" },
-          },
-        ]);
-      }
-      if (url.includes("/courses/200/assignments?")) {
-        return Response.json([
-          {
-            id: 9101,
-            name: "Quiz 1",
-            due_at: "2026-08-01T00:00:00Z",
-            submission: { workflow_state: "unsubmitted", missing: false, late: false },
-          },
-          {
-            id: 9102,
-            name: "Quiz 2",
-            due_at: "2026-07-01T00:00:00Z",
-            submission: { workflow_state: "unsubmitted", missing: true, late: false },
-          },
-          {
-            id: 9103,
-            name: "Quiz 3",
-            due_at: "2026-07-10T00:00:00Z",
-            submission: { workflow_state: "submitted", missing: false, late: true },
-          },
-        ]);
-      }
-      if (url.includes("/api/v1/announcements?") && url.includes("course_200")) {
-        return Response.json([]);
-      }
-      if (url.includes("/courses/200/discussion_topics?")) {
-        return Response.json([
-          {
-            id: 8002,
-            title: "Lab help thread",
-            message: "<p>Ask lab questions here.</p>",
-            posted_at: "2026-08-06T09:00:00Z",
-            html_url: "https://learning.example.edu/courses/200/discussion_topics/8002",
-            is_announcement: false,
-            author: { id: 301 },
-          },
-        ]);
-      }
-      throw new Error(`unexpected request: ${url}`);
-    });
-    const plugin = new CanvasPlugin({
-      baseUrl: "https://learning.example.edu",
-      token: "canvas-secret",
-      fetch: fetcher,
-      now: () => new Date("2026-09-26T00:00:00Z"),
-    });
+const BASE_URL = "https://learning.example.edu";
 
-    const items = await plugin.pull();
-    const byId = new Map(items.map((item) => [item.id, item]));
+type Route = (courseId: number, url: string) => Response;
 
-    expect(items).toHaveLength(10);
+interface RouteOverrides {
+  courses?: () => Response;
+  assignments?: Route;
+  announcements?: Route;
+  discussions?: Route;
+}
 
-    expect(byId.get("course:100")).toMatchObject({
-      source: "campus-canvas",
-      kind: "course",
-      title: "FIT2099 Object-Oriented Design and Implementation",
-      timestamp: "2026-07-13T00:00:00.000Z",
-      facets: [
-        expect.objectContaining({
-          type: "course-identity",
-          data: { platform: "canvas", platformId: "100", code: "FIT2099", term: "Term 3 2026", status: "available" },
-        }),
-      ],
-    });
-    expect(byId.get("course:200")).toMatchObject({
-      facets: [expect.objectContaining({ type: "course-identity", data: expect.objectContaining({ term: null }) })],
-    });
+// Every focused test below only cares about one endpoint's response; everything
+// else defaults to "one course, nothing else" so each test stays short and
+// asserts a single behaviour, matching the surrounding tests' style.
+function makeFetcher(courseIds: number[] = [100], overrides: RouteOverrides = {}) {
+  return vi.fn<typeof fetch>(async (input) => {
+    const url = String(input);
+    if (url.includes("/api/v1/courses?")) {
+      return overrides.courses
+        ? overrides.courses()
+        : Response.json(
+            courseIds.map((id) => ({ id, name: `Course ${id}`, course_code: `C${id}`, workflow_state: "available" })),
+          );
+    }
+    // Assignments/discussions carry the course id in the path; announcements
+    // carry it in `context_codes[]=course_<id>` instead.
+    const courseId = Number(/\/courses\/(\d+)\//.exec(url)?.[1] ?? /course_(\d+)/.exec(url)?.[1] ?? 0);
+    if (url.includes("/assignments?")) {
+      return overrides.assignments ? overrides.assignments(courseId, url) : Response.json([]);
+    }
+    if (url.includes("/api/v1/announcements?")) {
+      return overrides.announcements ? overrides.announcements(courseId, url) : Response.json([]);
+    }
+    if (url.includes("/discussion_topics?")) {
+      return overrides.discussions ? overrides.discussions(courseId, url) : Response.json([]);
+    }
+    throw new Error(`unexpected request: ${url}`);
+  });
+}
 
-    // Assignment 9001 came from page 1, graded with a score.
-    expect(byId.get("assignment:9001")).toMatchObject({
-      source: "campus-canvas",
-      kind: "assessment",
-      title: "Assignment 1: Design Document",
-      facets: expect.arrayContaining([
-        expect.objectContaining({ type: "course-membership", data: { course: "course:100" } }),
-        expect.objectContaining({
-          type: "deadline",
-          data: { dueAt: "2026-08-15T13:00:00.000Z" },
-          capabilities: [{ name: "has-deadline", primitive: "temporal", field: "dueAt" }],
-        }),
-        expect.objectContaining({
-          type: "submission",
-          data: { status: "graded" },
-          capabilities: [{ name: "has-submission-status", primitive: "state", field: "status" }],
-        }),
-        expect.objectContaining({
-          type: "grade",
-          data: { grade: 87.5 },
-          capabilities: [{ name: "has-grade", primitive: "scalar", field: "grade" }],
-        }),
-      ]),
-    });
-    // Assignment 9002 came from page 2 (followed via the Link header), submitted with no score yet.
-    expect(byId.get("assignment:9002")).toMatchObject({
-      facets: expect.arrayContaining([
-        expect.objectContaining({ type: "submission", data: { status: "submitted" } }),
-      ]),
-    });
-    expect(byId.get("assignment:9002")?.facets.some((facet) => facet.type === "grade")).toBe(false);
+async function assignmentItems(fetcher: ReturnType<typeof makeFetcher>) {
+  const plugin = new CanvasPlugin({ baseUrl: BASE_URL, token: "canvas-secret", fetch: fetcher });
+  const items = await plugin.pull();
+  return items.filter((item) => item.id.startsWith("assignment:"));
+}
 
-    // The other three submission states.
-    expect(byId.get("assignment:9101")).toMatchObject({
-      facets: expect.arrayContaining([expect.objectContaining({ type: "submission", data: { status: "unsubmitted" } })]),
-    });
-    expect(byId.get("assignment:9102")).toMatchObject({
-      facets: expect.arrayContaining([expect.objectContaining({ type: "submission", data: { status: "missing" } })]),
-    });
-    expect(byId.get("assignment:9103")).toMatchObject({
-      facets: expect.arrayContaining([expect.objectContaining({ type: "submission", data: { status: "late" } })]),
-    });
+describe("CanvasPlugin.pull — courses", () => {
+  it("sends the active-student filter, include[]=term and a bearer token", async () => {
+    const fetcher = makeFetcher([100]);
+    const plugin = new CanvasPlugin({ baseUrl: BASE_URL, token: "canvas-secret", fetch: fetcher });
 
-    // Announcements are staff posts by nature: authorRole is always "teacher".
-    expect(byId.get("announcement:7001")).toMatchObject({
-      kind: "announcement",
-      title: "Assignment 1 extension",
-      body: "The deadline has been extended to Friday.",
-      facets: expect.arrayContaining([
-        expect.objectContaining({
-          type: "author",
-          data: { actor: "canvas-user:55", authorRole: "teacher" },
-        }),
-        expect.objectContaining({ type: "course-membership", data: { course: "course:100" } }),
-      ]),
-    });
+    await plugin.pull();
 
-    // Discussion topics carry no reliable role field, so authorRole is left out.
-    const discussion = byId.get("discussion:8001");
-    expect(discussion).toMatchObject({ kind: "thread", body: "Post your questions about week 5 here." });
-    const discussionAuthorFacet = discussion?.facets.find((facet) => facet.type === "author");
-    expect(discussionAuthorFacet?.data).toEqual({ actor: "canvas-user:300" });
-
-    expect(String(fetcher.mock.calls[0][0])).toContain("enrollment_type=student");
-    expect(String(fetcher.mock.calls[0][0])).toContain("enrollment_state=active");
-    expect(String(fetcher.mock.calls[0][0])).toContain("include%5B%5D=term");
-    expect(fetcher.mock.calls[0][1]).toMatchObject({ redirect: "manual" });
-    expect(fetcher.mock.calls[0][1]?.headers).toMatchObject({ Authorization: "Bearer canvas-secret" });
-    // The page-2 fetch actually happened (pagination followed the Link header).
-    expect(fetcher.mock.calls.some((call) => String(call[0]).includes("page=2"))).toBe(true);
+    const [url, init] = fetcher.mock.calls[0];
+    expect(String(url)).toContain("enrollment_type=student");
+    expect(String(url)).toContain("enrollment_state=active");
+    expect(String(url)).toContain("include%5B%5D=term");
+    expect(init).toMatchObject({ redirect: "manual", headers: { Authorization: "Bearer canvas-secret" } });
   });
 
+  it("maps course-identity with the term name when include[]=term returns one", async () => {
+    const fetcher = makeFetcher([], {
+      courses: () =>
+        Response.json([
+          { id: 100, name: "FIT2099", course_code: "FIT2099", workflow_state: "available", term: { name: "Term 3 2026" } },
+        ]),
+    });
+    const plugin = new CanvasPlugin({ baseUrl: BASE_URL, token: "secret", fetch: fetcher });
+
+    const items = await plugin.pull();
+
+    const course = items.find((item) => item.id === "course:100");
+    expect(course?.facets[0]).toMatchObject({ type: "course-identity", data: expect.objectContaining({ term: "Term 3 2026" }) });
+  });
+
+  it("maps course-identity with term null when the course has no term", async () => {
+    const fetcher = makeFetcher([], {
+      courses: () => Response.json([{ id: 100, name: "FIT2099", course_code: "FIT2099", workflow_state: "available" }]),
+    });
+    const plugin = new CanvasPlugin({ baseUrl: BASE_URL, token: "secret", fetch: fetcher });
+
+    const items = await plugin.pull();
+
+    const course = items.find((item) => item.id === "course:100");
+    expect(course?.facets[0]).toMatchObject({ type: "course-identity", data: expect.objectContaining({ term: null }) });
+  });
+});
+
+describe("CanvasPlugin.pull — pagination", () => {
+  it("follows the Link header's rel=next across 2+ pages", async () => {
+    const fetcher = makeFetcher([100], {
+      assignments: (_courseId, url) => {
+        if (url.includes("page=2")) {
+          return Response.json([{ id: 2, name: "Page 2 assignment", submission: { workflow_state: "unsubmitted" } }]);
+        }
+        return Response.json([{ id: 1, name: "Page 1 assignment", submission: { workflow_state: "unsubmitted" } }], {
+          headers: { Link: `<${BASE_URL}/api/v1/courses/100/assignments?page=2>; rel="next"` },
+        });
+      },
+    });
+
+    const items = await assignmentItems(fetcher);
+
+    expect(items.map((item) => item.id)).toEqual(["assignment:1", "assignment:2"]);
+  });
+
+  it("stops at the page cap even if the server keeps returning rel=next", async () => {
+    const fetcher = makeFetcher([100], {
+      // Always hands back another "next" link, forever — a runaway/misbehaving
+      // server. The plugin must not loop forever or blow the subrequest budget.
+      assignments: (_courseId, url) => {
+        const id = url.includes("page=") ? Number(/page=(\d+)/.exec(url)?.[1]) : 1;
+        return Response.json([{ id, name: `Assignment ${id}`, submission: { workflow_state: "unsubmitted" } }], {
+          headers: { Link: `<${BASE_URL}/api/v1/courses/100/assignments?page=${id + 1}>; rel="next"` },
+        });
+      },
+    });
+
+    const items = await assignmentItems(fetcher);
+
+    const assignmentCalls = fetcher.mock.calls.filter((call) => String(call[0]).includes("/assignments?"));
+    // PER_COURSE_PAGE_CAP is documented as 2 in canvas-plugin.ts.
+    expect(assignmentCalls).toHaveLength(2);
+    expect(items).toHaveLength(2);
+  });
+
+  it("never follows a cross-origin next link, so the token is never sent to another host", async () => {
+    const fetcher = makeFetcher([100], {
+      assignments: () =>
+        Response.json([{ id: 1, name: "Assignment 1", submission: { workflow_state: "unsubmitted" } }], {
+          headers: { Link: '<https://evil.example.com/api/v1/courses/100/assignments?page=2>; rel="next"' },
+        }),
+    });
+
+    const items = await assignmentItems(fetcher);
+
+    expect(items.map((item) => item.id)).toEqual(["assignment:1"]);
+    expect(fetcher.mock.calls.some((call) => String(call[0]).includes("evil.example.com"))).toBe(false);
+  });
+});
+
+describe("CanvasPlugin.pull — submission states", () => {
+  function withSubmission(submission: Record<string, unknown>, dueAt = "2026-08-01T00:00:00Z") {
+    return makeFetcher([100], {
+      assignments: () =>
+        Response.json([{ id: 1, name: "Assignment", due_at: dueAt, submission }]),
+    });
+  }
+
+  it("maps a missing submission", async () => {
+    const items = await assignmentItems(withSubmission({ workflow_state: "unsubmitted", missing: true, late: false }));
+    const facet = items[0]?.facets.find((f) => f.type === "submission");
+    expect(facet?.data).toEqual({ status: "missing" });
+  });
+
+  it("maps a graded submission with a grade facet built from the score", async () => {
+    const items = await assignmentItems(
+      withSubmission({ workflow_state: "graded", missing: false, late: false, score: 91.25 }),
+    );
+    const submissionFacet = items[0]?.facets.find((f) => f.type === "submission");
+    const gradeFacet = items[0]?.facets.find((f) => f.type === "grade");
+    expect(submissionFacet?.data).toEqual({ status: "graded" });
+    expect(gradeFacet).toMatchObject({
+      data: { grade: 91.25 },
+      capabilities: [{ name: "has-grade", primitive: "scalar", field: "grade" }],
+    });
+  });
+
+  it("maps a late submission", async () => {
+    const items = await assignmentItems(withSubmission({ workflow_state: "submitted", missing: false, late: true }));
+    const facet = items[0]?.facets.find((f) => f.type === "submission");
+    expect(facet?.data).toEqual({ status: "late" });
+  });
+
+  it("maps a submitted submission", async () => {
+    const items = await assignmentItems(withSubmission({ workflow_state: "submitted", missing: false, late: false }));
+    const facet = items[0]?.facets.find((f) => f.type === "submission");
+    expect(facet?.data).toEqual({ status: "submitted" });
+  });
+
+  it("maps an unsubmitted submission", async () => {
+    const items = await assignmentItems(withSubmission({ workflow_state: "unsubmitted", missing: false, late: false }));
+    const facet = items[0]?.facets.find((f) => f.type === "submission");
+    expect(facet?.data).toEqual({ status: "unsubmitted" });
+  });
+
+  it("omits the deadline facet (and falls back to created_at) when due_at is absent", async () => {
+    const fetcher = makeFetcher([100], {
+      assignments: () =>
+        Response.json([
+          {
+            id: 1,
+            name: "No due date",
+            created_at: "2026-07-01T00:00:00Z",
+            submission: { workflow_state: "unsubmitted" },
+          },
+        ]),
+    });
+
+    const items = await assignmentItems(fetcher);
+
+    expect(items[0]?.facets.some((f) => f.type === "deadline")).toBe(false);
+    expect(items[0]?.timestamp).toBe("2026-07-01T00:00:00.000Z");
+  });
+});
+
+describe("CanvasPlugin.pull — announcements", () => {
+  it("sets the announcement author's role to teacher (announcements are staff posts by nature)", async () => {
+    const fetcher = makeFetcher([100], {
+      announcements: () =>
+        Response.json([
+          { id: 1, title: "Notice", message: "<p>Hi</p>", posted_at: "2026-08-01T00:00:00Z", author: { id: 55 } },
+        ]),
+    });
+    const plugin = new CanvasPlugin({ baseUrl: BASE_URL, token: "secret", fetch: fetcher });
+
+    const items = await plugin.pull();
+
+    const authorFacet = items.find((item) => item.id === "announcement:1")?.facets.find((f) => f.type === "author");
+    expect(authorFacet?.data).toEqual({ actor: "canvas-user:55", authorRole: "teacher" });
+  });
+
+  it("strips HTML from the announcement body: drops <script> content and decodes entities", async () => {
+    const fetcher = makeFetcher([100], {
+      announcements: () =>
+        Response.json([
+          {
+            id: 1,
+            title: "Notice",
+            message:
+              '<p>Read the &amp; syllabus &lt;here&gt;.</p><script>alert("hi")</script><p>Thanks!</p>',
+            posted_at: "2026-08-01T00:00:00Z",
+            author: { id: 55 },
+          },
+        ]),
+    });
+    const plugin = new CanvasPlugin({ baseUrl: BASE_URL, token: "secret", fetch: fetcher });
+
+    const items = await plugin.pull();
+
+    const announcement = items.find((item) => item.id === "announcement:1");
+    expect(announcement?.body).toBe("Read the & syllabus <here>. Thanks!");
+    expect(announcement?.body).not.toContain("alert");
+    expect(announcement?.body).not.toContain("<script>");
+  });
+});
+
+describe("CanvasPlugin.pull — discussion topics", () => {
+  it("excludes topics flagged is_announcement from the discussion threads", async () => {
+    const fetcher = makeFetcher([100], {
+      discussions: () =>
+        Response.json([
+          { id: 1, title: "A real thread", message: "<p>hi</p>", posted_at: "2026-08-01T00:00:00Z", is_announcement: false, author: { id: 1 } },
+          { id: 2, title: "Slipped-in announcement", message: "<p>hi</p>", posted_at: "2026-08-01T00:00:00Z", is_announcement: true, author: { id: 1 } },
+        ]),
+    });
+    const plugin = new CanvasPlugin({ baseUrl: BASE_URL, token: "secret", fetch: fetcher });
+
+    const items = await plugin.pull();
+
+    expect(items.map((item) => item.id)).toContain("discussion:1");
+    expect(items.map((item) => item.id)).not.toContain("discussion:2");
+  });
+
+  it("caps discussion topics to the configured discussionLimit", async () => {
+    const fetcher = makeFetcher([100], {
+      discussions: () =>
+        Response.json([
+          { id: 1, title: "Thread 1", posted_at: "2026-08-01T00:00:00Z", is_announcement: false, author: { id: 1 } },
+          { id: 2, title: "Thread 2", posted_at: "2026-08-01T00:00:00Z", is_announcement: false, author: { id: 1 } },
+          { id: 3, title: "Thread 3", posted_at: "2026-08-01T00:00:00Z", is_announcement: false, author: { id: 1 } },
+        ]),
+    });
+    const plugin = new CanvasPlugin({ baseUrl: BASE_URL, token: "secret", fetch: fetcher, discussionLimit: 2 });
+
+    const items = await plugin.pull();
+
+    expect(items.filter((item) => item.id.startsWith("discussion:"))).toHaveLength(2);
+  });
+});
+
+describe("CanvasPlugin.pull — failure handling", () => {
   it("tolerates a 403 on one course's disabled tab without failing the whole pull", async () => {
     const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const fetcher = vi.fn<typeof fetch>(async (input) => {
-      const url = String(input);
-      if (url.includes("/api/v1/courses?")) {
-        return Response.json([
-          { id: 100, name: "Course A", course_code: "A", workflow_state: "available" },
-          { id: 200, name: "Course B", course_code: "B", workflow_state: "available" },
-        ]);
-      }
-      if (url.includes("/courses/100/assignments?")) return Response.json([]);
-      if (url.includes("/api/v1/announcements?") && url.includes("course_100")) return Response.json([]);
-      if (url.includes("/courses/100/discussion_topics?")) return Response.json([]);
-      // Course B disabled its assignments tab for students.
-      if (url.includes("/courses/200/assignments?")) return new Response("Forbidden", { status: 403 });
-      if (url.includes("/api/v1/announcements?") && url.includes("course_200")) {
-        return Response.json([
-          { id: 7002, title: "Notice", message: "<p>Hi</p>", posted_at: "2026-08-01T00:00:00Z", author: { id: 9 } },
-        ]);
-      }
-      if (url.includes("/courses/200/discussion_topics?")) {
-        return Response.json([
-          { id: 8003, title: "Thread", message: "<p>Hey</p>", posted_at: "2026-08-01T00:00:00Z", author: { id: 10 } },
-        ]);
-      }
-      throw new Error(`unexpected request: ${url}`);
+    const fetcher = makeFetcher([100, 200], {
+      // Course 200 disabled its assignments tab for students.
+      assignments: (courseId) =>
+        courseId === 200
+          ? new Response("Forbidden", { status: 403 })
+          : Response.json([]),
+      announcements: (courseId) =>
+        courseId === 200
+          ? Response.json([{ id: 7002, title: "Notice", message: "<p>Hi</p>", posted_at: "2026-08-01T00:00:00Z", author: { id: 9 } }])
+          : Response.json([]),
+      discussions: (courseId) =>
+        courseId === 200
+          ? Response.json([{ id: 8003, title: "Thread", message: "<p>Hey</p>", posted_at: "2026-08-01T00:00:00Z", author: { id: 10 } }])
+          : Response.json([]),
     });
-    const plugin = new CanvasPlugin({ baseUrl: "https://learning.example.edu", token: "secret", fetch: fetcher });
+    const plugin = new CanvasPlugin({ baseUrl: BASE_URL, token: "secret", fetch: fetcher });
 
     const items = await plugin.pull();
 
@@ -252,18 +308,17 @@ describe("CanvasPlugin.pull", () => {
       expect.arrayContaining(["course:100", "course:200", "announcement:7002", "discussion:8003"]),
     );
     expect(items.some((item) => item.id.startsWith("assignment:"))).toBe(false);
-    expect(consoleErrorSpy).toHaveBeenCalledWith(
-      expect.stringContaining('"event":"canvas_tab_disabled"'),
-    );
+    expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining('"event":"canvas_tab_disabled"'));
     expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining('"courseId":200'));
 
     consoleErrorSpy.mockRestore();
   });
 
-  it("fails the whole pull on 401 and never puts the token in the error message", async () => {
+  it("fails the whole pull on 401 and never puts the token in the error message or in any console.error output", async () => {
     const token = "super-secret-canvas-token";
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const fetcher = vi.fn<typeof fetch>(async () => new Response("Unauthorized", { status: 401 }));
-    const plugin = new CanvasPlugin({ baseUrl: "https://learning.example.edu", token, fetch: fetcher });
+    const plugin = new CanvasPlugin({ baseUrl: BASE_URL, token, fetch: fetcher });
 
     let caught: Error | null = null;
     try {
@@ -274,37 +329,20 @@ describe("CanvasPlugin.pull", () => {
 
     expect(caught?.message).toBe("Canvas authentication failed.");
     expect(caught?.message).not.toContain(token);
+    for (const call of consoleErrorSpy.mock.calls) {
+      expect(JSON.stringify(call)).not.toContain(token);
+    }
+
+    consoleErrorSpy.mockRestore();
   });
 
   it("stays within the documented subrequest budget for a 5-course student", async () => {
     const courseIds = [100, 200, 300, 400, 500];
-    const fetcher = vi.fn<typeof fetch>(async (input) => {
-      const url = String(input);
-      if (url.includes("/api/v1/courses?")) {
-        return Response.json(
-          courseIds.map((id) => ({ id, name: `Course ${id}`, course_code: `C${id}`, workflow_state: "available" })),
-        );
-      }
-      const courseMatch = /\/courses\/(\d+)\/assignments\?/.exec(url);
-      if (courseMatch) {
-        return Response.json([
-          {
-            id: Number(courseMatch[1]) * 10 + 1,
-            name: "Assignment",
-            due_at: "2026-08-01T00:00:00Z",
-            submission: { workflow_state: "unsubmitted", missing: false, late: false },
-          },
-        ]);
-      }
-      if (url.includes("/api/v1/announcements?")) {
-        return Response.json([]);
-      }
-      if (/\/courses\/(\d+)\/discussion_topics\?/.test(url)) {
-        return Response.json([]);
-      }
-      throw new Error(`unexpected request: ${url}`);
+    const fetcher = makeFetcher(courseIds, {
+      assignments: (courseId) =>
+        Response.json([{ id: courseId * 10 + 1, name: "Assignment", submission: { workflow_state: "unsubmitted" } }]),
     });
-    const plugin = new CanvasPlugin({ baseUrl: "https://learning.example.edu", token: "secret", fetch: fetcher });
+    const plugin = new CanvasPlugin({ baseUrl: BASE_URL, token: "secret", fetch: fetcher });
 
     await plugin.pull();
 
@@ -313,5 +351,6 @@ describe("CanvasPlugin.pull", () => {
     // worst case (2 pages everywhere) for 6 courses is 38, and the Workers
     // free-tier ceiling is 50 subrequests/invocation.
     expect(fetcher.mock.calls).toHaveLength(16);
+    expect(fetcher.mock.calls.length).toBeLessThanOrEqual(38);
   });
 });
