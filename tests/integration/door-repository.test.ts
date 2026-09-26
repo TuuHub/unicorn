@@ -27,7 +27,7 @@ afterEach(async () => {
 });
 
 async function connectClient(deps: DoorDeps): Promise<Client> {
-  const server = createDoorMcpServer(deps);
+  const server = await createDoorMcpServer(deps);
   const client = new Client({ name: "unicorn-door-integration-test", version: "0.0.0" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport);
