@@ -2,11 +2,101 @@ import { randomBytes } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
-import { stdin, stdout } from "node:process";
+import { env as processEnv, stdin, stdout } from "node:process";
 
 // ADR-0027: one linear installer, shared by humans and coding agents. Each step is a
 // child process with inherited stdio, so Wrangler's own browser OAuth and prompts
 // pass through untouched. Idempotent where it can be; loud where it can't.
+
+// ADR-0038 sources this installer onboards. Ed/Moodle/Canvas ask for a credential at
+// the terminal (or take it from an env var, for a non-interactive agent run) and
+// `wrangler secret put` it; Gmail is Google OAuth, finished from /settings after deploy.
+export const KNOWN_SOURCES = ["ed", "moodle", "canvas", "gmail"];
+
+// Pure: comma/whitespace-separated source list -> a deduped, validated array, in
+// KNOWN_SOURCES order. Throws with every invalid entry named at once, not just the
+// first, since an agent composing this from a user's message benefits more from the
+// full picture than from fixing one typo at a time.
+export function parseSourceList(raw) {
+  const requested = [...new Set(raw.split(/[,\s]+/).map((entry) => entry.trim().toLowerCase()).filter(Boolean))];
+  const invalid = requested.filter((source) => !KNOWN_SOURCES.includes(source));
+  if (invalid.length > 0) {
+    throw new Error(`Unknown source(s): ${invalid.join(", ")}. Known sources: ${KNOWN_SOURCES.join(", ")}.`);
+  }
+  return KNOWN_SOURCES.filter((source) => requested.includes(source));
+}
+
+function truthy(value) {
+  return value !== undefined && /^(1|true|yes|y)$/i.test(value.trim());
+}
+
+// Pure: argv (e.g. process.argv.slice(2)) + an env map -> the installer's options. A
+// flag always wins over its env-var fallback, so a script invocation can override an
+// agent's ambient environment. Unrecognized flags are ignored rather than rejected —
+// this installer is meant to tolerate being invoked alongside other tools' flags.
+export function parseArgs(argv, env = {}) {
+  const options = {
+    sources: null,
+    yes: truthy(env.SETUP_YES),
+    workerUrl: env.SETUP_WORKER_URL?.trim() || null,
+    timezone: env.SETUP_TIMEZONE?.trim() || null,
+  };
+  if (env.SETUP_SOURCES?.trim()) {
+    options.sources = parseSourceList(env.SETUP_SOURCES);
+  }
+
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    const [flag, inlineValue] = arg.startsWith("--") ? splitFlag(arg) : [null, null];
+    const takeValue = () => inlineValue ?? argv[++index];
+
+    if (flag === "sources") {
+      options.sources = parseSourceList(takeValue() ?? "");
+    } else if (flag === "yes" || arg === "-y") {
+      options.yes = true;
+    } else if (flag === "worker-url") {
+      options.workerUrl = takeValue()?.trim() || null;
+    } else if (flag === "timezone") {
+      options.timezone = takeValue()?.trim() || null;
+    }
+  }
+  return options;
+}
+
+function splitFlag(arg) {
+  const withoutDashes = arg.slice(2);
+  const equals = withoutDashes.indexOf("=");
+  return equals === -1 ? [withoutDashes, null] : [withoutDashes.slice(0, equals), withoutDashes.slice(equals + 1)];
+}
+
+// Pure: the IANA zone to default to, honoring an explicit override first.
+export function resolveTimezone(explicit) {
+  if (explicit) {
+    return explicit;
+  }
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone;
+  } catch {
+    return "UTC";
+  }
+}
+
+// One secret (or a small ordered group of them, like Canvas's base URL + token) a
+// source needs. `envVar` doubles as both the non-interactive source and the
+// `wrangler secret put` name — every one of these is already a live PLUGIN_SECRET_*/
+// operator-secret name env-precedence in src/sources.ts checks first.
+const SOURCE_SECRETS = {
+  ed: [{ envVar: "ED_API_TOKEN", prompt: "Paste the Ed API token" }],
+  canvas: [
+    { envVar: "CANVAS_BASE_URL", prompt: "Canvas base URL (e.g. https://school.instructure.com)" },
+    { envVar: "PLUGIN_SECRET_CANVAS_TOKEN", prompt: "Paste the Canvas personal access token" },
+  ],
+  gmail: [
+    { envVar: "PLUGIN_SECRET_GOOGLE_CLIENT_ID", prompt: "Paste the Google OAuth client id" },
+    { envVar: "PLUGIN_SECRET_GOOGLE_CLIENT_SECRET", prompt: "Paste the Google OAuth client secret" },
+  ],
+  // moodle is handled separately below (npm run moodle:push), not a pasted secret.
+};
 
 function wrangler(args, options = {}) {
   return run("npx", ["wrangler", ...args], options);
@@ -20,15 +110,7 @@ function run(command, args, options = {}) {
   return result;
 }
 
-function capture(command, args) {
-  const result = spawnSync(command, args, { encoding: "utf8" });
-  if (result.status !== 0) {
-    fail(result.stderr || `\`${command} ${args.join(" ")}\` failed.`);
-  }
-  return result.stdout;
-}
-
-// Like capture(), but returns { stdout, stderr, ok } instead of failing — for steps
+// Returns { stdout, stderr, ok } instead of failing — for steps
 // that have a meaningful "already exists" path.
 function tryCapture(command, args) {
   const result = spawnSync(command, args, { encoding: "utf8" });
@@ -58,7 +140,81 @@ function putSecret(name, value) {
   }
 }
 
+// Escapes a single-quoted SQL string literal. Every value passed through here is
+// either a validated IANA timezone name or something we generated — never untrusted
+// input — but the escape is cheap and correct regardless.
+function sqlLiteral(value) {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+async function selectSources(rl, options) {
+  if (options.sources) {
+    return options.sources;
+  }
+  if (options.yes) {
+    // Non-interactive with no explicit list: configure nothing here and say so —
+    // every source can still be added later from /settings, per-source, with no
+    // redeploy (ADR-0038's whole point).
+    return [];
+  }
+  step("Which sources do you use? (leave blank to skip, and add it later from /settings)");
+  const selected = [];
+  for (const source of KNOWN_SOURCES) {
+    if (await confirm(rl, `  ${label(source)}?`)) {
+      selected.push(source);
+    }
+  }
+  return selected;
+}
+
+function label(source) {
+  return { ed: "Ed Discussion", moodle: "Moodle", canvas: "Canvas", gmail: "Gmail" }[source];
+}
+
+// Configures one non-Moodle source: for each secret it needs, prefer an env var
+// already set (the non-interactive/agent path) and fall back to an interactive
+// prompt; with neither, just tell the operator where to paste it later.
+async function configureSource(rl, source, options) {
+  const secrets = SOURCE_SECRETS[source];
+  if (!secrets) {
+    return;
+  }
+  step(`Configuring ${label(source)}`);
+  const values = {};
+  for (const { envVar, prompt } of secrets) {
+    const fromEnv = processEnv[envVar]?.trim();
+    if (fromEnv) {
+      values[envVar] = fromEnv;
+      continue;
+    }
+    if (options.yes) {
+      stdout.write(`  ${envVar} not set — skipping; paste it into /settings after deploy instead.\n`);
+      return;
+    }
+    values[envVar] = (await rl.question(`  ${prompt}: `)).trim();
+  }
+  if (Object.values(values).every((value) => value)) {
+    for (const [envVar, value] of Object.entries(values)) {
+      putSecret(envVar, value);
+    }
+  } else {
+    stdout.write("  Skipped — you can paste this into /settings after deploy instead.\n");
+  }
+}
+
+async function configureMoodle(rl, options) {
+  step("Configuring Moodle");
+  if (options.yes) {
+    stdout.write("  Run `npm run moodle:push` yourself once deployed (it opens a browser Okta login).\n");
+    return;
+  }
+  if (await confirm(rl, "  Push a Moodle session from your local Okta login now?")) {
+    run("npm", ["run", "moodle:push"], { allowFailure: true });
+  }
+}
+
 async function main() {
+  const options = parseArgs(process.argv.slice(2), processEnv);
   const rl = createInterface({ input: stdin, output: stdout });
 
   step("Checking prerequisites");
@@ -90,52 +246,41 @@ async function main() {
   step("Applying migrations");
   wrangler(["d1", "migrations", "apply", "unicorn", "--remote"]);
 
+  const timezone = resolveTimezone(options.timezone);
+  step(`Setting your default timezone (${timezone})`);
+  // json_set merges into whatever's already in the 'app' settings row (or creates it)
+  // without clobbering retentionDays/gmailDomains/etc. that a re-run might already have.
+  wrangler([
+    "d1",
+    "execute",
+    "unicorn",
+    "--remote",
+    "--command",
+    `INSERT INTO settings (key, value_json, updated_at) VALUES ('app', json_object('timezone', ${sqlLiteral(timezone)}), datetime('now')) ON CONFLICT(key) DO UPDATE SET value_json = json_set(value_json, '$.timezone', ${sqlLiteral(timezone)}), updated_at = excluded.updated_at`,
+  ]);
+
   step("Generating and storing operator secrets");
   const adminToken = newToken();
+  const mcpToken = newToken();
   putSecret("ADMIN_TOKEN", adminToken);
-  putSecret("MCP_TOKEN", newToken());
+  putSecret("MCP_TOKEN", mcpToken);
 
-  if (await confirm(rl, "Configure the Pi resident agent with an OpenAI-compatible API key?")) {
-    const value = (await rl.question("Paste the AI API key: ")).trim();
-    if (value) {
-      putSecret("AI_API_KEY", value);
-      step("Enabling the resident agent job");
-      wrangler([
-        "d1",
-        "execute",
-        "unicorn",
-        "--remote",
-        "--command",
-        "UPDATE agent_jobs SET enabled = 1, updated_at = datetime('now') WHERE id = 'resident-agent'",
-      ]);
+  const sources = await selectSources(rl, options);
+  for (const source of sources) {
+    if (source === "moodle") {
+      await configureMoodle(rl, options);
+    } else {
+      await configureSource(rl, source, options);
     }
   }
-
-  if (await confirm(rl, "Set an Ed Discussion API token now?")) {
-    const value = (await rl.question("Paste the Ed API token: ")).trim();
-    if (value) {
-      putSecret("ED_API_TOKEN", value);
-    }
-  }
-
-  if (await confirm(rl, "Set Google OAuth client credentials now (for Gmail via /settings)?")) {
-    const clientId = (await rl.question("Paste the Google OAuth client id: ")).trim();
-    const clientSecret = (await rl.question("Paste the Google OAuth client secret: ")).trim();
-    if (clientId && clientSecret) {
-      putSecret("PLUGIN_SECRET_GOOGLE_CLIENT_ID", clientId);
-      putSecret("PLUGIN_SECRET_GOOGLE_CLIENT_SECRET", clientSecret);
-      stdout.write("  Open /settings after deploy and click \"Connect Gmail\" — see docs/GMAIL.md.\n");
-    }
-  }
-
-  if (await confirm(rl, "Push a Moodle session from your local Okta login?")) {
-    run("npm", ["run", "moodle:push"], { allowFailure: true });
+  if (sources.length === 0) {
+    stdout.write("\n  No sources configured now — add any of them later from /settings, no redeploy needed.\n");
   }
 
   step("Deploying the Worker");
   wrangler(["deploy"]);
 
-  const workerUrl = (await rl.question("\nWorker URL (e.g. https://unicorn.<subdomain>.workers.dev): ")).trim();
+  const workerUrl = (options.workerUrl ?? (options.yes ? "" : await rl.question("\nWorker URL (e.g. https://unicorn.<subdomain>.workers.dev): "))).trim();
   rl.close();
 
   if (workerUrl) {
@@ -156,9 +301,20 @@ async function main() {
     }
   }
 
-  stdout.write(
-    `\n✓ Setup complete.\n  Settings page: HTTP Basic user "unicorn", password is your ADMIN_TOKEN.\n  MCP client: connect to <worker>/mcp with the MCP_TOKEN.\n  Both tokens were generated randomly; retrieve them from the Cloudflare dashboard if needed.\n`,
-  );
+  stdout.write(`\n✓ Setup complete.\n  Settings page: HTTP Basic user "unicorn", password is your ADMIN_TOKEN.\n`);
+  if (workerUrl) {
+    const doorUrl = `${workerUrl.replace(/\/$/, "")}/mcp`;
+    stdout.write(
+      `\n  Connect your agent:\n` +
+        `    claude mcp add --transport http unicorn ${doorUrl} --header "Authorization: Bearer ${mcpToken}"\n` +
+        `  Or add unicorn as a claude.ai / ChatGPT connector at:\n` +
+        `    ${doorUrl}\n` +
+        `\n  Claude Code plugin (playbooks, /mcp/admin operator tools):\n` +
+        `    claude plugin marketplace add TuuHub/unicorn\n` +
+        `    claude plugin install unicorn@unicorn\n`,
+    );
+  }
+  stdout.write(`\n  Both tokens were generated randomly; retrieve them from the Cloudflare dashboard if needed.\n`);
 }
 
 function confirm(rl, question) {
@@ -201,4 +357,8 @@ function writeDatabaseId(databaseId) {
   writeFileSync(path, source.replace(/("database_id"\s*:\s*")[^"]*(")/, `$1${databaseId}$2`));
 }
 
-main().catch((error) => fail(error instanceof Error ? error.message : String(error)));
+// Only run the installer when this file is executed directly (`npm run setup`), not
+// when a test imports it for the pure functions above.
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch((error) => fail(error instanceof Error ? error.message : String(error)));
+}

@@ -13,19 +13,30 @@ That runs `scripts/setup.mjs`, a linear installer (ADR-0027) that:
 2. runs `wrangler login` (a browser window opens for OAuth — pass it through),
 3. creates the `unicorn` D1 database and writes the returned `database_id` back into `wrangler.jsonc`,
 4. applies migrations,
-5. generates random `ADMIN_TOKEN` and `MCP_TOKEN` secrets and stores them via `wrangler secret put`,
-6. optionally accepts an Ed API token and pushes a Moodle session (`npm run moodle:push`),
-7. deploys the Worker,
-8. starts the hourly scheduler with `POST /schedule`.
+5. sets your timezone (auto-detected, or `--timezone <iana-zone>`),
+6. generates random `ADMIN_TOKEN` and `MCP_TOKEN` secrets and stores them via `wrangler secret put`,
+7. asks which sources you use — Ed / Moodle / Canvas / Gmail (ADR-0038) — and configures
+   only those: a pasted token/URL becomes a `wrangler secret put`, Moodle instead runs
+   `npm run moodle:push`, and Gmail is finished from `/settings` after deploy (it's a
+   Google OAuth flow, not a pasted token). Skip a source here and add it later from
+   `/settings` any time — no redeploy needed,
+8. deploys the Worker,
+9. starts the hourly scheduler with `POST /schedule`, and prints the connector command
+   (Claude Code / claude.ai / ChatGPT) and the Claude Code plugin install commands.
 
 Secrets only ever enter through Wrangler; the Worker never rewrites its own secrets (ADR-0022).
 
 ## For coding agents
 
 Run `npm run setup` and let its child processes own the interactive prompts — do not try
-to script around the browser OAuth step. When the script asks for the Ed token or Moodle
-push, answer from what the user gave you; if you don't have those, decline (both are
-optional and can be added later with `wrangler secret put`).
+to script around the browser OAuth step. For a fully non-interactive run, pass `--yes`
+plus whichever of `--sources <list>`, `--worker-url <url>`, `--timezone <iana-zone>` you
+already know (or the equivalent `SETUP_YES`/`SETUP_SOURCES`/`SETUP_WORKER_URL`/
+`SETUP_TIMEZONE` env vars) — e.g. `node scripts/setup.mjs --sources ed,canvas --yes`. A
+source's secret still comes from its usual env var if you set one first (`ED_API_TOKEN`,
+`CANVAS_BASE_URL` + `PLUGIN_SECRET_CANVAS_TOKEN`, `PLUGIN_SECRET_GOOGLE_CLIENT_ID` +
+`PLUGIN_SECRET_GOOGLE_CLIENT_SECRET`); with `--yes` and no such env var, that source is
+skipped with a note to paste it into `/settings` instead of the script silently prompting.
 
 ## Upgrading an existing deployment
 
