@@ -1,17 +1,11 @@
-// Type declarations for bridge.js — see that file for behavior notes,
-// including the invented hostCapabilities.experimental.{messages,
-// updateModelContext} convention this pends on upstream spec clarity.
+// Type declarations for bridge.js — see that file for behavior notes.
 // Kept by hand (the .js is the runtime source of truth, inlined verbatim into
 // widget HTML by scripts/build-widgets.mjs); update both together.
 
-export interface HostCapabilitiesExperimental {
-  messages?: boolean;
-  updateModelContext?: boolean;
-  [key: string]: unknown;
-}
-
+// The subset of the MCP Apps HostCapabilities (ui/initialize result) we read.
 export interface HostCapabilities {
-  experimental?: HostCapabilitiesExperimental;
+  message?: object;
+  updateModelContext?: object;
   [key: string]: unknown;
 }
 

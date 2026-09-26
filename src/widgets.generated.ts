@@ -451,26 +451,23 @@ input[type="checkbox"] {
 // \`window.openai.sendFollowUpMessage\` when present and falls back to
 // \`ui/message\` otherwise.
 //
-// Capability gating for ui/message and ui/update-model-context: the spec (as
-// read above) defines a HostCapabilities shape (experimental, openLinks,
-// serverTools, serverResources, logging, sandbox) but no dedicated flag for
-// either method yet — this is a genuinely open corner of an evolving
-// extension. Until upstream defines one, we read our own convention off
-// \`hostCapabilities.experimental.messages\` / \`.updateModelContext\`: additive,
-// forward-compatible, and false (hidden button, not a dead one) for any host
-// that has never heard of it. detectCapabilities() is the one place that
-// decision lives, so it degrades per declared capability, never per brand.
+// Capability gating: the view checks \`hostCapabilities.message\` before sending
+// ui/message and \`hostCapabilities.updateModelContext\` before sending
+// ui/update-model-context (both returned in the ui/initialize result, spec
+// "Capability Discovery"). ChatGPT's \`window.openai.sendFollowUpMessage\` also
+// counts as message support. A host that declares neither gets hidden
+// buttons, never dead ones — degrade per declared capability, never per brand.
 //
 // No host present (opened as a plain file, or under test): renders from
 // window.__UNICORN_PREVIEW__ instead. That is the only fallback; there is no
 // network call anywhere in this file.
 
 function detectCapabilities(hostCapabilities, openaiGlobal) {
-  const experimental = (hostCapabilities && hostCapabilities.experimental) || {};
+  const caps = hostCapabilities || {};
   const hasFollowUp = !!(openaiGlobal && typeof openaiGlobal.sendFollowUpMessage === "function");
   return {
-    message: hasFollowUp || experimental.messages === true,
-    updateModelContext: experimental.updateModelContext === true,
+    message: hasFollowUp || !!caps.message,
+    updateModelContext: !!caps.updateModelContext,
   };
 }
 
@@ -1596,26 +1593,23 @@ input[type="checkbox"] {
 // \`window.openai.sendFollowUpMessage\` when present and falls back to
 // \`ui/message\` otherwise.
 //
-// Capability gating for ui/message and ui/update-model-context: the spec (as
-// read above) defines a HostCapabilities shape (experimental, openLinks,
-// serverTools, serverResources, logging, sandbox) but no dedicated flag for
-// either method yet — this is a genuinely open corner of an evolving
-// extension. Until upstream defines one, we read our own convention off
-// \`hostCapabilities.experimental.messages\` / \`.updateModelContext\`: additive,
-// forward-compatible, and false (hidden button, not a dead one) for any host
-// that has never heard of it. detectCapabilities() is the one place that
-// decision lives, so it degrades per declared capability, never per brand.
+// Capability gating: the view checks \`hostCapabilities.message\` before sending
+// ui/message and \`hostCapabilities.updateModelContext\` before sending
+// ui/update-model-context (both returned in the ui/initialize result, spec
+// "Capability Discovery"). ChatGPT's \`window.openai.sendFollowUpMessage\` also
+// counts as message support. A host that declares neither gets hidden
+// buttons, never dead ones — degrade per declared capability, never per brand.
 //
 // No host present (opened as a plain file, or under test): renders from
 // window.__UNICORN_PREVIEW__ instead. That is the only fallback; there is no
 // network call anywhere in this file.
 
 function detectCapabilities(hostCapabilities, openaiGlobal) {
-  const experimental = (hostCapabilities && hostCapabilities.experimental) || {};
+  const caps = hostCapabilities || {};
   const hasFollowUp = !!(openaiGlobal && typeof openaiGlobal.sendFollowUpMessage === "function");
   return {
-    message: hasFollowUp || experimental.messages === true,
-    updateModelContext: experimental.updateModelContext === true,
+    message: hasFollowUp || !!caps.message,
+    updateModelContext: !!caps.updateModelContext,
   };
 }
 
@@ -2829,26 +2823,23 @@ input[type="checkbox"] {
 // \`window.openai.sendFollowUpMessage\` when present and falls back to
 // \`ui/message\` otherwise.
 //
-// Capability gating for ui/message and ui/update-model-context: the spec (as
-// read above) defines a HostCapabilities shape (experimental, openLinks,
-// serverTools, serverResources, logging, sandbox) but no dedicated flag for
-// either method yet — this is a genuinely open corner of an evolving
-// extension. Until upstream defines one, we read our own convention off
-// \`hostCapabilities.experimental.messages\` / \`.updateModelContext\`: additive,
-// forward-compatible, and false (hidden button, not a dead one) for any host
-// that has never heard of it. detectCapabilities() is the one place that
-// decision lives, so it degrades per declared capability, never per brand.
+// Capability gating: the view checks \`hostCapabilities.message\` before sending
+// ui/message and \`hostCapabilities.updateModelContext\` before sending
+// ui/update-model-context (both returned in the ui/initialize result, spec
+// "Capability Discovery"). ChatGPT's \`window.openai.sendFollowUpMessage\` also
+// counts as message support. A host that declares neither gets hidden
+// buttons, never dead ones — degrade per declared capability, never per brand.
 //
 // No host present (opened as a plain file, or under test): renders from
 // window.__UNICORN_PREVIEW__ instead. That is the only fallback; there is no
 // network call anywhere in this file.
 
 function detectCapabilities(hostCapabilities, openaiGlobal) {
-  const experimental = (hostCapabilities && hostCapabilities.experimental) || {};
+  const caps = hostCapabilities || {};
   const hasFollowUp = !!(openaiGlobal && typeof openaiGlobal.sendFollowUpMessage === "function");
   return {
-    message: hasFollowUp || experimental.messages === true,
-    updateModelContext: experimental.updateModelContext === true,
+    message: hasFollowUp || !!caps.message,
+    updateModelContext: !!caps.updateModelContext,
   };
 }
 
@@ -4015,26 +4006,23 @@ input[type="checkbox"] {
 // \`window.openai.sendFollowUpMessage\` when present and falls back to
 // \`ui/message\` otherwise.
 //
-// Capability gating for ui/message and ui/update-model-context: the spec (as
-// read above) defines a HostCapabilities shape (experimental, openLinks,
-// serverTools, serverResources, logging, sandbox) but no dedicated flag for
-// either method yet — this is a genuinely open corner of an evolving
-// extension. Until upstream defines one, we read our own convention off
-// \`hostCapabilities.experimental.messages\` / \`.updateModelContext\`: additive,
-// forward-compatible, and false (hidden button, not a dead one) for any host
-// that has never heard of it. detectCapabilities() is the one place that
-// decision lives, so it degrades per declared capability, never per brand.
+// Capability gating: the view checks \`hostCapabilities.message\` before sending
+// ui/message and \`hostCapabilities.updateModelContext\` before sending
+// ui/update-model-context (both returned in the ui/initialize result, spec
+// "Capability Discovery"). ChatGPT's \`window.openai.sendFollowUpMessage\` also
+// counts as message support. A host that declares neither gets hidden
+// buttons, never dead ones — degrade per declared capability, never per brand.
 //
 // No host present (opened as a plain file, or under test): renders from
 // window.__UNICORN_PREVIEW__ instead. That is the only fallback; there is no
 // network call anywhere in this file.
 
 function detectCapabilities(hostCapabilities, openaiGlobal) {
-  const experimental = (hostCapabilities && hostCapabilities.experimental) || {};
+  const caps = hostCapabilities || {};
   const hasFollowUp = !!(openaiGlobal && typeof openaiGlobal.sendFollowUpMessage === "function");
   return {
-    message: hasFollowUp || experimental.messages === true,
-    updateModelContext: experimental.updateModelContext === true,
+    message: hasFollowUp || !!caps.message,
+    updateModelContext: !!caps.updateModelContext,
   };
 }
 
@@ -5168,26 +5156,23 @@ input[type="checkbox"] {
 // \`window.openai.sendFollowUpMessage\` when present and falls back to
 // \`ui/message\` otherwise.
 //
-// Capability gating for ui/message and ui/update-model-context: the spec (as
-// read above) defines a HostCapabilities shape (experimental, openLinks,
-// serverTools, serverResources, logging, sandbox) but no dedicated flag for
-// either method yet — this is a genuinely open corner of an evolving
-// extension. Until upstream defines one, we read our own convention off
-// \`hostCapabilities.experimental.messages\` / \`.updateModelContext\`: additive,
-// forward-compatible, and false (hidden button, not a dead one) for any host
-// that has never heard of it. detectCapabilities() is the one place that
-// decision lives, so it degrades per declared capability, never per brand.
+// Capability gating: the view checks \`hostCapabilities.message\` before sending
+// ui/message and \`hostCapabilities.updateModelContext\` before sending
+// ui/update-model-context (both returned in the ui/initialize result, spec
+// "Capability Discovery"). ChatGPT's \`window.openai.sendFollowUpMessage\` also
+// counts as message support. A host that declares neither gets hidden
+// buttons, never dead ones — degrade per declared capability, never per brand.
 //
 // No host present (opened as a plain file, or under test): renders from
 // window.__UNICORN_PREVIEW__ instead. That is the only fallback; there is no
 // network call anywhere in this file.
 
 function detectCapabilities(hostCapabilities, openaiGlobal) {
-  const experimental = (hostCapabilities && hostCapabilities.experimental) || {};
+  const caps = hostCapabilities || {};
   const hasFollowUp = !!(openaiGlobal && typeof openaiGlobal.sendFollowUpMessage === "function");
   return {
-    message: hasFollowUp || experimental.messages === true,
-    updateModelContext: experimental.updateModelContext === true,
+    message: hasFollowUp || !!caps.message,
+    updateModelContext: !!caps.updateModelContext,
   };
 }
 
@@ -6287,26 +6272,23 @@ input[type="checkbox"] {
 // \`window.openai.sendFollowUpMessage\` when present and falls back to
 // \`ui/message\` otherwise.
 //
-// Capability gating for ui/message and ui/update-model-context: the spec (as
-// read above) defines a HostCapabilities shape (experimental, openLinks,
-// serverTools, serverResources, logging, sandbox) but no dedicated flag for
-// either method yet — this is a genuinely open corner of an evolving
-// extension. Until upstream defines one, we read our own convention off
-// \`hostCapabilities.experimental.messages\` / \`.updateModelContext\`: additive,
-// forward-compatible, and false (hidden button, not a dead one) for any host
-// that has never heard of it. detectCapabilities() is the one place that
-// decision lives, so it degrades per declared capability, never per brand.
+// Capability gating: the view checks \`hostCapabilities.message\` before sending
+// ui/message and \`hostCapabilities.updateModelContext\` before sending
+// ui/update-model-context (both returned in the ui/initialize result, spec
+// "Capability Discovery"). ChatGPT's \`window.openai.sendFollowUpMessage\` also
+// counts as message support. A host that declares neither gets hidden
+// buttons, never dead ones — degrade per declared capability, never per brand.
 //
 // No host present (opened as a plain file, or under test): renders from
 // window.__UNICORN_PREVIEW__ instead. That is the only fallback; there is no
 // network call anywhere in this file.
 
 function detectCapabilities(hostCapabilities, openaiGlobal) {
-  const experimental = (hostCapabilities && hostCapabilities.experimental) || {};
+  const caps = hostCapabilities || {};
   const hasFollowUp = !!(openaiGlobal && typeof openaiGlobal.sendFollowUpMessage === "function");
   return {
-    message: hasFollowUp || experimental.messages === true,
-    updateModelContext: experimental.updateModelContext === true,
+    message: hasFollowUp || !!caps.message,
+    updateModelContext: !!caps.updateModelContext,
   };
 }
 

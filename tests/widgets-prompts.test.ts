@@ -102,17 +102,24 @@ describe("detectCapabilities", () => {
     expect(detectCapabilities(undefined, undefined)).toEqual({ message: false, updateModelContext: false });
   });
 
-  it("reports message support when the host's own experimental flag says so", () => {
-    expect(detectCapabilities({ experimental: { messages: true } }, undefined)).toEqual({
+  it("reports message support when the host declares hostCapabilities.message", () => {
+    expect(detectCapabilities({ message: { text: {} } }, undefined)).toEqual({
       message: true,
       updateModelContext: false,
     });
   });
 
   it("reports updateModelContext support the same way", () => {
-    expect(detectCapabilities({ experimental: { updateModelContext: true } }, undefined)).toEqual({
+    expect(detectCapabilities({ updateModelContext: { text: {} } }, undefined)).toEqual({
       message: false,
       updateModelContext: true,
+    });
+  });
+
+  it("ignores look-alike flags under experimental", () => {
+    expect(detectCapabilities({ experimental: { messages: {}, updateModelContext: {} } }, undefined)).toEqual({
+      message: false,
+      updateModelContext: false,
     });
   });
 
