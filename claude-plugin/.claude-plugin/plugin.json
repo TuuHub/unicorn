@@ -1,0 +1,28 @@
+{
+  "name": "unicorn",
+  "displayName": "unicorn",
+  "version": "0.1.0",
+  "description": "The memory layer of your own campus AI agent: door MCP tools, the four playbooks as skills, and a SessionStart hook that pulls unread briefs.",
+  "author": {
+    "name": "bunizao"
+  },
+  "homepage": "https://github.com/TuuHub/unicorn",
+  "repository": "https://github.com/TuuHub/unicorn",
+  "license": "Apache-2.0",
+  "keywords": ["mcp", "campus", "moodle", "ed-discussion", "canvas"],
+  "userConfig": {
+    "url": {
+      "type": "string",
+      "title": "Worker URL",
+      "description": "Your self-deployed unicorn Worker's base URL, e.g. https://unicorn.<you>.workers.dev (no trailing slash, no /mcp).",
+      "required": true
+    },
+    "token": {
+      "type": "string",
+      "title": "MCP token",
+      "description": "The MCP_TOKEN bearer secret your unicorn Worker was deployed with.",
+      "required": true,
+      "sensitive": true
+    }
+  }
+}
