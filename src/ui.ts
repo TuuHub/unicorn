@@ -79,8 +79,11 @@ export function htmlResponse(body: string, status = 200): Response {
     status,
     headers: {
       "content-type": "text/html; charset=utf-8",
+      // script-src is inline-only, no external hosts: /settings' progressive
+      // enhancement (copy buttons, timezone auto-detect) is the only script on
+      // any page, and CSS-var theming needs style-src unsafe-inline too.
       "content-security-policy":
-        "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+        "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
       // "same-origin", not "no-referrer": since Chrome 85 the Origin header on
       // same-origin form POSTs honors the referrer policy, and "no-referrer"
       // serializes it to "null" — which would make the /settings CSRF origin

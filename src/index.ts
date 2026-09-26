@@ -8,8 +8,9 @@ import { MoodleProbeError, probeMoodle } from "./moodle-probe";
 import { D1OAuthTokenStore, handleCallback, OAuthError, startAuthorization, type OAuthEnv } from "./oauth";
 import { D1ManifestStore } from "./plugins/declarative/store";
 import gmailPreset from "./plugins/presets/gmail.json";
-import { runCycle, Scheduler, type Env } from "./runtime/cycle";
-import { constantTimeEqual, D1SettingsRepository, handleSettings, isBasicAuthorized } from "./settings";
+import { runCycle, Scheduler, type CycleResult, type Env } from "./runtime/cycle";
+import { constantTimeEqual, D1SettingsRepository, handleSettings, isBasicAuthorized, type LastCycleInfo } from "./settings";
+import { D1SourceCredentialStore, itemCountsByPlugin } from "./sources";
 
 export { Scheduler };
 
@@ -28,6 +29,26 @@ async function operationalStatus(env: Env): Promise<{ schedulerRunning: boolean 
     return { schedulerRunning: body.scheduled === true };
   } catch {
     return { schedulerRunning: false };
+  }
+}
+
+// Reads the compact cycle summary runtime/cycle.ts's recordCycle() writes, for
+// /settings' Deployment health card and per-source last sync/error. Best-effort:
+// a missing or unparseable row (first run, or a shape from before this feature)
+// just means "never run" rather than a 500.
+async function loadLastCycle(db: D1Database): Promise<LastCycleInfo> {
+  try {
+    const row = await db.prepare("SELECT value_json FROM settings WHERE key = 'last_cycle'").first<{ value_json: string }>();
+    if (!row) {
+      return { at: null, byPlugin: {} };
+    }
+    const cycle = JSON.parse(row.value_json) as CycleResult;
+    const byPlugin = Object.fromEntries(
+      (cycle.sources ?? []).map((source) => [source.plugin, { lastSyncAt: source.lastSyncAt, lastError: source.lastError }]),
+    );
+    return { at: cycle.at ?? null, byPlugin };
+  } catch {
+    return { at: null, byPlugin: {} };
   }
 }
 
@@ -121,18 +142,26 @@ export default {
     }
     // --- Gmail/Google OAuth (ADR-0033): end ---
 
-    if (url.pathname === "/settings") {
+    if (url.pathname === "/settings" || url.pathname.startsWith("/settings/")) {
       return handleSettings(request, {
         adminToken: env.ADMIN_TOKEN,
         repository: new D1SettingsRepository(env.DB),
+        sourceEnv: env,
+        credentials: new D1SourceCredentialStore(env.DB, env.ADMIN_TOKEN),
+        lastCycle: await loadLastCycle(env.DB),
+        itemCounts: await itemCountsByPlugin(env.DB),
+        mcpToken: env.MCP_TOKEN,
         connections: {
-          moodle: Boolean(env.MOODLE_SESSION),
-          ed: Boolean(env.ED_API_TOKEN),
           mcp: Boolean(env.MCP_TOKEN),
           google: Boolean((env as unknown as OAuthEnv).PLUGIN_SECRET_GOOGLE_CLIENT_ID && (env as unknown as OAuthEnv).PLUGIN_SECRET_GOOGLE_CLIENT_SECRET),
           gmailConnected: await new D1OAuthTokenStore(env.DB).has("gmail"),
         },
         status: await operationalStatus(env),
+        runSync: async () => {
+          const cycle = await runCycle(env, true);
+          const failed = cycle.sources.find((source) => source.lastError);
+          return failed ? { ok: false, error: `${failed.plugin}: ${failed.lastError}` } : { ok: true };
+        },
       });
     }
 
