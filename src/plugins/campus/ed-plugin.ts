@@ -3,9 +3,19 @@ import type { Facet, ItemInput } from "../../kernel/types";
 import type { Plugin } from "../plugin";
 import { asArray, asBoolean, asNumber, asRecord, asString, toJson } from "../source-values";
 
+// Ed's web app is region-scoped by URL path (edstem.org/us/..., /au/..., /eu/...);
+// verified against edstem-archiver's course URLs. The JSON API, by contrast, is
+// not region-split the same way: edstem.org/api/, us.edstem.org/api/ and
+// eu.edstem.org/api/ all answer (401 without a token) but au.edstem.org has no
+// API host of its own and redirects to the marketing site — so `region` only
+// changes the course/thread web URLs below, never `apiBaseUrl`'s default.
+export type EdRegion = "us" | "au" | "eu";
+
 export interface EdPluginOptions {
   token: string;
   apiBaseUrl?: string;
+  /** Web-app region for course/thread URLs (edstem.org/<region>/...). Default "us". */
+  region?: EdRegion;
   fetch?: typeof fetch;
   now?: () => Date;
   threadLimit?: number;
@@ -15,6 +25,7 @@ export class EdPlugin implements Plugin {
   readonly id = "campus-ed";
   private readonly token: string;
   private readonly apiBaseUrl: string;
+  private readonly region: EdRegion;
   private readonly fetcher: typeof fetch;
   private readonly now: () => Date;
   private readonly threadLimit: number;
@@ -22,6 +33,7 @@ export class EdPlugin implements Plugin {
   constructor(options: EdPluginOptions) {
     this.token = options.token;
     this.apiBaseUrl = ensureTrailingSlash(options.apiBaseUrl ?? "https://edstem.org/api/");
+    this.region = options.region ?? "us";
     if (options.fetch) {
       const injectedFetch = options.fetch;
       this.fetcher = (input, init) => injectedFetch(input, init);
@@ -85,7 +97,7 @@ export class EdPlugin implements Plugin {
       kind: "course",
       title: asString(course.name) || asString(course.code) || `Ed course ${id}`,
       timestamp: /^\d{4}$/.test(year) ? `${year}-01-01T00:00:00.000Z` : "1970-01-01T00:00:00.000Z",
-      url: `https://edstem.org/us/courses/${id}/discussion/`,
+      url: `https://edstem.org/${this.region}/courses/${id}/discussion/`,
       raw: toJson(course),
       facets: [
         {
@@ -173,7 +185,7 @@ export class EdPlugin implements Plugin {
       kind: "thread",
       title: asString(thread.title) || `Ed thread ${number || id}`,
       timestamp: new Date(createdAt).toISOString(),
-      url: `https://edstem.org/us/courses/${courseId}/discussion/${number}`,
+      url: `https://edstem.org/${this.region}/courses/${courseId}/discussion/${number}`,
       ...(body ? { body } : {}),
       raw: toJson(thread),
       facets,
