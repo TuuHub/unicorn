@@ -83,7 +83,9 @@ CREATE TRIGGER items_fts_delete AFTER DELETE ON items BEGIN
   INSERT INTO items_fts(items_fts, rowid, title, body) VALUES ('delete', old.rowid, old.title, old.body);
 END;
 
-CREATE TRIGGER items_fts_update AFTER UPDATE ON items BEGIN
+-- Only title/body feed the index; labelling and sync bookkeeping update items
+-- every cycle and must not churn FTS.
+CREATE TRIGGER items_fts_update AFTER UPDATE OF title, body ON items BEGIN
   INSERT INTO items_fts(items_fts, rowid, title, body) VALUES ('delete', old.rowid, old.title, old.body);
   INSERT INTO items_fts(rowid, title, body) VALUES (new.rowid, new.title, new.body);
 END;

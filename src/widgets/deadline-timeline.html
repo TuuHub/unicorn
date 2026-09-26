@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Deadlines</title>
+    <style>
+      /* UNICORN:THEME */
+    </style>
+    <style>
+      .timeline-header {
+        margin-bottom: var(--u-space-4);
+      }
+      .day-group {
+        display: flex;
+        gap: var(--u-space-3);
+        margin-bottom: var(--u-space-4);
+      }
+      .day-rail {
+        flex: none;
+        width: 10px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+      }
+      .day-rail .u-dot {
+        margin-top: 4px;
+      }
+      .day-rail .rail-line {
+        flex: 1;
+        width: 1px;
+        background: var(--u-border);
+        margin-top: var(--u-space-2);
+      }
+      .day-group:last-of-type .day-rail .rail-line {
+        display: none;
+      }
+      .day-content {
+        flex: 1;
+        min-width: 0;
+      }
+      .day-content h3 {
+        margin: 0 0 var(--u-space-2);
+      }
+      .deadline-item {
+        padding: var(--u-space-2) 0;
+        border-top: 1px solid var(--u-border);
+      }
+      .deadline-item:first-of-type {
+        border-top: none;
+        padding-top: 0;
+      }
+      .no-date-section {
+        margin-top: var(--u-space-2);
+      }
+      .no-date-section h3 {
+        color: var(--u-text-muted);
+        font-size: 12.5px;
+        font-weight: 600;
+        margin: 0 0 var(--u-space-2);
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+
+    <script>
+      /* UNICORN:SHARED */
+    </script>
+    <script>
+      (function () {
+        const { bridge } = window.Unicorn;
+        const { escapeHtml: esc } = window.Unicorn.markdown;
+        const { formatDateTime, groupByDay } = window.Unicorn.format;
+        const { planAroundPrompt } = window.Unicorn.prompts;
+
+        const root = document.getElementById("root");
+        let data = null;
+
+        function stateChip(state) {
+          if (!state) return "";
+          const lower = state.toLowerCase();
+          let cls = "u-chip";
+          if (lower.includes("overdue") || lower.includes("missing")) cls += " u-chip-danger";
+          else if (lower.includes("submit") && !lower.includes("not")) cls += " u-chip-ok";
+          else if (lower.includes("not")) cls += " u-chip-warn";
+          return `<span class="${cls}">${esc(state)}</span>`;
+        }
+
+        function itemRow(item) {
+          const time = formatDateTime(item.dueAt, undefined, { hour: "2-digit", minute: "2-digit" });
+          return `
+            <div class="deadline-item">
+              <div class="u-between">
+                <span class="item-title-line">${esc(item.title)}</span>
+                <span class="u-muted u-num" style="white-space:nowrap;">${esc(time || "")}</span>
+              </div>
+              <div class="u-between" style="margin-top:4px;">
+                <div class="u-wrap">
+                  ${item.course ? `<span class="u-chip">${esc(item.course)}</span>` : ""}
+                  ${stateChip(item.state)}
+                </div>
+                ${
+                  item.dueAt && bridge.capabilities.message
+                    ? `<button type="button" class="u-quiet plan-around" data-source="${esc(item.source)}" data-item-id="${esc(item.itemId)}">Plan around this</button>`
+                    : ""
+                }
+              </div>
+            </div>
+          `;
+        }
+
+        function bindPlanActions() {
+          root.querySelectorAll(".plan-around").forEach((button) => {
+            const item = data.items.find(
+              (candidate) => candidate.source === button.dataset.source && candidate.itemId === button.dataset.itemId,
+            );
+            if (!item) return;
+            button.addEventListener("click", () => bridge.sendMessage(planAroundPrompt(item)).catch(() => {}));
+          });
+        }
+
+        function groupHtml(group) {
+          const dotClass = group.overdue ? "u-danger" : "u-off";
+          return `
+            <div class="day-group">
+              <div class="day-rail"><span class="u-dot ${dotClass}"></span><div class="rail-line"></div></div>
+              <div class="day-content">
+                <h3 class="${group.overdue ? "u-danger" : ""}">${esc(group.label)}</h3>
+                ${group.items.map(itemRow).join("")}
+              </div>
+            </div>
+          `;
+        }
+
+        function render() {
+          if (!data || data.items.length === 0) {
+            root.innerHTML = `
+              <div class="u-empty">
+                <div class="u-empty-title">Nothing coming up</div>
+                <div>You are ahead of every deadline.</div>
+              </div>
+            `;
+            return;
+          }
+
+          const withDue = data.items.filter((item) => item.dueAt);
+          const withoutDue = data.items.filter((item) => !item.dueAt);
+          const groups = groupByDay(withDue, new Date());
+
+          const groupsHtml = groups.map(groupHtml).join("") || "";
+          const noDateHtml =
+            withoutDue.length > 0
+              ? `
+                <div class="no-date-section">
+                  <h3>No due date</h3>
+                  ${withoutDue.map(itemRow).join("")}
+                </div>
+              `
+              : "";
+
+          root.innerHTML = `
+            <div class="timeline-header">
+              <h1>${esc(data.query ? `Deadlines for "${data.query}"` : "Upcoming deadlines")}</h1>
+            </div>
+            ${groupsHtml}
+            ${noDateHtml}
+          `;
+          bindPlanActions();
+        }
+
+        bridge.init({
+          onToolResult(structuredContent) {
+            data = structuredContent;
+            render();
+          },
+          onHostContext(context) {
+            if (context && context.theme) document.documentElement.dataset.theme = context.theme;
+          },
+        });
+        bridge.watchSize();
+      })();
+    </script>
+  </body>
+</html>

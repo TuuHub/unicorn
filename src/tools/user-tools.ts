@@ -35,12 +35,13 @@ export const RESERVED_DOOR_TOOL_NAMES = new Set([
   "course",
   "life",
   "search_items",
+  "upcoming",
   "get_plan",
   "save_plan",
   "remember",
-  "run_playbook",
   "label_items",
   "status",
+  "run_playbook",
 ]);
 
 const TOOL_NAME_PATTERN = /^[a-z][a-z0-9_]{2,39}$/;

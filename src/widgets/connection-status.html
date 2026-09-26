@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Connections</title>
+    <style>
+      /* UNICORN:THEME */
+    </style>
+    <style>
+      .status-header {
+        margin-bottom: var(--u-space-4);
+      }
+      .source-row {
+        display: flex;
+        align-items: flex-start;
+        gap: var(--u-space-2);
+        padding: var(--u-space-2) 0;
+        border-top: 1px solid var(--u-border);
+      }
+      .source-row:first-of-type {
+        border-top: none;
+        padding-top: 0;
+      }
+      .source-row .u-dot {
+        margin-top: 4px;
+      }
+      .source-info {
+        flex: 1;
+        min-width: 0;
+      }
+      .source-error {
+        margin-top: 2px;
+        font-size: 12.5px;
+      }
+      .scheduler-row {
+        margin-top: var(--u-space-4);
+        padding-top: var(--u-space-3);
+        border-top: 1px solid var(--u-border);
+        font-size: 12.5px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+
+    <script>
+      /* UNICORN:SHARED */
+    </script>
+    <script>
+      (function () {
+        const { bridge } = window.Unicorn;
+        const { escapeHtml: esc } = window.Unicorn.markdown;
+        const { formatDateTime, formatRelativeTime } = window.Unicorn.format;
+        const { fixSourcePrompt } = window.Unicorn.prompts;
+
+        const root = document.getElementById("root");
+        let data = null;
+
+        const STALE_MS = 3 * 60 * 60 * 1000;
+
+        function sourceState(source, now) {
+          if (!source.configured) return { dot: "off", label: "Not connected" };
+          if (source.lastError) return { dot: "danger", label: "Error" };
+          if (source.lastSyncAt && now.getTime() - new Date(source.lastSyncAt).getTime() > STALE_MS) {
+            return { dot: "warn", label: "Stale" };
+          }
+          return { dot: "ok", label: "Connected" };
+        }
+
+        function sourceRow(source, now, timezone) {
+          const state = sourceState(source, now);
+          const absolute = source.lastSyncAt
+            ? formatDateTime(source.lastSyncAt, timezone, { dateStyle: "medium", timeStyle: "short" })
+            : null;
+          const lastSync = source.lastSyncAt ? `Synced ${esc(formatRelativeTime(source.lastSyncAt, now))}` : "Never synced";
+          return `
+            <div class="source-row">
+              <span class="u-dot ${state.dot}" title="${esc(state.label)}"></span>
+              <div class="source-info">
+                <div class="u-between">
+                  <span class="item-title-line">${esc(source.label)}</span>
+                  <span class="u-muted u-num">${source.items} item${source.items === 1 ? "" : "s"}</span>
+                </div>
+                <div class="u-muted" ${absolute ? `title="${esc(absolute)}"` : ""}>${lastSync}</div>
+                ${source.lastError ? `<div class="source-error u-danger">${esc(source.lastError)}</div>` : ""}
+                ${
+                  source.lastError && bridge.capabilities.message
+                    ? `<button type="button" class="u-quiet fix-source" data-id="${esc(source.id)}" style="margin-top:4px;">Help me fix ${esc(source.label)}</button>`
+                    : ""
+                }
+              </div>
+            </div>
+          `;
+        }
+
+        function render() {
+          if (!data) return;
+          const now = new Date();
+          const timezone = data.timezone;
+
+          const rows = data.sources.map((source) => sourceRow(source, now, timezone)).join("");
+          const schedulerText = data.scheduler.running
+            ? `Running — last cycle ${esc(formatRelativeTime(data.scheduler.lastCycleAt, now) || "never")}`
+            : "Not running";
+
+          root.innerHTML = `
+            <div class="status-header">
+              <h1>Connections</h1>
+            </div>
+            <div class="u-card" style="padding: var(--u-space-1) var(--u-space-3);">${rows}</div>
+            <div class="scheduler-row u-between">
+              <span class="u-muted">${schedulerText}</span>
+              <span class="u-muted">${esc(timezone || "")}</span>
+            </div>
+          `;
+
+          root.querySelectorAll(".fix-source").forEach((button) => {
+            const source = data.sources.find((candidate) => candidate.id === button.dataset.id);
+            if (!source) return;
+            button.addEventListener("click", () => bridge.sendMessage(fixSourcePrompt(source)).catch(() => {}));
+          });
+        }
+
+        bridge.init({
+          onToolResult(structuredContent) {
+            data = structuredContent;
+            render();
+          },
+          onHostContext(context) {
+            if (context && context.theme) document.documentElement.dataset.theme = context.theme;
+          },
+        });
+        bridge.watchSize();
+      })();
+    </script>
+  </body>
+</html>
