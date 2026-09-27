@@ -54,8 +54,11 @@ Connectors → Advanced settings → Developer mode. Then Settings → Connector
 enter `https://<your-worker-url>/mcp` as a custom connector.
 
 ChatGPT's OAuth requirements are strict — plain bearer tokens are not accepted at all here, only
-OAuth 2.1 with DCR (or CIMD, which unicorn doesn't implement) — which is exactly what
-`/authorize` + `/register` already provide, so no extra work is needed on unicorn's side.
+OAuth 2.1 with dynamic client registration — which is exactly what `/authorize` + `/register`
+already provide, so no extra work is needed on unicorn's side. unicorn's authorization server also
+accepts Client ID Metadata Documents (CIMD) as an alternative to DCR (ADR-0043) — relevant to a
+client that registers itself that way rather than via `/register`; ChatGPT and Claude both use DCR
+today, so this mostly matters for future or custom MCP clients.
 
 Two things worth knowing before you rely on this:
 - ChatGPT's MCP client only calls **tools**, not MCP *prompts*. The door's playbooks
