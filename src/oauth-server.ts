@@ -135,6 +135,10 @@ export function createOAuthProvider<Env extends OAuthServerEnv>(
     scopesSupported: [OAUTH_SCOPE],
     accessTokenTTL: ACCESS_TOKEN_TTL_SECONDS,
     refreshTokenTTL: REFRESH_TOKEN_TTL_SECONDS,
+    // Client ID Metadata Documents (MCP 2025-11-25 authorization): a client may use an https URL
+    // as its client_id instead of registering. Needs the `global_fetch_strictly_public`
+    // compatibility flag (wrangler.jsonc) so the metadata fetch can never reach a private address.
+    clientIdMetadataDocumentEnabled: true,
     // `scopes_supported` here (not just the authorization server's `scopesSupported` above) is
     // what the 401 challenge on /mcp names and what RFC 9728 clients read as required — the
     // library does not accept an S256-downgrade knob for this, only for PKCE (`allowPlainPKCE`,

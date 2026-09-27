@@ -3,7 +3,9 @@
   "name": "unicorn",
   "main": "src/index.ts",
   "compatibility_date": "2026-07-12",
-  "compatibility_flags": ["nodejs_compat"],
+  // global_fetch_strictly_public: every outbound fetch goes to the public internet, never a
+  // private/internal address — required for OAuth CIMD and a baseline SSRF guard for manifest plugins.
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
   "workers_dev": true,
   "observability": {
     "enabled": true
