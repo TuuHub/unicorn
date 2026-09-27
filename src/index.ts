@@ -224,6 +224,15 @@ async function defaultFetch(request: Request, env: Env, context: ExecutionContex
         const failed = cycle.sources.find((source) => source.lastError);
         return failed ? { ok: false, error: `${failed.plugin}: ${failed.lastError}` } : { ok: true };
       },
+      startScheduler: async () => {
+        try {
+          const id = env.SCHEDULER.idFromName("primary");
+          const response = await env.SCHEDULER.get(id).fetch(new Request("https://scheduler/start", { method: "POST" }));
+          return response.ok ? { ok: true } : { ok: false, error: `scheduler responded ${response.status}` };
+        } catch (error) {
+          return { ok: false, error: error instanceof Error ? error.message : "start_failed" };
+        }
+      },
     });
   }
 

@@ -177,6 +177,74 @@ describe("settings", () => {
     expect(html).not.toContain("Never run");
   });
 
+  it("offers only Save on an unconfigured source card — nothing to test or disconnect yet", async () => {
+    const response = await handleSettings(
+      new Request("https://unicorn.example/settings", { headers: { authorization: basic("admin-secret") } }),
+      runtime(), // default credentialStoreStub() reports every source as status "none"
+    );
+    const html = await response.text();
+
+    expect(html).not.toContain("Test connection");
+    expect(html).not.toContain("Disconnect");
+  });
+
+  it("offers Test connection and Disconnect once a source is configured", async () => {
+    const credentials = credentialStoreStub();
+    credentials.get = vi.fn(async (id: SourceId) => (id === "ed" ? { status: "ok" as const, fields: { token: "t", region: "us" } } : { status: "none" as const }));
+    const response = await handleSettings(
+      new Request("https://unicorn.example/settings", { headers: { authorization: basic("admin-secret") } }),
+      runtime(repositoryStub(), credentials),
+    );
+    const html = await response.text();
+
+    expect(html).toContain("Test connection");
+    expect(html).toContain("Disconnect");
+  });
+
+  it("renders a backticked instruction as real <code>, not raw backticks", async () => {
+    const response = await handleSettings(
+      new Request("https://unicorn.example/settings", { headers: { authorization: basic("admin-secret") } }),
+      runtime(),
+    );
+    const html = await response.text();
+
+    expect(html).toContain("<code>npm run moodle:push</code>");
+    expect(html).not.toContain("`npm run moodle:push`");
+  });
+
+  it("shows a compact synced/item-count line per source, and the error only when one exists", async () => {
+    const withError = { ...runtime(), lastCycle: { at: null, byPlugin: { "campus-canvas": { lastSyncAt: null, lastError: "canvas_api_401" } } } };
+    const response = await handleSettings(new Request("https://unicorn.example/settings", { headers: { authorization: basic("admin-secret") } }), withError);
+    const html = await response.text();
+
+    expect(html).toContain("Never synced · 0 items");
+    expect(html).toContain('<p class="meta-error">canvas_api_401</p>');
+  });
+
+  it("offers a Start scheduler button and a smaller curl fallback when stopped, and neither when running", async () => {
+    const stopped = await handleSettings(
+      new Request("https://unicorn.example/settings", { headers: { authorization: basic("admin-secret") } }),
+      { ...runtime(), status: { schedulerRunning: false } },
+    );
+    const stoppedHtml = await stopped.text();
+    expect(stoppedHtml).toContain('action="/settings/start-scheduler"');
+    expect(stoppedHtml).toContain("Start scheduler");
+    expect(stoppedHtml).toContain("curl -X POST");
+
+    const running = await handleSettings(new Request("https://unicorn.example/settings", { headers: { authorization: basic("admin-secret") } }), runtime());
+    const runningHtml = await running.text();
+    expect(runningHtml).not.toContain("/settings/start-scheduler");
+  });
+
+  it("puts the Claude Code plugin commands first in Connect your agent, with the raw mcp add as a fallback", async () => {
+    const response = await handleSettings(new Request("https://unicorn.example/settings", { headers: { authorization: basic("admin-secret") } }), runtime());
+    const html = await response.text();
+
+    expect(html).toContain("/plugin marketplace add TuuHub/unicorn");
+    expect(html).toContain("/plugin install unicorn");
+    expect(html).toContain("claude mcp add --transport http unicorn");
+  });
+
   describe("POST /settings (maintenance)", () => {
     it("saves validated settings from the same origin with a valid csrf token", async () => {
       const repository = repositoryStub();
@@ -455,6 +523,57 @@ describe("settings", () => {
 
       expect(response.status).toBe(303);
       expect(response.headers.get("location")).toContain("syncError=");
+    });
+  });
+
+  describe("POST /settings/start-scheduler", () => {
+    it("redirects with a schedulerStarted flag on success", async () => {
+      const startScheduler = vi.fn(async () => ({ ok: true as const }));
+      const csrf = await computeCsrfToken("admin-secret");
+      const response = await handleSettings(
+        new Request("https://unicorn.example/settings/start-scheduler", {
+          method: "POST",
+          headers: { authorization: basic("admin-secret"), "content-type": "application/x-www-form-urlencoded", origin: "https://unicorn.example" },
+          body: new URLSearchParams({ csrf }),
+        }),
+        { ...runtime(), startScheduler },
+      );
+
+      expect(startScheduler).toHaveBeenCalledOnce();
+      expect(response.status).toBe(303);
+      expect(response.headers.get("location")).toContain("schedulerStarted=1");
+    });
+
+    it("redirects with a schedulerError flag on failure", async () => {
+      const startScheduler = vi.fn(async () => ({ ok: false as const, error: "scheduler responded 500" }));
+      const csrf = await computeCsrfToken("admin-secret");
+      const response = await handleSettings(
+        new Request("https://unicorn.example/settings/start-scheduler", {
+          method: "POST",
+          headers: { authorization: basic("admin-secret"), "content-type": "application/x-www-form-urlencoded", origin: "https://unicorn.example" },
+          body: new URLSearchParams({ csrf }),
+        }),
+        { ...runtime(), startScheduler },
+      );
+
+      expect(response.status).toBe(303);
+      expect(response.headers.get("location")).toContain("schedulerError=");
+    });
+
+    it("rejects a cross-origin POST with 403 before calling startScheduler", async () => {
+      const startScheduler = vi.fn(async () => ({ ok: true as const }));
+      const csrf = await computeCsrfToken("admin-secret");
+      const response = await handleSettings(
+        new Request("https://unicorn.example/settings/start-scheduler", {
+          method: "POST",
+          headers: { authorization: basic("admin-secret"), "content-type": "application/x-www-form-urlencoded", origin: "https://evil.example" },
+          body: new URLSearchParams({ csrf }),
+        }),
+        { ...runtime(), startScheduler },
+      );
+
+      expect(response.status).toBe(403);
+      expect(startScheduler).not.toHaveBeenCalled();
     });
   });
 });

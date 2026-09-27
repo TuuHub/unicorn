@@ -61,6 +61,10 @@ export interface SettingsRuntime {
   // POST /settings/sync-now: runs a forced cycle. Optional so tests that don't
   // exercise that route can omit it.
   runSync?: () => Promise<{ ok: boolean; error?: string }>;
+  // POST /settings/start-scheduler: arms the Scheduler DO's hourly alarm (proxies
+  // to its own /start, same as the curl fallback still shown below the button).
+  // Optional so tests that don't exercise that route can omit it.
+  startScheduler?: () => Promise<{ ok: boolean; error?: string }>;
   // OAuth connectors (ADR-0035): grants issued by /authorize, for the "Connected apps" card.
   // Optional so callers that predate connector support (and existing tests) don't need it.
   oauth?: { grants: GrantSummary[] };
@@ -130,6 +134,10 @@ export async function handleSettings(request: Request, runtime: SettingsRuntime)
 
   if (request.method === "POST" && path === "/settings/sync-now") {
     return handleSyncNowPost(request, runtime, url);
+  }
+
+  if (request.method === "POST" && path === "/settings/start-scheduler") {
+    return handleStartSchedulerPost(request, runtime, url);
   }
 
   const sourceMatch = /^\/settings\/sources\/([a-z]+)(\/test|\/disconnect)?$/.exec(path);
@@ -232,6 +240,15 @@ async function handleSyncNowPost(request: Request, runtime: SettingsRuntime, url
   }
   const result = await runtime.runSync?.();
   return redirectToSettings(url, result?.ok === false ? `syncError=${encodeURIComponent(result.error ?? "sync_failed")}` : "synced=1");
+}
+
+async function handleStartSchedulerPost(request: Request, runtime: SettingsRuntime, url: URL): Promise<Response> {
+  const form = await request.formData();
+  if (!(await csrfOk(request, form, runtime, url))) {
+    return new Response("Invalid request.", { status: 403 });
+  }
+  const result = await runtime.startScheduler?.();
+  return redirectToSettings(url, result?.ok === false ? `schedulerError=${encodeURIComponent(result.error ?? "start_failed")}` : "schedulerStarted=1");
 }
 
 async function handleSourceSavePost(request: Request, runtime: SettingsRuntime, url: URL, id: SourceId): Promise<Response> {
@@ -402,15 +419,26 @@ async function renderSettingsPage(settings: AppSettings, runtime: SettingsRuntim
 
   const disconnected = url.searchParams.get("disconnected");
   const syncError = url.searchParams.get("syncError");
-  const notice = flags.notice ?? (url.searchParams.has("synced") ? "Sync started — check Sources below in a moment." : disconnected ? `Disconnected ${escapeHtml(disconnected)}.` : flags.saved ? "Changes saved." : undefined);
-  const error = flags.error ?? (syncError ? `Sync failed: ${escapeHtml(syncError)}` : undefined);
+  const schedulerError = url.searchParams.get("schedulerError");
+  const notice =
+    flags.notice ??
+    (url.searchParams.has("synced")
+      ? "Sync started — check Sources below in a moment."
+      : url.searchParams.has("schedulerStarted")
+        ? "Scheduler started — syncing hourly from now on."
+        : disconnected
+          ? `Disconnected ${escapeHtml(disconnected)}.`
+          : flags.saved
+            ? "Changes saved."
+            : undefined);
+  const error = flags.error ?? (syncError ? `Sync failed: ${escapeHtml(syncError)}` : schedulerError ? `Could not start the scheduler: ${escapeHtml(schedulerError)}` : undefined);
 
   const doorUrl = new URL("/mcp", url.origin).toString();
 
   const body = `
     ${notice ? `<p class="notice" role="status">${notice}</p>` : ""}
     ${error ? `<p class="notice error" role="alert">${error}</p>` : ""}
-    ${renderHealthCard(status, lastCycle)}
+    ${renderHealthCard(status, lastCycle, csrf)}
     ${await renderSourcesSection(sourceStatuses, runtime, csrf)}
     ${renderTimezoneCard(settings, csrf)}
     ${renderGmailScopeCard(settings, csrf)}
@@ -426,12 +454,19 @@ async function renderSettingsPage(settings: AppSettings, runtime: SettingsRuntim
     heading: "Settings",
     subtitle: "Non-secret behavior for this Worker. Changes apply from the next cycle.",
     body,
+    wide: true,
   });
 }
 
-function renderHealthCard(status: SettingsRuntime["status"], lastCycle: LastCycleInfo): string {
+function renderHealthCard(status: SettingsRuntime["status"], lastCycle: LastCycleInfo, csrf: string): string {
   const schedulerNotice = !status.schedulerRunning
-    ? `<p class="notice error" role="alert">The hourly scheduler is not running — nothing will sync. Start it with <code>curl -X POST https://&lt;your-worker&gt;/schedule -H "Authorization: Bearer &lt;ADMIN_TOKEN&gt;"</code>.</p>`
+    ? `<div class="notice error" role="alert">
+        <p>The hourly scheduler is not running — nothing will sync.</p>
+        <div class="actions">
+          <form method="post" action="/settings/start-scheduler"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><button type="submit">Start scheduler</button></form>
+        </div>
+        <p class="hint">Or from the command line: <code>curl -X POST https://&lt;your-worker&gt;/schedule -H "Authorization: Bearer &lt;ADMIN_TOKEN&gt;"</code>.</p>
+      </div>`
     : "";
   return `
     ${schedulerNotice}
@@ -456,6 +491,23 @@ function renderHealthCard(status: SettingsRuntime["status"], lastCycle: LastCycl
 
 function renderTime(iso: string): string {
   return `<time datetime="${escapeHtml(iso)}">${escapeHtml(iso)}</time>`;
+}
+
+// Preset instructions are plain text (ADR-0038 data, not markup) but a couple
+// name a literal command — escape first, then turn `backticked` spans into
+// <code> so they read as commands instead of stray punctuation.
+function renderInlineCode(text: string): string {
+  return escapeHtml(text).replace(/`([^`]+)`/g, "<code>$1</code>");
+}
+
+// One compact muted line per source card instead of a three-row table: sync
+// state and item count read together, and a failure gets its own line in the
+// same red used for Disconnect, so it actually stands out.
+function renderSourceMeta(status: SourceStatus): string {
+  const synced = status.lastSyncAt ? `Synced ${renderTime(status.lastSyncAt)}` : "Never synced";
+  const items = `${status.items} item${status.items === 1 ? "" : "s"}`;
+  const errorLine = status.lastError ? `<p class="meta-error">${escapeHtml(status.lastError)}</p>` : "";
+  return `<p class="meta">${synced} · ${items}</p>${errorLine}`;
 }
 
 async function renderSourcesSection(statuses: SourceStatus[], runtime: SettingsRuntime, csrf: string): Promise<string> {
@@ -501,6 +553,15 @@ function renderCredentialSourceCard(
     })
     .join("");
 
+  // Test connection / Disconnect act on a saved credential, so an unconfigured
+  // card only offers Save — nothing to test or disconnect yet.
+  const connectedActions = status.configured
+    ? `<div class="card-actions">
+        <form method="post" action="/settings/sources/${status.id}/test"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><button class="button ghost" type="submit">Test connection</button></form>
+        <form method="post" action="/settings/sources/${status.id}/disconnect" data-confirm="Disconnect ${escapeHtml(status.label)}? Its saved credential will be deleted."><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><button class="button ghost danger" type="submit">Disconnect</button></form>
+      </div>`
+    : "";
+
   return `
     <article class="card source-card" id="source-${status.id}" aria-labelledby="source-${status.id}-title">
       <div class="card-head">
@@ -508,24 +569,17 @@ function renderCredentialSourceCard(
           <span class="dot ${status.configured ? "is-live" : "is-off"}" aria-hidden="true"></span>
           <h3 id="source-${status.id}-title">${escapeHtml(status.label)}</h3>
         </div>
-        <p class="card-sub">${escapeHtml(preset.instructions)} <a href="${escapeHtml(preset.instructionsUrl)}" target="_blank" rel="noopener">Get one</a></p>
+        <p class="card-sub">${renderInlineCode(preset.instructions)} <a class="get-one" href="${escapeHtml(preset.instructionsUrl)}" target="_blank" rel="noopener">Get one</a></p>
         ${status.needsReentry ? `<p class="notice error" role="alert">Saved credential no longer decrypts (ADMIN_TOKEN may have rotated) — re-enter it below.</p>` : ""}
       </div>
       <div class="card-body">
-        <dl class="meta">
-          <div><dt>Last sync</dt><dd>${status.lastSyncAt ? renderTime(status.lastSyncAt) : "Never"}</dd></div>
-          <div><dt>Last error</dt><dd>${status.lastError ? escapeHtml(status.lastError) : "None"}</dd></div>
-          <div><dt>Active items</dt><dd>${status.items}</dd></div>
-        </dl>
+        ${renderSourceMeta(status)}
         <form method="post" action="/settings/sources/${status.id}">
           <input type="hidden" name="csrf" value="${escapeHtml(csrf)}">
           <div class="rows">${fieldsHtml}</div>
           <div class="actions"><button type="submit">Save</button></div>
         </form>
-        <div class="card-actions">
-          <form method="post" action="/settings/sources/${status.id}/test"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><button class="button ghost" type="submit">Test connection</button></form>
-          <form method="post" action="/settings/sources/${status.id}/disconnect" data-confirm="Disconnect ${escapeHtml(status.label)}? Its saved credential will be deleted."><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><button class="button ghost danger" type="submit">Disconnect</button></form>
-        </div>
+        ${connectedActions}
       </div>
     </article>`;
 }
@@ -552,11 +606,7 @@ function renderGmailSourceCard(status: SourceStatus, runtime: SettingsRuntime): 
         <p class="card-sub">Ingests recent threads through Google's Gmail MCP server.</p>
       </div>
       <div class="card-body">
-        <dl class="meta">
-          <div><dt>Last sync</dt><dd>${status.lastSyncAt ? renderTime(status.lastSyncAt) : "Never"}</dd></div>
-          <div><dt>Last error</dt><dd>${status.lastError ? escapeHtml(status.lastError) : "None"}</dd></div>
-          <div><dt>Active items</dt><dd>${status.items}</dd></div>
-        </dl>
+        ${renderSourceMeta(status)}
         ${body}
       </div>
     </article>`;
@@ -611,13 +661,17 @@ function renderGmailScopeCard(settings: AppSettings, csrf: string): string {
 }
 
 function renderConnectAgentCard(doorUrl: string, mcpToken: string): string {
+  const pluginMarketplaceCommand = "/plugin marketplace add TuuHub/unicorn";
+  const pluginInstallCommand = "/plugin install unicorn";
   const claudeCodeCommand = `claude mcp add --transport http unicorn ${doorUrl} --header "Authorization: Bearer ${mcpToken}"`;
   return `
     <section class="card" aria-labelledby="connect-title">
       <div class="card-head"><h2 id="connect-title">Connect your agent</h2><p class="card-sub">Full setup: <a href="https://github.com/TuuHub/unicorn/blob/main/docs/CONNECTORS.md" target="_blank" rel="noopener">docs/CONNECTORS.md</a>.</p></div>
       <div class="card-body">
         <div class="rows">
-          ${renderCopyRow("Claude Code", claudeCodeCommand)}
+          ${renderCopyRow("Claude Code plugin", pluginMarketplaceCommand)}
+          ${renderCopyRow("Then install it", pluginInstallCommand)}
+          ${renderCopyRow("No plugin support? Add the door directly", claudeCodeCommand)}
           ${renderCopyRow("claude.ai connector URL", doorUrl)}
           ${renderCopyRow("ChatGPT connector URL", doorUrl)}
         </div>
@@ -663,6 +717,9 @@ function renderMaintenanceCard(settings: AppSettings, csrf: string): string {
 
 const PAGE_STYLE = `
     <style>
+      .notice p{margin:0 0 8px}
+      .notice p:last-child{margin-bottom:0}
+      .notice .actions{padding:4px 0 8px;justify-content:flex-start}
       .rail{list-style:none;margin:0;padding:0}
       .source{display:flex;align-items:center;gap:10px;padding:12px 0}
       .dot{width:8px;height:8px;border-radius:50%;flex:none}
@@ -672,14 +729,15 @@ const PAGE_STYLE = `
       .source-state{margin-left:auto;color:var(--muted);font-size:13px;font-variant-numeric:tabular-nums;text-align:right}
       .section-head{margin:32px 0 12px}
       .section-head h2{font-size:16px}
-      .source-cards{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(280px,1fr))}
+      /* min(400px,100%) — not a bare 400px — so a single mobile-width column
+         shrinks to the container instead of forcing horizontal page scroll. */
+      .source-cards{display:grid;gap:20px;grid-template-columns:repeat(auto-fit,minmax(min(400px,100%),1fr));align-items:start;margin-bottom:32px}
       .source-card{margin-bottom:0}
       .card-head-row{display:flex;align-items:center;gap:8px}
       .card-head-row h3{margin:0;font-size:15px;font-weight:600;letter-spacing:-.01em}
-      .meta{display:grid;grid-template-columns:1fr 1fr;gap:8px 16px;margin:0 0 14px;font-size:13px}
-      .meta div{display:flex;justify-content:space-between;gap:8px;border-top:1px solid var(--border);padding-top:6px}
-      .meta dt{color:var(--muted)}
-      .meta dd{margin:0;text-align:right;overflow-wrap:anywhere}
+      .card-sub .get-one{color:var(--accent);text-decoration:underline;text-underline-offset:2px;white-space:nowrap}
+      .meta{margin:0 0 14px;color:var(--muted);font-size:13px}
+      .meta-error{margin:-8px 0 14px;color:#ef4444;font-size:13px}
       .card-actions{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
       .card-actions form{margin:0}
       .field{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:14px 0}
@@ -705,13 +763,12 @@ const PAGE_STYLE = `
       .button.ghost:hover{background:var(--card)}
       .button.ghost.danger{color:#ef4444;border-color:rgba(239,68,68,.35)}
       .copy-row{align-items:center}
-      .copy-value{display:block;max-width:min(360px,60vw);overflow-x:auto;white-space:pre;padding:2px 0}
+      .copy-row .field-text{flex:1;min-width:0}
+      .copy-value{display:block;width:100%;overflow-x:auto;white-space:pre;padding:2px 0}
       @media (max-width:640px){
         .field{flex-direction:column;align-items:stretch;gap:8px}
         .field-input{width:100%}
         input[type=text],input[type=password],select{width:100%}
-        .copy-value{max-width:100%}
-        .meta{grid-template-columns:1fr}
       }
       @media (prefers-reduced-motion:reduce){.switch,.switch::after{transition:none}}
     </style>`;

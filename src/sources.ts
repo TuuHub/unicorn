@@ -70,7 +70,7 @@ export const SOURCE_PRESETS: SourcePreset[] = [
     id: "canvas",
     label: "Canvas",
     fields: [
-      { key: "baseUrl", label: "Base URL", type: "text", placeholder: "https://<school>.instructure.com" },
+      { key: "baseUrl", label: "Base URL", type: "text", placeholder: "https://school.instructure.com" },
       { key: "token", label: "Personal access token", type: "password" },
     ],
     instructions: "Create a personal access token from Account -> Settings -> New access token in Canvas.",
