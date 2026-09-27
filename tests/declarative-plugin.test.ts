@@ -604,6 +604,77 @@ describe("DeclarativePlugin.pull (fan-out)", () => {
   });
 });
 
+// A hostile or just misbehaving server can return an arbitrarily large body;
+// neither response.text() nor response.json() caps how much they'll buffer, and a
+// Worker has a hard memory ceiling shared with the rest of the invocation. These
+// build a real streamed Response — Content-Length omitted, exactly like a
+// chunked-transfer response — so the byte count is only ever known from the stream
+// itself, never trusted from a header.
+function hugeStreamedResponse(totalBytes: number, contentType: string): Response {
+  const chunk = new Uint8Array(64 * 1024).fill(65); // 64KB of 'A'
+  let sent = 0;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (sent >= totalBytes) {
+        controller.close();
+        return;
+      }
+      const size = Math.min(chunk.byteLength, totalBytes - sent);
+      controller.enqueue(chunk.subarray(0, size));
+      sent += size;
+    },
+  });
+  return new Response(body, { status: 200, headers: { "content-type": contentType } });
+}
+
+describe("DeclarativePlugin.pull (response size limit)", () => {
+  const oneRecordMapping = { id: { path: "id" }, kind: { value: "x" }, title: { path: "id" }, timestamp: { value: "2026-01-01T00:00:00.000Z" } };
+
+  it("rejects a JSON response over the size cap instead of buffering it whole", async () => {
+    const manifest: PluginManifest = {
+      version: 1,
+      id: "huge-json",
+      name: "Huge JSON",
+      format: "json",
+      url: "https://api.example.com/items",
+      mapping: oneRecordMapping,
+    };
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(hugeStreamedResponse(6 * 1024 * 1024, "application/json"));
+
+    await expect(new DeclarativePlugin(manifest, {}, fetcher).pull()).rejects.toThrow(/exceeded .* bytes/);
+  });
+
+  it("rejects an RSS response over the size cap instead of buffering it whole", async () => {
+    const manifest: PluginManifest = {
+      version: 1,
+      id: "huge-rss",
+      name: "Huge RSS",
+      format: "rss",
+      url: "https://api.example.com/feed.xml",
+      mapping: oneRecordMapping,
+    };
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(hugeStreamedResponse(6 * 1024 * 1024, "application/rss+xml"));
+
+    await expect(new DeclarativePlugin(manifest, {}, fetcher).pull()).rejects.toThrow(/exceeded .* bytes/);
+  });
+
+  it("still accepts a normal-sized response comfortably under the cap", async () => {
+    const manifest: PluginManifest = {
+      version: 1,
+      id: "small-json",
+      name: "Small JSON",
+      format: "json",
+      url: "https://api.example.com/items",
+      itemsPath: "items",
+      mapping: oneRecordMapping,
+    };
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ items: [{ id: 1 }] }));
+
+    const items = await new DeclarativePlugin(manifest, {}, fetcher).pull();
+    expect(items.map((item) => item.id)).toEqual(["1"]);
+  });
+});
+
 describe("PluginManifest schema (pagination & fan-out)", () => {
   const baseMapping = { id: { path: "id" }, kind: { value: "x" }, title: { path: "t" }, timestamp: { path: "ts" } };
 
