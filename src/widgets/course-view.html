@@ -70,7 +70,7 @@
       (function () {
         const { bridge } = window.Unicorn;
         const { escapeHtml: esc } = window.Unicorn.markdown;
-        const { formatDateTime, formatRelativeTime } = window.Unicorn.format;
+        const { formatDateTime, formatRelativeTime, sourceLabel } = window.Unicorn.format;
         const { decomposeAssignmentPrompt, askStaffOpinionPrompt } = window.Unicorn.prompts;
 
         const root = document.getElementById("root");
@@ -104,8 +104,11 @@
           return `<span class="${cls}">${esc(state)}</span>`;
         }
 
-        function itemRow(item) {
-          const when = formatRelativeTime(item.timestamp, new Date()) || "";
+        // `suppressState` hides this item's own state chip when the bucket
+        // header already shows it (an assignment bucket's state is the owning
+        // assessment's — repeating it on that same assessment row is noise).
+        function itemRow(item, { suppressState } = {}) {
+          const when = formatRelativeTime(item.timestamp, new Date(), undefined, true) || "";
           return `
             <details class="item-row">
               <summary>
@@ -115,7 +118,7 @@
                   <div class="u-wrap u-muted" style="font-size:12.5px;">
                     <span>${esc(when)}</span>
                     ${item.staff ? '<span class="u-chip u-chip-accent">Staff</span>' : ""}
-                    ${item.state ? stateChip(item.state) : ""}
+                    ${item.state && !suppressState ? stateChip(item.state) : ""}
                   </div>
                 </div>
               </summary>
@@ -149,7 +152,11 @@
               </div>
               ${due ? `<div class="course-meta">${due}</div>` : ""}
               <div class="u-card" style="margin-top: var(--u-space-2); padding: var(--u-space-2) var(--u-space-3);">
-                ${bucket.items.map(itemRow).join("") || '<p class="u-muted">Nothing here yet.</p>'}
+                ${
+                  bucket.items
+                    .map((item) => itemRow(item, { suppressState: isAssignment && item.kind === "assessment" }))
+                    .join("") || '<p class="u-muted">Nothing here yet.</p>'
+                }
               </div>
               ${askActions}
             </section>
@@ -163,7 +170,7 @@
                 <div class="u-card u-row" style="margin-bottom: var(--u-space-2);">
                   <div style="flex:1;">
                     <div class="item-title-line">${esc(match.title)}</div>
-                    <div class="u-muted" style="font-size:12.5px;">${esc(match.code)}${match.term ? " · " + esc(match.term) : ""} · ${esc(match.source)}</div>
+                    <div class="u-muted" style="font-size:12.5px;">${esc(match.code)}${match.term ? " · " + esc(match.term) : ""} · ${esc(sourceLabel(match.source))}</div>
                   </div>
                   ${match.url ? `<button type="button" class="u-quiet open-link" data-url="${esc(match.url)}">Open</button>` : ""}
                 </div>
@@ -196,7 +203,7 @@
           }
 
           const sourcePills = data.sources
-            .map((source) => `<span class="u-chip">${esc(source)}</span>`)
+            .map((source) => `<span class="u-chip">${esc(sourceLabel(source))}</span>`)
             .join("");
 
           const buckets = data.buckets.map((bucket, index) => bucketSection(bucket, index)).join("") || '<p class="u-muted">No buckets yet.</p>';

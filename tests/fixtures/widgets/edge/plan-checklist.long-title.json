@@ -1,0 +1,8 @@
+{
+  "plan": {
+    "kind": "assignment",
+    "subject": "campus-canvas:assess-882-team-project-final-submission",
+    "content": "## Assignment 2: Team project\n\n- [x] Agree on the service's API surface with the team\n- [x] Set up the shared repository and CI pipeline\n- [ ] Write the long-form design document covering every endpoint, its failure modes, and how the team decided to split the work across four people\n- [ ] Record the five-minute demo video\n- [ ] Submit the written reflection\n\nRemember to credit each teammate's specific contribution in the final write-up.",
+    "updatedAt": "2026-09-27T07:05:00.000Z"
+  }
+}

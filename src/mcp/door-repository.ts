@@ -42,6 +42,10 @@ export interface UpcomingInput {
   days: number;
   course?: string;
   includeOverdue: boolean;
+  // The caller's clock (deps.now() in door.ts). Defaults to the real wall
+  // clock so existing callers/tests that don't care about determinism keep
+  // working, but production and tests that need a fixed "now" always pass it.
+  now?: Date;
 }
 
 export interface LabelItemInput {
@@ -642,9 +646,14 @@ export class D1DoorRepository implements DoorRepository {
       conditions.push("i.course = ?");
       values.push(normalizeCourseCode(input.course) ?? input.course.trim().toUpperCase());
     }
+    // The window boundaries are computed from the caller's own clock, not
+    // SQLite's julianday('now') (the real wall clock) — a fixed `now` makes
+    // this deterministic and testable instead of racing the system clock.
     // A missed deadline stays visible for 90 days when includeOverdue is set,
     // matching the admin repository's overdue window order of magnitude.
-    const windowStart = input.includeOverdue ? "julianday('now', '-90 days')" : "julianday('now')";
+    const now = input.now ?? new Date();
+    const windowStart = input.includeOverdue ? new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000) : now;
+    const windowEnd = new Date(now.getTime() + input.days * 24 * 60 * 60 * 1000);
     const rows = await this.db
       .prepare(
         `SELECT ${ITEM_BASE_COLUMNS}, ${ITEM_STATE_COLUMN}, ${ITEM_STAFF_COLUMNS}, due.due_at AS due_at
@@ -655,11 +664,11 @@ export class D1DoorRepository implements DoorRepository {
            WHERE json_extract(b.value, '$.primitive') = 'temporal'
          ) due ON due.source = i.source AND due.item_id = i.item_id
          WHERE ${conditions.join(" AND ")}
-           AND julianday(due.due_at) BETWEEN ${windowStart} AND julianday('now', '+' || ? || ' days')
+           AND julianday(due.due_at) BETWEEN julianday(?) AND julianday(?)
          ORDER BY julianday(due.due_at) ASC
          LIMIT 200`,
       )
-      .bind(...values, input.days)
+      .bind(...values, windowStart.toISOString(), windowEnd.toISOString())
       .all<ItemSummaryRow>();
     return rows.results.map(parseItemSummary);
   }

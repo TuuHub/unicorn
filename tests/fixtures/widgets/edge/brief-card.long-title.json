@@ -1,0 +1,23 @@
+{
+  "unread": 1,
+  "briefs": [
+    {
+      "id": "brief-long-1",
+      "kind": "assignment-decomposition-follow-up",
+      "subject": "FIT3175",
+      "title": "A genuinely very long brief title that a real staff announcement subject line could actually reach, spanning several words past where a card would normally wrap",
+      "body": "This body is here to check that a long title above it does not push the actions or the read state around, and that the card keeps a sane rhythm even when the heading wraps to three lines on a narrow phone screen.",
+      "createdAt": "2026-09-27T09:00:00.000Z",
+      "readAt": null
+    },
+    {
+      "id": "brief-long-2",
+      "kind": "digest",
+      "subject": "FIT2004",
+      "title": "Short title, already read",
+      "body": "Nothing new since last week.",
+      "createdAt": "2026-09-20T07:00:00.000Z",
+      "readAt": "2026-09-20T08:00:00.000Z"
+    }
+  ]
+}

@@ -1,0 +1,56 @@
+{
+  "query": null,
+  "items": [
+    {
+      "source": "campus-canvas",
+      "itemId": "assess-999",
+      "kind": "assessment",
+      "title": "Assignment 2: Team project — final submission including source code, a five-minute demo video, and a written reflection",
+      "url": "https://canvas.example.edu/courses/1/assignments/999",
+      "timestamp": "2026-09-01T00:00:00.000Z",
+      "dueAt": "2026-09-27T23:55:00.000Z",
+      "state": "not submitted",
+      "course": "FIT3175-ADVANCED-STREAM",
+      "bucket": "course/FIT3175/assignment-2",
+      "topic": null,
+      "labeledBy": "structure",
+      "unlabeled": false,
+      "staff": false,
+      "snippet": null
+    },
+    {
+      "source": "campus-moodle",
+      "itemId": "assess-401",
+      "kind": "assessment",
+      "title": "Lab report 4",
+      "url": "https://moodle.example.edu/mod/assign/view.php?id=401",
+      "timestamp": "2026-09-10T00:00:00.000Z",
+      "dueAt": "2026-09-20T23:55:00.000Z",
+      "state": "overdue",
+      "course": "FIT2004",
+      "bucket": "course/FIT2004/lab-4",
+      "topic": null,
+      "labeledBy": "structure",
+      "unlabeled": false,
+      "staff": false,
+      "snippet": null
+    },
+    {
+      "source": "gmail",
+      "itemId": "msg-210",
+      "kind": "email",
+      "title": "Career fair registration closes soon — make sure to bring a printed copy of your résumé and at least three business-appropriate outfits",
+      "url": null,
+      "timestamp": "2026-09-20T00:00:00.000Z",
+      "dueAt": null,
+      "state": null,
+      "course": null,
+      "bucket": "life/events",
+      "topic": null,
+      "labeledBy": "triage",
+      "unlabeled": false,
+      "staff": false,
+      "snippet": null
+    }
+  ]
+}

@@ -39,6 +39,14 @@
         border-top: 1px solid var(--u-border);
         font-size: 12.5px;
       }
+      /* This button stands alone (no sibling buttons to keep intact on the
+         same line), so let its label wrap normally instead of overflowing
+         the card when the source's label is long. */
+      .fix-source {
+        white-space: normal;
+        text-align: left;
+        max-width: 100%;
+      }
     </style>
   </head>
   <body>
@@ -73,14 +81,16 @@
           const absolute = source.lastSyncAt
             ? formatDateTime(source.lastSyncAt, timezone, { dateStyle: "medium", timeStyle: "short" })
             : null;
-          const lastSync = source.lastSyncAt ? `Synced ${esc(formatRelativeTime(source.lastSyncAt, now))}` : "Never synced";
+          const lastSync = source.lastSyncAt
+            ? `Synced ${esc(formatRelativeTime(source.lastSyncAt, now, undefined, true))}`
+            : "Never synced";
           return `
             <div class="source-row">
               <span class="u-dot ${state.dot}" title="${esc(state.label)}"></span>
               <div class="source-info">
                 <div class="u-between">
                   <span class="item-title-line">${esc(source.label)}</span>
-                  <span class="u-muted u-num">${source.items} item${source.items === 1 ? "" : "s"}</span>
+                  <span class="u-muted u-num" style="white-space:nowrap;">${source.items} item${source.items === 1 ? "" : "s"}</span>
                 </div>
                 <div class="u-muted" ${absolute ? `title="${esc(absolute)}"` : ""}>${lastSync}</div>
                 ${source.lastError ? `<div class="source-error u-danger">${esc(source.lastError)}</div>` : ""}
@@ -101,7 +111,7 @@
 
           const rows = data.sources.map((source) => sourceRow(source, now, timezone)).join("");
           const schedulerText = data.scheduler.running
-            ? `Running — last cycle ${esc(formatRelativeTime(data.scheduler.lastCycleAt, now) || "never")}`
+            ? `Running — last cycle ${esc(formatRelativeTime(data.scheduler.lastCycleAt, now, undefined, true) || "never")}`
             : "Not running";
 
           root.innerHTML = `

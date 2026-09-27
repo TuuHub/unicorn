@@ -1,0 +1,31 @@
+{
+  "timezone": "Australia/Melbourne",
+  "latestCursor": "1",
+  "scheduler": { "running": false, "lastCycleAt": "2026-09-01T00:00:00.000Z" },
+  "sources": [
+    {
+      "id": "student-portal-v2",
+      "label": "Student Portal — Extended Enrolment and Timetabling Service",
+      "configured": true,
+      "lastSyncAt": "2026-09-24T00:00:00.000Z",
+      "lastError": "504 Gateway Timeout — the upstream portal took longer than 30 seconds to respond and the sync was abandoned after three retries",
+      "items": 12
+    },
+    {
+      "id": "campus-moodle",
+      "label": "Moodle",
+      "configured": true,
+      "lastSyncAt": "2026-09-01T00:00:00.000Z",
+      "lastError": null,
+      "items": 214
+    },
+    {
+      "id": "campus-canvas",
+      "label": "Canvas",
+      "configured": false,
+      "lastSyncAt": null,
+      "lastError": null,
+      "items": 0
+    }
+  ]
+}

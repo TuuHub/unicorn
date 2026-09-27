@@ -1,0 +1,28 @@
+{
+  "query": "FIT2004",
+  "code": null,
+  "title": null,
+  "term": null,
+  "ambiguous": true,
+  "matches": [
+    {
+      "code": "FIT2004",
+      "term": "2025 S2",
+      "title": "Algorithms and Data Structures — a much longer offering title from a previous year that has since been revised",
+      "source": "campus-moodle",
+      "itemId": "course:1",
+      "url": "https://moodle.example.edu/course/view.php?id=1"
+    },
+    {
+      "code": "FIT2004",
+      "term": "2026 S2",
+      "title": "Algorithms and Data Structures",
+      "source": "student-portal-v2",
+      "itemId": "course:2",
+      "url": null
+    }
+  ],
+  "sources": [],
+  "buckets": [],
+  "unlabeled": []
+}

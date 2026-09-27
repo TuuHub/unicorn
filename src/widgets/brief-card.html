@@ -28,6 +28,14 @@
         margin-top: var(--u-space-2);
         font-size: 12.5px;
       }
+      /* Actions live in their own footer row, never squeezed alongside the
+         kind chip and timestamp — .u-wrap lets a button drop to its own line
+         as a whole unit instead of shrinking mid-label. */
+      .brief-actions {
+        margin-top: var(--u-space-3);
+        padding-top: var(--u-space-2);
+        border-top: 1px solid var(--u-border);
+      }
       .task-list {
         list-style: none;
         padding-left: 0;
@@ -70,26 +78,21 @@
 
         function briefCardHtml(brief) {
           const isRead = !!brief.readAt;
-          const when = formatRelativeTime(brief.createdAt, new Date()) || "";
+          const when = formatRelativeTime(brief.createdAt, new Date(), undefined, true) || "";
+          const actions = [];
+          if (bridge.capabilities.message) actions.push('<button type="button" class="u-quiet discuss-one">Discuss this</button>');
+          if (!isRead) actions.push('<button type="button" class="u-quiet ack-one">Mark read</button>');
           return `
             <article class="u-card brief-card${isRead ? " is-read" : ""}" data-id="${esc(brief.id)}">
-              <div class="u-between">
-                <div class="u-wrap">
-                  <span class="u-chip u-chip-accent">${esc(kindLabel(brief.kind))}</span>
-                  <span class="u-muted">${esc(when)}</span>
-                </div>
-                <div class="u-row">
-                  ${bridge.capabilities.message ? '<button type="button" class="u-quiet discuss-one">Discuss this</button>' : ""}
-                  ${
-                    isRead
-                      ? '<span class="u-muted" style="font-size:12.5px;">Read</span>'
-                      : '<button type="button" class="u-quiet ack-one">Mark read</button>'
-                  }
-                </div>
+              <div class="u-wrap">
+                <span class="u-chip u-chip-accent">${esc(kindLabel(brief.kind))}</span>
+                <span class="u-muted">${esc(when)}</span>
+                ${isRead ? '<span class="u-chip">Read</span>' : ""}
               </div>
               <h2>${esc(brief.title)}</h2>
               <div class="brief-body">${renderMarkdown(brief.body)}</div>
               <div class="brief-error u-danger" hidden></div>
+              ${actions.length > 0 ? `<div class="u-wrap brief-actions">${actions.join("")}</div>` : ""}
             </article>
           `;
         }

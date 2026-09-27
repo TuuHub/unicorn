@@ -10,7 +10,16 @@ export function formatDateTime(
   options?: Intl.DateTimeFormatOptions,
 ): string | null;
 
-export function formatRelativeTime(iso: string | null | undefined, now?: Date, timezone?: string | null): string | null;
+export function formatRelativeTime(
+  iso: string | null | undefined,
+  now?: Date,
+  timezone?: string | null,
+  pastFacing?: boolean,
+): string | null;
+
+// Human label for a raw source id ("campus-moodle" -> "Moodle"), falling back
+// to a title-cased id for a manifest source this map doesn't know about.
+export function sourceLabel(id: string): string;
 
 export function dayLabel(iso: string, now?: Date, timezone?: string | null): string;
 

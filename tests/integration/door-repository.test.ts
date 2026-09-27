@@ -231,11 +231,13 @@ describe("door MCP server + D1DoorRepository (real schema)", () => {
   // --- upcoming ------------------------------------------------------------------
 
   it("upcoming() lists items due within the window, ordered by due date, honoring includeOverdue", async () => {
+    // Windowed off `deps.now` (fixed NOW above), never the real wall clock —
+    // this is deterministic regardless of when the test actually runs.
     const store = new D1ItemStore(db);
-    const kernel = new Kernel(store, () => new Date());
-    const soon = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString();
-    const later = new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString();
-    const overdue = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString();
+    const kernel = new Kernel(store, () => NOW);
+    const soon = new Date(NOW.getTime() + 3 * 24 * 60 * 60 * 1000).toISOString();
+    const later = new Date(NOW.getTime() + 10 * 24 * 60 * 60 * 1000).toISOString();
+    const overdue = new Date(NOW.getTime() - 5 * 24 * 60 * 60 * 1000).toISOString();
     const dueItem = (id: string, dueAt: string): ItemInput => ({
       id,
       source: "campus-moodle",
@@ -247,13 +249,31 @@ describe("door MCP server + D1DoorRepository (real schema)", () => {
     });
     await kernel.ingest([dueItem("soon", soon), dueItem("later", later), dueItem("overdue", overdue)]);
 
+    // The shared dataset (buildMixedDataset, DATASET_NOW = 2026-03-10) also
+    // has its own assessments due in this window relative to the fixed NOW
+    // above — Canvas "Project 1" (assignment:20, due +7d off DATASET_NOW =
+    // 2026-03-17) and Moodle "Assignment 2" (assessment:2, due +12d =
+    // 2026-03-22) land inside it, and Moodle "Assignment 1" (assessment:1,
+    // due 2026-03-15T00:00, ~10h before NOW) lands just inside the overdue
+    // window. Asserting the full merged order (not just our three synthetic
+    // items) is what makes this deterministic now that the window comes from
+    // `now`, not the real wall clock: previously it depended on whichever of
+    // these dataset items happened to be in the future on the day the test
+    // actually ran.
     const within14 = await client.callTool({ name: "upcoming", arguments: { days: 14 } });
     const { items: within14Items } = structuredOf<{ items: Array<{ itemId: string }> }>(within14);
-    expect(within14Items.map((item) => item.itemId)).toEqual(["soon", "later"]); // ordered by due date, no overdue
+    expect(within14Items.map((item) => item.itemId)).toEqual(["assignment:20", "soon", "assessment:2", "later"]);
 
     const withOverdue = await client.callTool({ name: "upcoming", arguments: { days: 14, includeOverdue: true } });
     const { items: withOverdueItems } = structuredOf<{ items: Array<{ itemId: string }> }>(withOverdue);
-    expect(withOverdueItems.map((item) => item.itemId)).toEqual(["overdue", "soon", "later"]);
+    expect(withOverdueItems.map((item) => item.itemId)).toEqual([
+      "overdue",
+      "assessment:1",
+      "assignment:20",
+      "soon",
+      "assessment:2",
+      "later",
+    ]);
   });
 
   // --- label_items -----------------------------------------------------------------

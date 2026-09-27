@@ -83,8 +83,13 @@ interface ChangeDbRow {
 
 // The D1-touching half, kept separate from renderDigest so the rendering logic
 // above is tested with plain fixtures. `since` bounds notices/changes; dueSoon
-// always looks 7 days ahead regardless of `since`.
-export async function loadDigestSections(db: D1Database, since: string): Promise<DigestSections> {
+// always looks 7 days ahead of `now` regardless of `since`.
+//
+// The 7-day window is computed from `now` (the caller's own clock — see
+// runDailyDigest below) rather than SQLite's julianday('now'), the real wall
+// clock, so a fixed `now` makes this deterministic and testable.
+export async function loadDigestSections(db: D1Database, since: string, now: Date): Promise<DigestSections> {
+  const dueSoonEnd = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString();
   const [dueSoon, notices, changes] = await Promise.all([
     db
       .prepare(
@@ -95,10 +100,11 @@ export async function loadDigestSections(db: D1Database, since: string): Promise
          JOIN json_each(f.capabilities_json) binding
          WHERE i.archived_at IS NULL
            AND json_extract(binding.value, '$.primitive') = 'temporal'
-           AND julianday(due_at) BETWEEN julianday('now') AND julianday('now', '+7 days')
+           AND julianday(due_at) BETWEEN julianday(?) AND julianday(?)
          ORDER BY julianday(due_at)
          LIMIT 20`,
       )
+      .bind(now.toISOString(), dueSoonEnd)
       .all<UpcomingDbRow>(),
     db
       .prepare(`SELECT title, type, url FROM changes WHERE type = 'notice.posted' AND created_at >= ? ORDER BY seq DESC LIMIT 20`)
@@ -164,7 +170,7 @@ export async function runDailyDigest(
 
   const previous = await briefs.latestByKind("digest");
   const since = previous?.createdAt ?? new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
-  const sections = await loadDigestSections(db, since);
+  const sections = await loadDigestSections(db, since, now);
   const rendered = renderDigest(sections, date);
   if (!rendered) {
     return { status: "skipped", reason: "empty" };

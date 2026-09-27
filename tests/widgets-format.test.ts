@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dayLabel, formatRelativeTime, groupByDay, phraseChange } from "../src/widgets/format.js";
+import { dayLabel, formatRelativeTime, groupByDay, phraseChange, sourceLabel } from "../src/widgets/format.js";
 
 const TZ = "Australia/Melbourne";
 // A fixed "now" so every test is deterministic regardless of when it runs.
@@ -67,6 +67,37 @@ describe("formatRelativeTime", () => {
   it("returns null for a missing or invalid instant", () => {
     expect(formatRelativeTime(null, NOW)).toBeNull();
     expect(formatRelativeTime("not-a-date", NOW)).toBeNull();
+  });
+
+  it("clamps a pastFacing timestamp slightly in the future (clock skew) to now", () => {
+    const tenHoursAhead = new Date(NOW.getTime() + 10 * 60 * 60 * 1000).toISOString();
+    expect(formatRelativeTime(tenHoursAhead, NOW, undefined, true)).toBe("now");
+  });
+
+  it("does not clamp a future instant when pastFacing is not set (deadlines stay future-phrased)", () => {
+    const tenHoursAhead = new Date(NOW.getTime() + 10 * 60 * 60 * 1000).toISOString();
+    expect(formatRelativeTime(tenHoursAhead, NOW)).toMatch(/in 10 hours/);
+  });
+
+  it("leaves a genuinely past pastFacing timestamp alone", () => {
+    expect(formatRelativeTime("2026-09-25T10:00:00.000Z", NOW, undefined, true)).toMatch(/yesterday|1 day ago/);
+  });
+});
+
+describe("sourceLabel", () => {
+  it("labels every built-in source id", () => {
+    expect(sourceLabel("campus-moodle")).toBe("Moodle");
+    expect(sourceLabel("campus-ed")).toBe("Ed");
+    expect(sourceLabel("campus-canvas")).toBe("Canvas");
+    expect(sourceLabel("gmail")).toBe("Gmail");
+  });
+
+  it("title-cases an unknown manifest source id instead of showing the raw id", () => {
+    expect(sourceLabel("student-portal")).toBe("Student Portal");
+  });
+
+  it("strips a campus- prefix from an unknown source before title-casing it", () => {
+    expect(sourceLabel("campus-timetable")).toBe("Timetable");
   });
 });
 

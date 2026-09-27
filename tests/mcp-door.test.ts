@@ -551,7 +551,7 @@ describe("unicorn door MCP server", () => {
 
       const result = await client.callTool({ name: "run_playbook", arguments: { name: "weekly-plan" } });
 
-      expect(upcoming).toHaveBeenCalledWith({ days: 14, includeOverdue: false });
+      expect(upcoming).toHaveBeenCalledWith({ days: 14, includeOverdue: false, now: new Date("2026-09-26T10:00:00.000Z") });
       expect(getPlan).toHaveBeenCalledWith("weekly", "2026-W39");
       const structured = result.structuredContent as { data: { isoWeek: string; courses: string[] } };
       expect(structured.data.isoWeek).toBe("2026-W39");
