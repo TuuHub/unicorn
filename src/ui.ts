@@ -12,6 +12,9 @@ export interface PageOptions {
   heading: string;
   subtitle: string;
   body: string;
+  // /settings has enough side-by-side content (source cards) to earn a wider
+  // column than /digest's read-through text; /digest keeps the narrower default.
+  wide?: boolean;
 }
 
 const CSS = `
@@ -21,6 +24,7 @@ const CSS = `
 html{-webkit-text-size-adjust:100%}
 body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}
 main{width:min(680px,calc(100% - 40px));margin:0 auto;padding:40px 0 72px}
+main.wide{width:min(960px,calc(100% - 48px))}
 a{color:inherit;text-decoration:none;touch-action:manipulation}
 header{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:32px}
 .brand{font-weight:650;font-size:16px;letter-spacing:-.02em}
@@ -64,7 +68,7 @@ export function renderPage(options: PageOptions): string {
   <style>${CSS}</style>
 </head>
 <body>
-  <main>
+  <main${options.wide ? ' class="wide"' : ""}>
     <header><span class="brand" translate="no">unicorn</span><nav>${nav}</nav></header>
     <h1>${options.heading}</h1>
     <p class="sub">${options.subtitle}</p>
@@ -79,14 +83,21 @@ export function htmlResponse(body: string, status = 200): Response {
     status,
     headers: {
       "content-type": "text/html; charset=utf-8",
+      // script-src is inline-only, no external hosts: /settings' progressive
+      // enhancement (copy buttons, timezone auto-detect) is the only script on
+      // any page, and CSS-var theming needs style-src unsafe-inline too.
       "content-security-policy":
-        "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+        "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
       // "same-origin", not "no-referrer": since Chrome 85 the Origin header on
       // same-origin form POSTs honors the referrer policy, and "no-referrer"
       // serializes it to "null" — which would make the /settings CSRF origin
       // check reject every real browser submission.
       "referrer-policy": "same-origin",
       "x-content-type-options": "nosniff",
+      // This page carries ADMIN_TOKEN-gated state and CSRF-protected forms —
+      // never cache it, and never let a browser fall back to plain HTTP for it.
+      "strict-transport-security": "max-age=63072000; includeSubDomains",
+      "cache-control": "no-store",
     },
   });
 }
