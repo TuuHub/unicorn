@@ -4722,7 +4722,11 @@ if (typeof window !== "undefined") {
 
         function subjectLabel(planData) {
           if (planData.kind === "weekly") return \`Week of \${planData.subject}\`;
-          return planData.subject;
+          // Assignment plans have a raw composite id ("campus-moodle:assessment:123",
+          // per door-contracts.ts) that isn't meant for display — the content's own
+          // first heading already gives the reader a human title, so don't repeat
+          // the id here.
+          return null;
         }
 
         function render() {
@@ -4749,7 +4753,7 @@ if (typeof window !== "undefined") {
                     : ""
                 }
               </div>
-              <div class="plan-subject u-muted">\${esc(subjectLabel(plan))} · updated \${esc(formatRelativeTime(plan.updatedAt, new Date(), undefined, true) || "just now")}</div>
+              <div class="plan-subject u-muted">\${subjectLabel(plan) ? \`\${esc(subjectLabel(plan))} · \` : ""}updated \${esc(formatRelativeTime(plan.updatedAt, new Date(), undefined, true) || "just now")}</div>
               \${
                 total > 0
                   ? \`
