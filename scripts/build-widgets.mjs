@@ -18,7 +18,7 @@
 // Run after editing anything in src/widgets/:
 //   npm run widgets:build
 
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
@@ -168,6 +168,21 @@ export function buildWidgets() {
   });
 }
 
+// Design-review-only edge-case fixtures, kept separate from the WIDGET_DEFS
+// fixture each widget ships with: tests/fixtures/widgets/edge/<file-prefix>.<
+// suffix>.json (e.g. "brief-card.long-title.json") renders as an extra
+// <name>-<suffix>-<theme>.html preview, for checking truncation, empty
+// states, and error states that the normal fixture doesn't exercise. Never
+// read by buildWidgets() / widgets.generated.ts — preview-only.
+const edgeFixturesDir = path.join(fixturesDir, "edge");
+
+function readEdgeFixtures(filePrefix) {
+  if (!existsSync(edgeFixturesDir)) return [];
+  return readdirSync(edgeFixturesDir)
+    .filter((file) => file.startsWith(`${filePrefix}.`) && file.endsWith(".json"))
+    .map((file) => ({ suffix: file.slice(filePrefix.length + 1, -".json".length), file }));
+}
+
 function main() {
   const widgets = buildWidgets();
 
@@ -180,6 +195,17 @@ function main() {
         path.join(previewDir, `${widget.name}-${theme}.html`),
         buildPreviewHtml(widget.html, widget.structuredContent, theme),
       );
+    }
+
+    const filePrefix = widget.file.replace(/\.html$/, "");
+    for (const edge of readEdgeFixtures(filePrefix)) {
+      const structuredContent = JSON.parse(readFileSync(path.join(edgeFixturesDir, edge.file), "utf8"));
+      for (const theme of ["light", "dark"]) {
+        writeFileSync(
+          path.join(previewDir, `${widget.name}-${edge.suffix}-${theme}.html`),
+          buildPreviewHtml(widget.html, structuredContent, theme),
+        );
+      }
     }
   }
   writeFileSync(path.join(previewDir, "index.html"), buildPreviewIndex(widgets));

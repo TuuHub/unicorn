@@ -1,0 +1,42 @@
+{
+  "nextCursor": "420",
+  "hasMore": false,
+  "counts": {
+    "item.added": 1,
+    "content.changed": 1
+  },
+  "events": [
+    {
+      "cursor": "419",
+      "type": "item.added",
+      "at": "2026-09-27T08:00:00.000Z",
+      "source": "student-portal-v2",
+      "itemId": "ann-500",
+      "kind": "announcement",
+      "title": "New announcement: revised marking rubric and submission checklist for Assignment 2, effective immediately for all enrolled students",
+      "url": "https://portal.example.edu/ann/500",
+      "course": "FIT3175",
+      "bucket": "course/FIT3175/assignment-2",
+      "topic": null,
+      "field": null,
+      "before": null,
+      "after": null
+    },
+    {
+      "cursor": "420",
+      "type": "content.changed",
+      "at": "2026-09-27T07:00:00.000Z",
+      "source": "campus-moodle",
+      "itemId": "ann-77",
+      "kind": "announcement",
+      "title": "Guest lecture next week — updated with the full agenda, speaker bio, and a request to submit questions in advance",
+      "url": "https://moodle.example.edu/course/view.php?id=1#ann-77",
+      "course": "FIT3175",
+      "bucket": "course/FIT3175/general",
+      "topic": null,
+      "field": "body",
+      "before": { "summary": "Short original note about the guest lecture." },
+      "after": { "summary": "A much longer replacement note about the guest lecture, including a full agenda, a speaker bio, and a request to submit questions in advance so the session can be tailored to what students actually want to ask." }
+    }
+  ]
+}

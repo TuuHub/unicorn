@@ -1,0 +1,79 @@
+{
+  "query": "FIT3175",
+  "code": "FIT3175",
+  "title": "Software Engineering: Process, Tools, and Practice for Large Team-Based Capstone Projects (Advanced Stream)",
+  "term": "Full year 2026, Semester 2 continuation with an unusually long term label",
+  "ambiguous": false,
+  "matches": [],
+  "sources": ["campus-moodle", "campus-ed", "campus-canvas", "gmail", "student-portal-v2"],
+  "buckets": [
+    {
+      "bucket": "course/FIT3175/assignment-2",
+      "label": "Assignment 2: Team Project — Design, Build, and Present a Small Distributed Service",
+      "dueAt": "2026-10-06T09:00:00.000Z",
+      "state": "not submitted",
+      "items": [
+        {
+          "source": "campus-canvas",
+          "itemId": "assess-882",
+          "kind": "assessment",
+          "title": "Assignment 2: Team project — full specification, marking rubric, and submission checklist for the distributed systems capstone",
+          "url": "https://canvas.example.edu/courses/1/assignments/882",
+          "timestamp": "2026-09-01T00:00:00.000Z",
+          "dueAt": "2026-10-06T09:00:00.000Z",
+          "state": "not submitted",
+          "course": "FIT3175",
+          "bucket": "course/FIT3175/assignment-2",
+          "topic": null,
+          "labeledBy": "structure",
+          "unlabeled": false,
+          "staff": false,
+          "snippet": "Design and implement a small service with your team, following the process outlined in week 4, and make sure every member's contribution is individually identifiable in the final submission."
+        },
+        {
+          "source": "campus-ed",
+          "itemId": "thread-501",
+          "kind": "thread",
+          "title": "Clarification on group sizes and what happens if your team ends up with an odd number of students after the census date",
+          "url": "https://ed.example.edu/t/501",
+          "timestamp": "2026-09-24T03:12:00.000Z",
+          "dueAt": null,
+          "state": null,
+          "course": "FIT3175",
+          "bucket": "course/FIT3175/assignment-2",
+          "topic": null,
+          "labeledBy": "structure",
+          "unlabeled": false,
+          "staff": true,
+          "snippet": "Groups can have 3-4 students this term; let us know if yours is uneven."
+        }
+      ]
+    },
+    {
+      "bucket": "course/FIT3175/general",
+      "label": "General",
+      "dueAt": null,
+      "state": null,
+      "items": []
+    }
+  ],
+  "unlabeled": [
+    {
+      "source": "student-portal-v2",
+      "itemId": "msg-99",
+      "kind": "email",
+      "title": "Re: FIT3175 extension request for the team project — following up on last week's conversation with your tutor about accessibility accommodations",
+      "url": null,
+      "timestamp": "2026-09-23T11:00:00.000Z",
+      "dueAt": null,
+      "state": null,
+      "course": "FIT3175",
+      "bucket": null,
+      "topic": null,
+      "labeledBy": null,
+      "unlabeled": true,
+      "staff": true,
+      "snippet": "Your extension has been approved until Friday."
+    }
+  ]
+}
