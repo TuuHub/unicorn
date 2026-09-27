@@ -558,6 +558,16 @@ describe("unicorn door MCP server", () => {
       expect(structured.data.courses).toEqual(["FIT2004"]);
     });
 
+    it("weekly-plan names the user's local ISO week, not the UTC one", async () => {
+      const getPlan = vi.fn().mockResolvedValue(null);
+      // Monday 28 Sept 07:00 in Melbourne is still Sunday 27 Sept (W39) in UTC.
+      const client = await connectClient(fakeDeps({ repo: fakeRepo({ getPlan }), now: () => new Date("2026-09-27T21:00:00.000Z") }));
+
+      await client.callTool({ name: "run_playbook", arguments: { name: "weekly-plan" } });
+
+      expect(getPlan).toHaveBeenCalledWith("weekly", "2026-W40");
+    });
+
     it("decompose-assignment drops assessments that already have a plan", async () => {
       const upcoming = vi.fn().mockResolvedValue([item({ itemId: "a1" }), item({ itemId: "a2" })]);
       const plannedSubjects = vi.fn().mockResolvedValue(new Set(["campus-moodle:a1"]));

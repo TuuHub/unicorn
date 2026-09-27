@@ -8,6 +8,7 @@ import { z } from "zod";
 import type { BriefStore } from "../briefs";
 import { routineBriefId } from "../briefs";
 import { CORRECTIONS_DOMAIN, type CorrectionResult, recordCorrection } from "../corrections";
+import { localDateParts } from "../digest";
 import { ASSESSMENT_KINDS } from "../kernel/courses";
 import type { JsonValue } from "../kernel/types";
 import type { MemoryStore } from "../memory";
@@ -351,7 +352,7 @@ export async function createDoorMcpServer(deps: DoorDeps): Promise<McpServer> {
         return errorResult("unknown_playbook", `No playbook named "${name}".`, "Call prompts/list, or use one of: weekly-plan, decompose-assignment, forum-brief, triage.");
       }
       const now = deps.now ? deps.now() : new Date();
-      const data = await playbookData(name, deps.repo, deps.briefs, now);
+      const data = await playbookData(name, deps.repo, deps.briefs, now, await timezoneOf(deps));
       const corrections = await correctionLines(deps.memory);
       const run: PlaybookRun = { name, instructions: playbook.procedure, data, corrections };
       return toolResult(run, renderPlaybookRun(run, playbook));
@@ -658,8 +659,11 @@ function renderStatusView(view: StatusView): string {
 
 // --- run_playbook ----------------------------------------------------------
 
-function isoWeekOf(date: Date): string {
-  const truncated = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+// The ISO week of the user's local date: a Monday-morning run in Melbourne is still
+// Sunday in UTC, and the UTC week would be last week.
+function isoWeekOf(now: Date, timeZone: string): string {
+  const [year, month, day] = localDateParts(now, timeZone).date.split("-").map(Number);
+  const truncated = new Date(Date.UTC(year!, month! - 1, day!));
   const dayNumber = truncated.getUTCDay() || 7;
   truncated.setUTCDate(truncated.getUTCDate() + 4 - dayNumber);
   const yearStart = new Date(Date.UTC(truncated.getUTCFullYear(), 0, 1));
@@ -688,11 +692,17 @@ async function correctionLines(memory: MemoryStore): Promise<string[]> {
     .map((line) => line.replace(/^-\s*/, ""));
 }
 
-async function playbookData(name: PlaybookName, repo: DoorRepository, briefs: BriefStore, now: Date): Promise<Record<string, JsonValue>> {
+async function playbookData(
+  name: PlaybookName,
+  repo: DoorRepository,
+  briefs: BriefStore,
+  now: Date,
+  timeZone: string,
+): Promise<Record<string, JsonValue>> {
   const record = (value: Record<string, unknown>): Record<string, JsonValue> => toJson(value) as Record<string, JsonValue>;
   switch (name) {
     case "weekly-plan": {
-      const isoWeek = isoWeekOf(now);
+      const isoWeek = isoWeekOf(now, timeZone);
       const [items, plan] = await Promise.all([
         repo.upcoming({ days: 14, includeOverdue: false, now }),
         repo.getPlan("weekly", isoWeek),
