@@ -192,6 +192,9 @@ button {
   border-radius: var(--u-radius-sm);
   padding: var(--u-space-2) var(--u-space-3);
   cursor: pointer;
+  /* A button's own label is one unit: it may sit on its own line inside a
+     wrapping row (.u-wrap), but it never breaks mid-word ("Discuss / this"). */
+  white-space: nowrap;
   transition: background-color 120ms ease, opacity 120ms ease;
 }
 button:hover {
@@ -398,6 +401,14 @@ input[type="checkbox"] {
       .brief-error {
         margin-top: var(--u-space-2);
         font-size: 12.5px;
+      }
+      /* Actions live in their own footer row, never squeezed alongside the
+         kind chip and timestamp — .u-wrap lets a button drop to its own line
+         as a whole unit instead of shrinking mid-label. */
+      .brief-actions {
+        margin-top: var(--u-space-3);
+        padding-top: var(--u-space-2);
+        border-top: 1px solid var(--u-border);
       }
       .task-list {
         list-style: none;
@@ -818,13 +829,19 @@ const RELATIVE_UNITS = [
   ["minute", 60],
 ];
 
-function formatRelativeTime(iso, now, timezone) {
+// \`pastFacing\` is for fields that only ever record something that already
+// happened (createdAt, lastSyncAt, a ChangeEvent's \`at\`): a positive diff
+// there is clock skew between our clock and the reader's, not a real future
+// event, so it clamps to "now" instead of a nonsensical "in 10 hours".
+// Deadlines (dueAt) are genuinely future-facing and must never pass this.
+function formatRelativeTime(iso, now, timezone, pastFacing) {
   if (!iso) return null;
   const then = new Date(iso);
   if (Number.isNaN(then.getTime())) return null;
   const reference = now instanceof Date ? now : new Date();
   const diffSeconds = (then.getTime() - reference.getTime()) / 1000;
   const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+  if (pastFacing && diffSeconds > 0) return rtf.format(0, "second");
   for (const [unit, secondsInUnit] of RELATIVE_UNITS) {
     if (Math.abs(diffSeconds) >= secondsInUnit) {
       return rtf.format(Math.round(diffSeconds / secondsInUnit), unit);
@@ -925,9 +942,32 @@ function phraseChange(event, timezone) {
   }
 }
 
+// Human labels for the built-in source ids. Kept in sync by hand with
+// SOURCE_LABELS in src/mcp/door-repository.ts — that copy builds
+// SourceStatus.label server-side, this one labels the raw ids CourseView.sources
+// sends the client (door-contracts.ts is a fixed wire shape: string[], not
+// pre-labelled). Widget JS and the Worker never share a runtime, so this is
+// the one place every widget gets a source label from — never format one ad hoc.
+const SOURCE_LABELS = {
+  "campus-moodle": "Moodle",
+  "campus-ed": "Ed",
+  "campus-canvas": "Canvas",
+  gmail: "Gmail",
+};
+
+function sourceLabel(id) {
+  if (SOURCE_LABELS[id]) return SOURCE_LABELS[id];
+  return String(id ?? "")
+    .replace(/^campus-/, "")
+    .split(/[-_]/)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
 if (typeof window !== "undefined") {
   window.Unicorn = window.Unicorn || {};
-  window.Unicorn.format = { formatDateTime, formatRelativeTime, dayLabel, groupByDay, phraseChange };
+  window.Unicorn.format = { formatDateTime, formatRelativeTime, dayLabel, groupByDay, phraseChange, sourceLabel };
 }
 
 // Pure prompt/summary builders shared by every widget (ADR-0037 scope
@@ -1033,26 +1073,21 @@ if (typeof window !== "undefined") {
 
         function briefCardHtml(brief) {
           const isRead = !!brief.readAt;
-          const when = formatRelativeTime(brief.createdAt, new Date()) || "";
+          const when = formatRelativeTime(brief.createdAt, new Date(), undefined, true) || "";
+          const actions = [];
+          if (bridge.capabilities.message) actions.push('<button type="button" class="u-quiet discuss-one">Discuss this</button>');
+          if (!isRead) actions.push('<button type="button" class="u-quiet ack-one">Mark read</button>');
           return \`
             <article class="u-card brief-card\${isRead ? " is-read" : ""}" data-id="\${esc(brief.id)}">
-              <div class="u-between">
-                <div class="u-wrap">
-                  <span class="u-chip u-chip-accent">\${esc(kindLabel(brief.kind))}</span>
-                  <span class="u-muted">\${esc(when)}</span>
-                </div>
-                <div class="u-row">
-                  \${bridge.capabilities.message ? '<button type="button" class="u-quiet discuss-one">Discuss this</button>' : ""}
-                  \${
-                    isRead
-                      ? '<span class="u-muted" style="font-size:12.5px;">Read</span>'
-                      : '<button type="button" class="u-quiet ack-one">Mark read</button>'
-                  }
-                </div>
+              <div class="u-wrap">
+                <span class="u-chip u-chip-accent">\${esc(kindLabel(brief.kind))}</span>
+                <span class="u-muted">\${esc(when)}</span>
+                \${isRead ? '<span class="u-chip">Read</span>' : ""}
               </div>
               <h2>\${esc(brief.title)}</h2>
               <div class="brief-body">\${renderMarkdown(brief.body)}</div>
               <div class="brief-error u-danger" hidden></div>
+              \${actions.length > 0 ? \`<div class="u-wrap brief-actions">\${actions.join("")}</div>\` : ""}
             </article>
           \`;
         }
@@ -1315,6 +1350,9 @@ button {
   border-radius: var(--u-radius-sm);
   padding: var(--u-space-2) var(--u-space-3);
   cursor: pointer;
+  /* A button's own label is one unit: it may sit on its own line inside a
+     wrapping row (.u-wrap), but it never breaks mid-word ("Discuss / this"). */
+  white-space: nowrap;
   transition: background-color 120ms ease, opacity 120ms ease;
 }
 button:hover {
@@ -1960,13 +1998,19 @@ const RELATIVE_UNITS = [
   ["minute", 60],
 ];
 
-function formatRelativeTime(iso, now, timezone) {
+// \`pastFacing\` is for fields that only ever record something that already
+// happened (createdAt, lastSyncAt, a ChangeEvent's \`at\`): a positive diff
+// there is clock skew between our clock and the reader's, not a real future
+// event, so it clamps to "now" instead of a nonsensical "in 10 hours".
+// Deadlines (dueAt) are genuinely future-facing and must never pass this.
+function formatRelativeTime(iso, now, timezone, pastFacing) {
   if (!iso) return null;
   const then = new Date(iso);
   if (Number.isNaN(then.getTime())) return null;
   const reference = now instanceof Date ? now : new Date();
   const diffSeconds = (then.getTime() - reference.getTime()) / 1000;
   const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+  if (pastFacing && diffSeconds > 0) return rtf.format(0, "second");
   for (const [unit, secondsInUnit] of RELATIVE_UNITS) {
     if (Math.abs(diffSeconds) >= secondsInUnit) {
       return rtf.format(Math.round(diffSeconds / secondsInUnit), unit);
@@ -2067,9 +2111,32 @@ function phraseChange(event, timezone) {
   }
 }
 
+// Human labels for the built-in source ids. Kept in sync by hand with
+// SOURCE_LABELS in src/mcp/door-repository.ts — that copy builds
+// SourceStatus.label server-side, this one labels the raw ids CourseView.sources
+// sends the client (door-contracts.ts is a fixed wire shape: string[], not
+// pre-labelled). Widget JS and the Worker never share a runtime, so this is
+// the one place every widget gets a source label from — never format one ad hoc.
+const SOURCE_LABELS = {
+  "campus-moodle": "Moodle",
+  "campus-ed": "Ed",
+  "campus-canvas": "Canvas",
+  gmail: "Gmail",
+};
+
+function sourceLabel(id) {
+  if (SOURCE_LABELS[id]) return SOURCE_LABELS[id];
+  return String(id ?? "")
+    .replace(/^campus-/, "")
+    .split(/[-_]/)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
 if (typeof window !== "undefined") {
   window.Unicorn = window.Unicorn || {};
-  window.Unicorn.format = { formatDateTime, formatRelativeTime, dayLabel, groupByDay, phraseChange };
+  window.Unicorn.format = { formatDateTime, formatRelativeTime, dayLabel, groupByDay, phraseChange, sourceLabel };
 }
 
 // Pure prompt/summary builders shared by every widget (ADR-0037 scope
@@ -2156,7 +2223,7 @@ if (typeof window !== "undefined") {
       (function () {
         const { bridge } = window.Unicorn;
         const { escapeHtml: esc } = window.Unicorn.markdown;
-        const { formatDateTime, formatRelativeTime } = window.Unicorn.format;
+        const { formatDateTime, formatRelativeTime, sourceLabel } = window.Unicorn.format;
         const { decomposeAssignmentPrompt, askStaffOpinionPrompt } = window.Unicorn.prompts;
 
         const root = document.getElementById("root");
@@ -2190,8 +2257,11 @@ if (typeof window !== "undefined") {
           return \`<span class="\${cls}">\${esc(state)}</span>\`;
         }
 
-        function itemRow(item) {
-          const when = formatRelativeTime(item.timestamp, new Date()) || "";
+        // \`suppressState\` hides this item's own state chip when the bucket
+        // header already shows it (an assignment bucket's state is the owning
+        // assessment's — repeating it on that same assessment row is noise).
+        function itemRow(item, { suppressState } = {}) {
+          const when = formatRelativeTime(item.timestamp, new Date(), undefined, true) || "";
           return \`
             <details class="item-row">
               <summary>
@@ -2201,7 +2271,7 @@ if (typeof window !== "undefined") {
                   <div class="u-wrap u-muted" style="font-size:12.5px;">
                     <span>\${esc(when)}</span>
                     \${item.staff ? '<span class="u-chip u-chip-accent">Staff</span>' : ""}
-                    \${item.state ? stateChip(item.state) : ""}
+                    \${item.state && !suppressState ? stateChip(item.state) : ""}
                   </div>
                 </div>
               </summary>
@@ -2235,7 +2305,11 @@ if (typeof window !== "undefined") {
               </div>
               \${due ? \`<div class="course-meta">\${due}</div>\` : ""}
               <div class="u-card" style="margin-top: var(--u-space-2); padding: var(--u-space-2) var(--u-space-3);">
-                \${bucket.items.map(itemRow).join("") || '<p class="u-muted">Nothing here yet.</p>'}
+                \${
+                  bucket.items
+                    .map((item) => itemRow(item, { suppressState: isAssignment && item.kind === "assessment" }))
+                    .join("") || '<p class="u-muted">Nothing here yet.</p>'
+                }
               </div>
               \${askActions}
             </section>
@@ -2249,7 +2323,7 @@ if (typeof window !== "undefined") {
                 <div class="u-card u-row" style="margin-bottom: var(--u-space-2);">
                   <div style="flex:1;">
                     <div class="item-title-line">\${esc(match.title)}</div>
-                    <div class="u-muted" style="font-size:12.5px;">\${esc(match.code)}\${match.term ? " · " + esc(match.term) : ""} · \${esc(match.source)}</div>
+                    <div class="u-muted" style="font-size:12.5px;">\${esc(match.code)}\${match.term ? " · " + esc(match.term) : ""} · \${esc(sourceLabel(match.source))}</div>
                   </div>
                   \${match.url ? \`<button type="button" class="u-quiet open-link" data-url="\${esc(match.url)}">Open</button>\` : ""}
                 </div>
@@ -2282,7 +2356,7 @@ if (typeof window !== "undefined") {
           }
 
           const sourcePills = data.sources
-            .map((source) => \`<span class="u-chip">\${esc(source)}</span>\`)
+            .map((source) => \`<span class="u-chip">\${esc(sourceLabel(source))}</span>\`)
             .join("");
 
           const buckets = data.buckets.map((bucket, index) => bucketSection(bucket, index)).join("") || '<p class="u-muted">No buckets yet.</p>';
@@ -2543,6 +2617,9 @@ button {
   border-radius: var(--u-radius-sm);
   padding: var(--u-space-2) var(--u-space-3);
   cursor: pointer;
+  /* A button's own label is one unit: it may sit on its own line inside a
+     wrapping row (.u-wrap), but it never breaks mid-word ("Discuss / this"). */
+  white-space: nowrap;
   transition: background-color 120ms ease, opacity 120ms ease;
 }
 button:hover {
@@ -3190,13 +3267,19 @@ const RELATIVE_UNITS = [
   ["minute", 60],
 ];
 
-function formatRelativeTime(iso, now, timezone) {
+// \`pastFacing\` is for fields that only ever record something that already
+// happened (createdAt, lastSyncAt, a ChangeEvent's \`at\`): a positive diff
+// there is clock skew between our clock and the reader's, not a real future
+// event, so it clamps to "now" instead of a nonsensical "in 10 hours".
+// Deadlines (dueAt) are genuinely future-facing and must never pass this.
+function formatRelativeTime(iso, now, timezone, pastFacing) {
   if (!iso) return null;
   const then = new Date(iso);
   if (Number.isNaN(then.getTime())) return null;
   const reference = now instanceof Date ? now : new Date();
   const diffSeconds = (then.getTime() - reference.getTime()) / 1000;
   const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+  if (pastFacing && diffSeconds > 0) return rtf.format(0, "second");
   for (const [unit, secondsInUnit] of RELATIVE_UNITS) {
     if (Math.abs(diffSeconds) >= secondsInUnit) {
       return rtf.format(Math.round(diffSeconds / secondsInUnit), unit);
@@ -3297,9 +3380,32 @@ function phraseChange(event, timezone) {
   }
 }
 
+// Human labels for the built-in source ids. Kept in sync by hand with
+// SOURCE_LABELS in src/mcp/door-repository.ts — that copy builds
+// SourceStatus.label server-side, this one labels the raw ids CourseView.sources
+// sends the client (door-contracts.ts is a fixed wire shape: string[], not
+// pre-labelled). Widget JS and the Worker never share a runtime, so this is
+// the one place every widget gets a source label from — never format one ad hoc.
+const SOURCE_LABELS = {
+  "campus-moodle": "Moodle",
+  "campus-ed": "Ed",
+  "campus-canvas": "Canvas",
+  gmail: "Gmail",
+};
+
+function sourceLabel(id) {
+  if (SOURCE_LABELS[id]) return SOURCE_LABELS[id];
+  return String(id ?? "")
+    .replace(/^campus-/, "")
+    .split(/[-_]/)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
 if (typeof window !== "undefined") {
   window.Unicorn = window.Unicorn || {};
-  window.Unicorn.format = { formatDateTime, formatRelativeTime, dayLabel, groupByDay, phraseChange };
+  window.Unicorn.format = { formatDateTime, formatRelativeTime, dayLabel, groupByDay, phraseChange, sourceLabel };
 }
 
 // Pure prompt/summary builders shared by every widget (ADR-0037 scope
@@ -3434,7 +3540,7 @@ if (typeof window !== "undefined") {
         }
 
         function eventLine(event) {
-          const when = formatRelativeTime(event.at, new Date()) || "";
+          const when = formatRelativeTime(event.at, new Date(), undefined, true) || "";
           const phrase = esc(phraseChange(event));
 
           if (event.type === "content.changed") {
@@ -3732,6 +3838,9 @@ button {
   border-radius: var(--u-radius-sm);
   padding: var(--u-space-2) var(--u-space-3);
   cursor: pointer;
+  /* A button's own label is one unit: it may sit on its own line inside a
+     wrapping row (.u-wrap), but it never breaks mid-word ("Discuss / this"). */
+  white-space: nowrap;
   transition: background-color 120ms ease, opacity 120ms ease;
 }
 button:hover {
@@ -4373,13 +4482,19 @@ const RELATIVE_UNITS = [
   ["minute", 60],
 ];
 
-function formatRelativeTime(iso, now, timezone) {
+// \`pastFacing\` is for fields that only ever record something that already
+// happened (createdAt, lastSyncAt, a ChangeEvent's \`at\`): a positive diff
+// there is clock skew between our clock and the reader's, not a real future
+// event, so it clamps to "now" instead of a nonsensical "in 10 hours".
+// Deadlines (dueAt) are genuinely future-facing and must never pass this.
+function formatRelativeTime(iso, now, timezone, pastFacing) {
   if (!iso) return null;
   const then = new Date(iso);
   if (Number.isNaN(then.getTime())) return null;
   const reference = now instanceof Date ? now : new Date();
   const diffSeconds = (then.getTime() - reference.getTime()) / 1000;
   const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+  if (pastFacing && diffSeconds > 0) return rtf.format(0, "second");
   for (const [unit, secondsInUnit] of RELATIVE_UNITS) {
     if (Math.abs(diffSeconds) >= secondsInUnit) {
       return rtf.format(Math.round(diffSeconds / secondsInUnit), unit);
@@ -4480,9 +4595,32 @@ function phraseChange(event, timezone) {
   }
 }
 
+// Human labels for the built-in source ids. Kept in sync by hand with
+// SOURCE_LABELS in src/mcp/door-repository.ts — that copy builds
+// SourceStatus.label server-side, this one labels the raw ids CourseView.sources
+// sends the client (door-contracts.ts is a fixed wire shape: string[], not
+// pre-labelled). Widget JS and the Worker never share a runtime, so this is
+// the one place every widget gets a source label from — never format one ad hoc.
+const SOURCE_LABELS = {
+  "campus-moodle": "Moodle",
+  "campus-ed": "Ed",
+  "campus-canvas": "Canvas",
+  gmail: "Gmail",
+};
+
+function sourceLabel(id) {
+  if (SOURCE_LABELS[id]) return SOURCE_LABELS[id];
+  return String(id ?? "")
+    .replace(/^campus-/, "")
+    .split(/[-_]/)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
 if (typeof window !== "undefined") {
   window.Unicorn = window.Unicorn || {};
-  window.Unicorn.format = { formatDateTime, formatRelativeTime, dayLabel, groupByDay, phraseChange };
+  window.Unicorn.format = { formatDateTime, formatRelativeTime, dayLabel, groupByDay, phraseChange, sourceLabel };
 }
 
 // Pure prompt/summary builders shared by every widget (ADR-0037 scope
@@ -4606,7 +4744,7 @@ if (typeof window !== "undefined") {
                     : ""
                 }
               </div>
-              <div class="plan-subject u-muted">\${esc(subjectLabel(plan))} · updated \${esc(formatRelativeTime(plan.updatedAt, new Date()) || "just now")}</div>
+              <div class="plan-subject u-muted">\${esc(subjectLabel(plan))} · updated \${esc(formatRelativeTime(plan.updatedAt, new Date(), undefined, true) || "just now")}</div>
               \${
                 total > 0
                   ? \`
@@ -4877,6 +5015,9 @@ button {
   border-radius: var(--u-radius-sm);
   padding: var(--u-space-2) var(--u-space-3);
   cursor: pointer;
+  /* A button's own label is one unit: it may sit on its own line inside a
+     wrapping row (.u-wrap), but it never breaks mid-word ("Discuss / this"). */
+  white-space: nowrap;
   transition: background-color 120ms ease, opacity 120ms ease;
 }
 button:hover {
@@ -5108,6 +5249,12 @@ input[type="checkbox"] {
       }
       .no-date-section {
         margin-top: var(--u-space-2);
+      }
+      /* "Plan around this" drops to its own line rather than shrinking
+         alongside the course/state chips at narrow widths. */
+      .deadline-actions {
+        flex-wrap: wrap;
+        row-gap: var(--u-space-2);
       }
       .no-date-section h3 {
         color: var(--u-text-muted);
@@ -5523,13 +5670,19 @@ const RELATIVE_UNITS = [
   ["minute", 60],
 ];
 
-function formatRelativeTime(iso, now, timezone) {
+// \`pastFacing\` is for fields that only ever record something that already
+// happened (createdAt, lastSyncAt, a ChangeEvent's \`at\`): a positive diff
+// there is clock skew between our clock and the reader's, not a real future
+// event, so it clamps to "now" instead of a nonsensical "in 10 hours".
+// Deadlines (dueAt) are genuinely future-facing and must never pass this.
+function formatRelativeTime(iso, now, timezone, pastFacing) {
   if (!iso) return null;
   const then = new Date(iso);
   if (Number.isNaN(then.getTime())) return null;
   const reference = now instanceof Date ? now : new Date();
   const diffSeconds = (then.getTime() - reference.getTime()) / 1000;
   const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+  if (pastFacing && diffSeconds > 0) return rtf.format(0, "second");
   for (const [unit, secondsInUnit] of RELATIVE_UNITS) {
     if (Math.abs(diffSeconds) >= secondsInUnit) {
       return rtf.format(Math.round(diffSeconds / secondsInUnit), unit);
@@ -5630,9 +5783,32 @@ function phraseChange(event, timezone) {
   }
 }
 
+// Human labels for the built-in source ids. Kept in sync by hand with
+// SOURCE_LABELS in src/mcp/door-repository.ts — that copy builds
+// SourceStatus.label server-side, this one labels the raw ids CourseView.sources
+// sends the client (door-contracts.ts is a fixed wire shape: string[], not
+// pre-labelled). Widget JS and the Worker never share a runtime, so this is
+// the one place every widget gets a source label from — never format one ad hoc.
+const SOURCE_LABELS = {
+  "campus-moodle": "Moodle",
+  "campus-ed": "Ed",
+  "campus-canvas": "Canvas",
+  gmail: "Gmail",
+};
+
+function sourceLabel(id) {
+  if (SOURCE_LABELS[id]) return SOURCE_LABELS[id];
+  return String(id ?? "")
+    .replace(/^campus-/, "")
+    .split(/[-_]/)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
 if (typeof window !== "undefined") {
   window.Unicorn = window.Unicorn || {};
-  window.Unicorn.format = { formatDateTime, formatRelativeTime, dayLabel, groupByDay, phraseChange };
+  window.Unicorn.format = { formatDateTime, formatRelativeTime, dayLabel, groupByDay, phraseChange, sourceLabel };
 }
 
 // Pure prompt/summary builders shared by every widget (ADR-0037 scope
@@ -5743,7 +5919,7 @@ if (typeof window !== "undefined") {
                 <span class="item-title-line">\${esc(item.title)}</span>
                 <span class="u-muted u-num" style="white-space:nowrap;">\${esc(time || "")}</span>
               </div>
-              <div class="u-between" style="margin-top:4px;">
+              <div class="u-between deadline-actions" style="margin-top:4px;">
                 <div class="u-wrap">
                   \${item.course ? \`<span class="u-chip">\${esc(item.course)}</span>\` : ""}
                   \${stateChip(item.state)}
@@ -6013,6 +6189,9 @@ button {
   border-radius: var(--u-radius-sm);
   padding: var(--u-space-2) var(--u-space-3);
   cursor: pointer;
+  /* A button's own label is one unit: it may sit on its own line inside a
+     wrapping row (.u-wrap), but it never breaks mid-word ("Discuss / this"). */
+  white-space: nowrap;
   transition: background-color 120ms ease, opacity 120ms ease;
 }
 button:hover {
@@ -6639,13 +6818,19 @@ const RELATIVE_UNITS = [
   ["minute", 60],
 ];
 
-function formatRelativeTime(iso, now, timezone) {
+// \`pastFacing\` is for fields that only ever record something that already
+// happened (createdAt, lastSyncAt, a ChangeEvent's \`at\`): a positive diff
+// there is clock skew between our clock and the reader's, not a real future
+// event, so it clamps to "now" instead of a nonsensical "in 10 hours".
+// Deadlines (dueAt) are genuinely future-facing and must never pass this.
+function formatRelativeTime(iso, now, timezone, pastFacing) {
   if (!iso) return null;
   const then = new Date(iso);
   if (Number.isNaN(then.getTime())) return null;
   const reference = now instanceof Date ? now : new Date();
   const diffSeconds = (then.getTime() - reference.getTime()) / 1000;
   const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+  if (pastFacing && diffSeconds > 0) return rtf.format(0, "second");
   for (const [unit, secondsInUnit] of RELATIVE_UNITS) {
     if (Math.abs(diffSeconds) >= secondsInUnit) {
       return rtf.format(Math.round(diffSeconds / secondsInUnit), unit);
@@ -6746,9 +6931,32 @@ function phraseChange(event, timezone) {
   }
 }
 
+// Human labels for the built-in source ids. Kept in sync by hand with
+// SOURCE_LABELS in src/mcp/door-repository.ts — that copy builds
+// SourceStatus.label server-side, this one labels the raw ids CourseView.sources
+// sends the client (door-contracts.ts is a fixed wire shape: string[], not
+// pre-labelled). Widget JS and the Worker never share a runtime, so this is
+// the one place every widget gets a source label from — never format one ad hoc.
+const SOURCE_LABELS = {
+  "campus-moodle": "Moodle",
+  "campus-ed": "Ed",
+  "campus-canvas": "Canvas",
+  gmail: "Gmail",
+};
+
+function sourceLabel(id) {
+  if (SOURCE_LABELS[id]) return SOURCE_LABELS[id];
+  return String(id ?? "")
+    .replace(/^campus-/, "")
+    .split(/[-_]/)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
 if (typeof window !== "undefined") {
   window.Unicorn = window.Unicorn || {};
-  window.Unicorn.format = { formatDateTime, formatRelativeTime, dayLabel, groupByDay, phraseChange };
+  window.Unicorn.format = { formatDateTime, formatRelativeTime, dayLabel, groupByDay, phraseChange, sourceLabel };
 }
 
 // Pure prompt/summary builders shared by every widget (ADR-0037 scope
@@ -6857,7 +7065,9 @@ if (typeof window !== "undefined") {
           const absolute = source.lastSyncAt
             ? formatDateTime(source.lastSyncAt, timezone, { dateStyle: "medium", timeStyle: "short" })
             : null;
-          const lastSync = source.lastSyncAt ? \`Synced \${esc(formatRelativeTime(source.lastSyncAt, now))}\` : "Never synced";
+          const lastSync = source.lastSyncAt
+            ? \`Synced \${esc(formatRelativeTime(source.lastSyncAt, now, undefined, true))}\`
+            : "Never synced";
           return \`
             <div class="source-row">
               <span class="u-dot \${state.dot}" title="\${esc(state.label)}"></span>
@@ -6885,7 +7095,7 @@ if (typeof window !== "undefined") {
 
           const rows = data.sources.map((source) => sourceRow(source, now, timezone)).join("");
           const schedulerText = data.scheduler.running
-            ? \`Running — last cycle \${esc(formatRelativeTime(data.scheduler.lastCycleAt, now) || "never")}\`
+            ? \`Running — last cycle \${esc(formatRelativeTime(data.scheduler.lastCycleAt, now, undefined, true) || "never")}\`
             : "Not running";
 
           root.innerHTML = \`

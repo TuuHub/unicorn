@@ -53,6 +53,12 @@
       .no-date-section {
         margin-top: var(--u-space-2);
       }
+      /* "Plan around this" drops to its own line rather than shrinking
+         alongside the course/state chips at narrow widths. */
+      .deadline-actions {
+        flex-wrap: wrap;
+        row-gap: var(--u-space-2);
+      }
       .no-date-section h3 {
         color: var(--u-text-muted);
         font-size: 12.5px;
@@ -95,7 +101,7 @@
                 <span class="item-title-line">${esc(item.title)}</span>
                 <span class="u-muted u-num" style="white-space:nowrap;">${esc(time || "")}</span>
               </div>
-              <div class="u-between" style="margin-top:4px;">
+              <div class="u-between deadline-actions" style="margin-top:4px;">
                 <div class="u-wrap">
                   ${item.course ? `<span class="u-chip">${esc(item.course)}</span>` : ""}
                   ${stateChip(item.state)}

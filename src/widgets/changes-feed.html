@@ -120,7 +120,7 @@
         }
 
         function eventLine(event) {
-          const when = formatRelativeTime(event.at, new Date()) || "";
+          const when = formatRelativeTime(event.at, new Date(), undefined, true) || "";
           const phrase = esc(phraseChange(event));
 
           if (event.type === "content.changed") {

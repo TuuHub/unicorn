@@ -103,7 +103,7 @@
                     : ""
                 }
               </div>
-              <div class="plan-subject u-muted">${esc(subjectLabel(plan))} · updated ${esc(formatRelativeTime(plan.updatedAt, new Date()) || "just now")}</div>
+              <div class="plan-subject u-muted">${esc(subjectLabel(plan))} · updated ${esc(formatRelativeTime(plan.updatedAt, new Date(), undefined, true) || "just now")}</div>
               ${
                 total > 0
                   ? `

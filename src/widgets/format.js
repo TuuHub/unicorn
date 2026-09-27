@@ -22,13 +22,19 @@ const RELATIVE_UNITS = [
   ["minute", 60],
 ];
 
-export function formatRelativeTime(iso, now, timezone) {
+// `pastFacing` is for fields that only ever record something that already
+// happened (createdAt, lastSyncAt, a ChangeEvent's `at`): a positive diff
+// there is clock skew between our clock and the reader's, not a real future
+// event, so it clamps to "now" instead of a nonsensical "in 10 hours".
+// Deadlines (dueAt) are genuinely future-facing and must never pass this.
+export function formatRelativeTime(iso, now, timezone, pastFacing) {
   if (!iso) return null;
   const then = new Date(iso);
   if (Number.isNaN(then.getTime())) return null;
   const reference = now instanceof Date ? now : new Date();
   const diffSeconds = (then.getTime() - reference.getTime()) / 1000;
   const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+  if (pastFacing && diffSeconds > 0) return rtf.format(0, "second");
   for (const [unit, secondsInUnit] of RELATIVE_UNITS) {
     if (Math.abs(diffSeconds) >= secondsInUnit) {
       return rtf.format(Math.round(diffSeconds / secondsInUnit), unit);
@@ -129,7 +135,30 @@ export function phraseChange(event, timezone) {
   }
 }
 
+// Human labels for the built-in source ids. Kept in sync by hand with
+// SOURCE_LABELS in src/mcp/door-repository.ts — that copy builds
+// SourceStatus.label server-side, this one labels the raw ids CourseView.sources
+// sends the client (door-contracts.ts is a fixed wire shape: string[], not
+// pre-labelled). Widget JS and the Worker never share a runtime, so this is
+// the one place every widget gets a source label from — never format one ad hoc.
+const SOURCE_LABELS = {
+  "campus-moodle": "Moodle",
+  "campus-ed": "Ed",
+  "campus-canvas": "Canvas",
+  gmail: "Gmail",
+};
+
+export function sourceLabel(id) {
+  if (SOURCE_LABELS[id]) return SOURCE_LABELS[id];
+  return String(id ?? "")
+    .replace(/^campus-/, "")
+    .split(/[-_]/)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
 if (typeof window !== "undefined") {
   window.Unicorn = window.Unicorn || {};
-  window.Unicorn.format = { formatDateTime, formatRelativeTime, dayLabel, groupByDay, phraseChange };
+  window.Unicorn.format = { formatDateTime, formatRelativeTime, dayLabel, groupByDay, phraseChange, sourceLabel };
 }

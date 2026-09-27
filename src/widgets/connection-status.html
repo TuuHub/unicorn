@@ -73,7 +73,9 @@
           const absolute = source.lastSyncAt
             ? formatDateTime(source.lastSyncAt, timezone, { dateStyle: "medium", timeStyle: "short" })
             : null;
-          const lastSync = source.lastSyncAt ? `Synced ${esc(formatRelativeTime(source.lastSyncAt, now))}` : "Never synced";
+          const lastSync = source.lastSyncAt
+            ? `Synced ${esc(formatRelativeTime(source.lastSyncAt, now, undefined, true))}`
+            : "Never synced";
           return `
             <div class="source-row">
               <span class="u-dot ${state.dot}" title="${esc(state.label)}"></span>
@@ -101,7 +103,7 @@
 
           const rows = data.sources.map((source) => sourceRow(source, now, timezone)).join("");
           const schedulerText = data.scheduler.running
-            ? `Running — last cycle ${esc(formatRelativeTime(data.scheduler.lastCycleAt, now) || "never")}`
+            ? `Running — last cycle ${esc(formatRelativeTime(data.scheduler.lastCycleAt, now, undefined, true) || "never")}`
             : "Not running";
 
           root.innerHTML = `

@@ -171,6 +171,9 @@ button {
   border-radius: var(--u-radius-sm);
   padding: var(--u-space-2) var(--u-space-3);
   cursor: pointer;
+  /* A button's own label is one unit: it may sit on its own line inside a
+     wrapping row (.u-wrap), but it never breaks mid-word ("Discuss / this"). */
+  white-space: nowrap;
   transition: background-color 120ms ease, opacity 120ms ease;
 }
 button:hover {
