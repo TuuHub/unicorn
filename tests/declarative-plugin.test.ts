@@ -675,6 +675,45 @@ describe("DeclarativePlugin.pull (response size limit)", () => {
   });
 });
 
+describe("DeclarativePlugin.pull (secret-in-URL never reaches a thrown error message)", () => {
+  // auth.type "query" puts the plugin secret straight into the request URL's
+  // query string. src/runtime/cycle.ts's scheduler logs any pull failure's
+  // error.message verbatim as observability data, so a network-level fetch
+  // failure (as opposed to an HTTP error status, which throws a fixed
+  // message already) must never be allowed to carry that URL — and thus the
+  // secret — out through Error.message.
+  it("never leaks the query-string secret through a network-level fetch failure", async () => {
+    const manifest: PluginManifest = {
+      version: 1,
+      id: "query-auth-feed",
+      name: "Query auth feed",
+      format: "json",
+      url: "https://api.example.com/items",
+      auth: { type: "query", name: "api_key", binding: "PLUGIN_SECRET_FEED" },
+      mapping: { id: { path: "id" }, kind: { value: "x" }, title: { path: "id" }, timestamp: { value: "2026-01-01T00:00:00.000Z" } },
+    };
+    const secret = "s3cr3t-token-should-never-appear-in-logs";
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async (input) => {
+      // Simulate a fetch implementation that echoes the request URL (with the
+      // secret still in its query string) into a thrown error's message —
+      // exactly the shape of error a DNS/TLS/connection failure can take.
+      throw new TypeError(`fetch failed: ${String(input)}`);
+    });
+
+    await expect(new DeclarativePlugin(manifest, { PLUGIN_SECRET_FEED: secret }, fetcher).pull()).rejects.toThrow(
+      "Declarative plugin query-auth-feed request failed.",
+    );
+    // Belt and suspenders: assert the secret is not merely absent from the
+    // *asserted* message above, but from anything pull() could have thrown.
+    try {
+      await new DeclarativePlugin(manifest, { PLUGIN_SECRET_FEED: secret }, fetcher).pull();
+      expect.unreachable();
+    } catch (error) {
+      expect(String((error as Error).message)).not.toContain(secret);
+    }
+  });
+});
+
 describe("PluginManifest schema (pagination & fan-out)", () => {
   const baseMapping = { id: { path: "id" }, kind: { value: "x" }, title: { path: "t" }, timestamp: { path: "ts" } };
 

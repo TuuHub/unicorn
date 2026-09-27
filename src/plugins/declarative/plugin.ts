@@ -336,7 +336,7 @@ export class DeclarativePlugin implements Plugin {
       const url = new URL(manifest.url);
       const headers: Record<string, string> = { Accept: "application/rss+xml" };
       this.applyHttpAuth(url, headers, manifest.auth);
-      const response = await this.fetcher(url, { headers, redirect: "manual", signal: AbortSignal.timeout(15_000) });
+      const response = await this.safeFetch(url, { headers, redirect: "manual", signal: AbortSignal.timeout(15_000) });
       if (!response.ok) {
         throw new Error(`Declarative plugin ${this.id} returned HTTP ${response.status}.`);
       }
@@ -396,7 +396,7 @@ export class DeclarativePlugin implements Plugin {
       const headers: Record<string, string> = { Accept: "application/json" };
       this.applyHttpAuth(url, headers, auth);
       budget.consume();
-      const response = await this.fetcher(url, { headers, redirect: "manual", signal: AbortSignal.timeout(15_000) });
+      const response = await this.safeFetch(url, { headers, redirect: "manual", signal: AbortSignal.timeout(15_000) });
       if (!response.ok) {
         throw new Error(`Declarative plugin ${this.id} returned HTTP ${response.status}.`);
       }
@@ -500,6 +500,24 @@ export class DeclarativePlugin implements Plugin {
       return JSON.parse(textBlock.text);
     } catch {
       throw new DeclarativeMcpError("mcp_bad_payload", `Declarative plugin ${this.id} MCP tool ${tool} returned invalid JSON.`);
+    }
+  }
+
+  // Wraps this.fetcher so a network-level failure (DNS, TLS, timeout, a
+  // connection reset, ...) can never carry the request URL out through
+  // Error.message. applyHttpAuth's "query" auth type puts the plugin's
+  // secret directly in that URL's query string, and the scheduler's alarm()
+  // handler (src/runtime/cycle.ts, ADR-0035) logs any pull failure's
+  // error.message verbatim as low-sensitivity observability data — a fetch
+  // implementation that happens to echo the request URL in a thrown error
+  // would otherwise leak the secret into those logs. HTTP-level failures
+  // (response.ok false) are unaffected: those already throw a fixed,
+  // URL-free message right after this call.
+  private async safeFetch(url: URL, init: RequestInit): Promise<Response> {
+    try {
+      return await this.fetcher(url, init);
+    } catch {
+      throw new Error(`Declarative plugin ${this.id} request failed.`);
     }
   }
 
