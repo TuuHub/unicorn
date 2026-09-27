@@ -777,3 +777,112 @@ Every tool result also carries its full text content; the widget is additive and
 - The campus plugin is Ed + Moodle + Canvas; Moodle stays the hard one (Okta), so a Canvas + Ed student onboards with two tokens and no browser session push.
 - Canvas is marketed only after one real Canvas + Ed student has installed it.
 - First external users are named friends, not a post; the post comes after three successful installs.
+
+---
+
+# Amendments — 2026-09-27
+
+Six deviations and additions made while building ADR-0034–0038, recorded as their own ADRs rather than silently edited into the originals — the trail is the story (ADR-0034's closing line). Each below either extends its parent ADR's decision or documents where the shipped code took a different path, with the exact behaviour verified against source.
+
+## ADR-0039 — Source credentials: AES-GCM in D1, keyed by ADMIN_TOKEN, env secrets take precedence
+
+**Status:** Accepted (2026-09-27; amends ADR-0038's onboarding-by-source and ADR-0013/ADR-0022's secrets model)
+
+**Context.** ADR-0038 says a pasted `/settings` token is "stored as a `PLUGIN_SECRET_*`, never through a model" — but ADR-0022 already established that the Worker cannot mutate its own Cloudflare Secrets. A token pasted into a browser form has nowhere in Secrets to land. The wave2/sources branch (`src/sources.ts`, `migrations/0014_source_credentials.sql`) resolves this the only way available: application state in the Worker's own D1.
+
+**Decision.** A pasted credential is AES-256-GCM encrypted and stored in a new `source_credentials` table (`source_id`, `ciphertext`, `iv`, `updated_at`), never plaintext, never rendered back. The encryption key is never itself stored: it is derived on every use via HKDF-SHA256 (WebCrypto) from `ADMIN_TOKEN`, with a fixed, documented salt and info string (`unicorn/source-credentials/v1/salt` / `.../aes-256-gcm` — these don't need to be secret, only stable, so re-derivation always yields the same key bytes). A fresh random 12-byte IV is drawn per encryption and stored alongside the ciphertext.
+
+Precedence is env-first: `resolveEdCredentials` / `resolveMoodleCredentials` / `resolveCanvasCredentials` (`src/sources.ts`) each call a `secretWins(envValue, stored)` helper that returns the env value whenever it's non-empty, falling through to the decrypted D1 value only when no Worker Secret is set. An existing production deploy with `ED_API_TOKEN` / `MOODLE_SESSION` / `PLUGIN_SECRET_CANVAS_TOKEN` already set is untouched by this feature — nothing pasted into `/settings` can override an operator-set secret.
+
+**Consequence, verified in code.** `decryptFields` never throws; on any failure — including a wrong key after `ADMIN_TOKEN` rotation — it returns `null`, and `D1SourceCredentialStore.get` turns that into `{ status: "invalid" }` rather than `{ status: "ok" }` or a crash. `buildSourceStatuses` surfaces this as `needsReentry: true` on the source's `/settings` card. So: **rotating `ADMIN_TOKEN` makes every stored source credential permanently undecryptable** — not corrupted, not recoverable, genuinely a different key — and the student must re-paste each one. This is a real operational cost of rotating the admin password that ADR-0038 does not mention; document it wherever `ADMIN_TOKEN` rotation is discussed (see docs/UPGRADING.md).
+
+**Consequences.**
+- ADR-0038's "stored as a `PLUGIN_SECRET_*`" line is superseded by this ADR for anything entered through `/settings`; a `PLUGIN_SECRET_*` set via `wrangler secret put` still works exactly as ADR-0033 describes and always wins.
+- Migration `0014_source_credentials.sql` is additive (one new table); no existing data is touched.
+- `ADMIN_TOKEN` now has a second responsibility beyond authentication: it is key material. A password manager or secret rotation policy that rotates it on a timer must budget for re-entering every source credential afterward.
+
+---
+
+## ADR-0040 — Door: `upcoming` added past ADR-0035's tool list
+
+**Status:** Accepted (2026-09-27; extends ADR-0035)
+
+**Context.** ADR-0035's door table has no dedicated "what's due" tool — `search_items` and `changes_since` cover search and the change feed, but "what's due in the next two weeks across every course" needs either a `course()` call per course or a scan. Every playbook that plans time (`weekly-plan`, `decompose-assignment`) needs exactly this query, more than once, before any planning logic runs.
+
+**Decision.** The door gained a fourteenth tool, `upcoming({ days = 14, course?, includeOverdue = false })` → items with a deadline in the window, ordered by due date, with an `includeOverdue` flag reaching back 90 days for missed deadlines. It renders through the same `deadlineTimeline` widget as `search_items` (shared `ItemList` shape) and shares its `Next:` suggestions with the playbook data-fetchers in `door.ts` (`weekly-plan` and `decompose-assignment` both call `repo.upcoming` directly rather than re-deriving the window from `search_items`).
+
+**Consequences.**
+- The door is 14 fixed tools, not ADR-0035's twelve-ish count (`get_briefs`, `ack_briefs`, `write_brief`, `changes_since`, `course`, `life`, `search_items`, `upcoming`, `get_plan`, `save_plan`, `remember`, `label_items`, `status`, `run_playbook`).
+- Every doc that enumerates door tools (README, ARCHITECTURE §7, `docs/CONNECTORS.md` where relevant) must list `upcoming` or it silently undercounts.
+
+---
+
+## ADR-0041 — Widgets: a model-collaboration loop, not a dead end
+
+**Status:** Accepted (2026-09-27; extends ADR-0037)
+
+**Context.** ADR-0037 specified six static widgets with an action model limited to calling a door tool. Verified against the MCP Apps extension spec (SEP-1865, `specification/2026-01-26/apps.mdx`, read 2026-09-26) and ChatGPT's older, non-MCP-Apps host, a widget can do two more things that make it worth more than a card: hand the model a message, and tell the model what a completed action changed — without waiting for the user to type anything.
+
+**Decision.** `src/widgets/bridge.js` implements both, gated by declared host capability rather than by guessing which host is running:
+
+- **`ui/message` / `sendFollowUpMessage` handoff.** A widget button ("Discuss this", "Break this down") calls `ui/message` with a user-role text message, so the host relays it to the model exactly as if the user had typed it. ChatGPT's pre-extension Apps SDK never speaks this postMessage protocol at all — it injects `window.openai.sendFollowUpMessage` as a global instead — so `sendMessage()` checks for that function first and falls back to `ui/message` only when it's absent.
+- **`ui/update-model-context` advisory updates.** After a widget action succeeds against unicorn's own state (e.g. checking off a plan item calls `save_plan`), the widget calls `ui/update-model-context` with a one-line factual summary. This is advisory only: it never expects or waits for a reply, and a host that rejects or doesn't support the call has the failure swallowed — the widget's own action already succeeded, so a failed advisory update must never present as an error.
+- **Capability discovery, not brand detection.** Both calls are gated behind `hostCapabilities.message` / `hostCapabilities.updateModelContext` from the `ui/initialize` handshake result (`detectCapabilities()` in `bridge.js`); `window.openai.sendFollowUpMessage`'s mere presence also counts as message support. A host that declares neither capability gets the corresponding button hidden entirely — never rendered and disabled, never a click that silently does nothing.
+- **A consistent tool contract underlies this**: every door tool's text output ends with a deterministic `Next:` line (`nextLine()` in `door.ts`) naming concrete follow-up calls, and every tool error returns both a text block (`Error (code): message\nNext: hint`) and `structuredContent: { error: { code, message, hint } }` (`errorResult()` in `door.ts`; the same `{code, message, hint}` shape is used by the user-tool guard's `ToolError`). A widget's `callTool()` wrapper and a client model parsing raw tool output both read the same shape.
+
+**Consequences.**
+- A widget is not required to degrade to "read-only card" on a capable host — it can genuinely continue the conversation.
+- Capability gating means the same widget HTML ships to every host; there is no per-host build.
+- The `Next:`/error-shape contract is now load-bearing for widgets as well as for text-only clients — changing it is a breaking change on two fronts, not one, exactly as door-contracts.ts's header comment already warns for `structuredContent`.
+
+---
+
+## ADR-0042 — User-tool SQL guard: hardened against comma-joins, wrap-escaping, and unbounded joins
+
+**Status:** Accepted (2026-09-27; amends ADR-0035's user-defined tools)
+
+**Context.** ADR-0035's guard description ("`SELECT`/`WITH` only, one statement, bound parameters, view-only access, forced `LIMIT 200`") describes the policy, not the implementation's adversarial coverage. Building it against actual adversarial SQL (not just well-formed mistakes) surfaced three gaps a naive token-after-keyword guard leaves open.
+
+**Decision.** `src/tools/user-tools.ts`'s `validateSql` is a hand-rolled tokenizer (comments and string/quoted-identifier literals are stripped and recognized before any keyword check runs — the exact place naive regex guards get smuggled past) with four hardening passes past the original policy:
+
+1. **Comma-joins are walked in full.** `FROM v_items, oauth_tokens` names a second table with no `FROM`/`JOIN` keyword in front of it. `validateFromList`'s loop walks the *entire* comma-separated reference list every `FROM`/`JOIN` introduces (`target [[AS] alias] (, target [[AS] alias])*`), so every named table gets the same allowed-view/CTE check, not just the first one.
+2. **A view-reference cap** (`MAX_VIEW_REFERENCES = 6`) bounds how many times one statement may reference a view or CTE. `v_items` computes two correlated subqueries per row (`due_at`, `state`); an unbounded comma/cross join multiplies that cost combinatorially as a cartesian product *before* the outer `LIMIT 200` ever trims the output, so the cap exists independently of the row limit.
+3. **The `LIMIT 200` wrap can't be escaped by parens or comments.** `wrapSql` splices the tool's SQL into `SELECT * FROM (<sql>) LIMIT 200`. A stray unmatched `)` closes that wrapper's own `(` early, which can turn the rest of `<sql>` — typically ending in a `--` line comment with no trailing newline — into text that swallows the wrapper's real `) LIMIT 200`, executing with whatever limit (or none) the attacker wrote. A paren-depth counter that must never go negative and must end at exactly zero closes this off structurally, independent of which token would otherwise carry the escape.
+4. **`EXPLAIN` runs against the wrapped SQL at definition time**, with dummy bind values typed from the declared `inputSchema` (never executed against real data). A tool whose SQL is well-formed by the tokenizer but references a non-existent column, or is otherwise invalid, fails at `define_tool` time with SQLite's own error message quoted back — not at first call time.
+
+Unchanged from the original policy and still enforced: `SELECT`/`WITH` only as the first token; no anonymous `?` parameters (named `:param` only, and every one must be declared in `inputSchema`); a forbidden-keyword list (`insert`, `update`, `delete`, `drop`, `pragma`, …) checked as bare tokens outside string literals; `sqlite_*` identifiers forbidden whether quoted or not; `load_extension(...)` and `pragma_*(...)` table-valued function calls forbidden; schema-qualified (`schema.table`) and table-valued-function FROM/JOIN targets forbidden.
+
+**Consequences.**
+- The guard's adversarial coverage is now proportionate to what it protects: a single-user D1 database reachable by any door client, including a stolen OAuth token scoped to `memory`.
+- `MAX_VIEW_REFERENCES` is a genuine usability limit, not just a security one — a tool needing more than six view/CTE references is asked to narrow itself, per the guard's own error hint.
+- Every guard rejection quotes the offending SQL fragment and states the fix, so a client model can repair its own SQL in one retry without a human in the loop.
+
+---
+
+## ADR-0043 — OAuth: Client ID Metadata Documents via global_fetch_strictly_public
+
+**Status:** Accepted (2026-09-27; extends ADR-0035's OAuth authorization server)
+
+**Context.** ADR-0035 specified dynamic client registration (DCR) as the way Claude and ChatGPT add unicorn as a connector. MCP's 2025-11-25 authorization update also supports Client ID Metadata Documents (CIMD): a client can use an `https://` URL as its own `client_id`, and the authorization server fetches that URL for the client's metadata instead of requiring a `/register` round trip. `@cloudflare/workers-oauth-provider` supports this behind an opt-in flag, but fetching an attacker- or client-supplied URL from inside the Worker is exactly the shape of a server-side-request-forgery risk (a `client_id` pointed at `http://169.254.169.254/...` or a private RFC 1918 address).
+
+**Decision.** CIMD is enabled (`clientIdMetadataDocumentEnabled: true` in `createOAuthProvider`, `src/oauth-server.ts`), gated on the Worker-level `global_fetch_strictly_public` compatibility flag (`wrangler.jsonc`), which Cloudflare enforces at the fetch layer: every outbound `fetch()` from this Worker must resolve to a public address, never a private or loopback one, for any request the Worker makes — not just the CIMD metadata fetch. That makes it double as a baseline SSRF guard for every Tier-1 declarative manifest plugin's fetch (ADR-0017), which was otherwise one attacker-authored manifest URL away from probing internal addresses from Cloudflare's network.
+
+**Consequences.**
+- A client can add unicorn with an `https://` `client_id` and no registration step, alongside DCR (still on, capped at `MAX_REGISTERED_CLIENTS = 20`) and the static `MCP_TOKEN` bearer.
+- The SSRF guard is Worker-wide and unconditional, not opt-in per plugin — a future manifest author gets it for free and cannot turn it off from a manifest.
+- `compatibility_date` and this flag together are now load-bearing for both OAuth and plugin security; bumping the compatibility date in a future upgrade must not silently drop `global_fetch_strictly_public` from `compatibility_flags`.
+
+---
+
+## ADR-0044 — Injected clock: digest and upcoming bind `now`, never `julianday('now')`
+
+**Status:** Accepted (2026-09-27; a testing/determinism convention, not a product decision)
+
+**Context.** SQLite's `julianday('now')` reads the real wall clock inside the query itself, which makes any query using it untestable with a fixed date and non-reproducible across retries within the same logical cycle (two calls a millisecond apart can disagree on "now").
+
+**Decision.** Every query that needs "now" — the daily digest's 7-day due-soon window (`src/digest.ts`'s `loadDigestSections`) and the door's `upcoming` tool (`src/mcp/door-repository.ts`) — takes `now: Date` as an explicit parameter from the caller (`deps.now ? deps.now() : new Date()` in `door.ts`; `runDailyDigest`'s caller in `runtime/cycle.ts`) and binds it into the SQL (`julianday(?)` against the bound ISO string), never calling SQLite's own `julianday('now')`.
+
+**Consequences.**
+- Every clock-dependent query is deterministic and unit-testable with a fixed `now`, and every call within one cycle agrees on what "now" means.
+- `DoorDeps.now` and the digest's `now` parameter are the one seam to fake in a test; there is no second, hidden clock inside the SQL to also account for.
+- Production behaviour is unchanged — `deps.now ?? (() => new Date())` still reads the real clock when no override is supplied.
