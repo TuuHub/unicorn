@@ -119,6 +119,11 @@
           return typeof value === "string" ? value : JSON.stringify(value, null, 2);
         }
 
+        // phraseChange() already folds event.title into its phrasing for these
+        // types (e.g. "New: <title>", "New staff notice: <title>") — appending
+        // the title again below would show it twice.
+        const TITLE_IN_PHRASE = new Set(["notice.posted", "item.added", "item.archived", "item.restored"]);
+
         function eventLine(event) {
           const when = formatRelativeTime(event.at, new Date(), undefined, true) || "";
           const phrase = esc(phraseChange(event));
@@ -142,7 +147,7 @@
           return `
             <div class="event-line">
               ${glyph(event.type)}
-              <span style="flex:1;">${phrase}${event.type !== "notice.posted" ? ` — <span class="item-title-line">${esc(event.title)}</span>` : ""}</span>
+              <span style="flex:1;">${phrase}${TITLE_IN_PHRASE.has(event.type) ? "" : ` — <span class="item-title-line">${esc(event.title)}</span>`}</span>
               <span class="u-muted" style="white-space:nowrap;">${esc(when)}</span>
             </div>
           `;
