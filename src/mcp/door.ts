@@ -220,7 +220,8 @@ export async function createDoorMcpServer(deps: DoorDeps): Promise<McpServer> {
       _meta: widgetToolMeta("deadlineTimeline"),
     },
     async ({ days, course, includeOverdue }) => {
-      const items = await deps.repo.upcoming({ days, course, includeOverdue });
+      const now = deps.now ? deps.now() : new Date();
+      const items = await deps.repo.upcoming({ days, course, includeOverdue, now });
       const tz = await timezoneOf(deps);
       const list: ItemList = { query: null, items };
       return toolResult(list, renderItemList(items, tz, `Nothing due in the next ${days} days.`, upcomingNextSuggestions(items)));
@@ -692,12 +693,15 @@ async function playbookData(name: PlaybookName, repo: DoorRepository, briefs: Br
   switch (name) {
     case "weekly-plan": {
       const isoWeek = isoWeekOf(now);
-      const [items, plan] = await Promise.all([repo.upcoming({ days: 14, includeOverdue: false }), repo.getPlan("weekly", isoWeek)]);
+      const [items, plan] = await Promise.all([
+        repo.upcoming({ days: 14, includeOverdue: false, now }),
+        repo.getPlan("weekly", isoWeek),
+      ]);
       const courses = [...new Set(items.map((item) => item.course).filter((code): code is string => code !== null))].sort();
       return record({ isoWeek, upcoming: items, courses, plan });
     }
     case "decompose-assignment": {
-      const items = (await repo.upcoming({ days: 21, includeOverdue: false })).filter((item) => ASSESSMENT_KINDS.has(item.kind));
+      const items = (await repo.upcoming({ days: 21, includeOverdue: false, now })).filter((item) => ASSESSMENT_KINDS.has(item.kind));
       const planned = await repo.plannedSubjects("assignment", items.map(subjectOf));
       const candidates = items.filter((item) => !planned.has(subjectOf(item)));
       return record({ candidates });

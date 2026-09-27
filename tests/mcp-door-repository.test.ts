@@ -210,12 +210,36 @@ describe("D1DoorRepository.upcoming", () => {
   it("widens the window to 90 days back only when includeOverdue is set", async () => {
     const { db, calls } = fakeDb([{ match: "FROM items i", rows: [] }]);
     const repo = new D1DoorRepository(db);
+    const now = new Date("2026-03-15T10:00:00.000Z");
+    const ninetyDaysBack = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000).toISOString();
 
-    await repo.upcoming({ days: 7, includeOverdue: true });
-    await repo.upcoming({ days: 7, includeOverdue: false });
+    await repo.upcoming({ days: 7, includeOverdue: true, now });
+    await repo.upcoming({ days: 7, includeOverdue: false, now });
 
-    expect(calls[0]!.sql).toContain("-90 days");
-    expect(calls[1]!.sql).not.toContain("-90 days");
+    expect(calls[0]!.values).toContain(ninetyDaysBack);
+    expect(calls[1]!.values).not.toContain(ninetyDaysBack);
+    expect(calls[1]!.values).toContain(now.toISOString()); // starts at `now`, not 90 days back
+  });
+
+  it("windows off the injected `now`, not the real wall clock", async () => {
+    const { db, calls } = fakeDb([{ match: "FROM items i", rows: [] }]);
+    const repo = new D1DoorRepository(db);
+    const now = new Date("2020-01-01T00:00:00.000Z"); // far from the real system clock
+
+    await repo.upcoming({ days: 5, includeOverdue: false, now });
+
+    expect(calls[0]!.values).toEqual([now.toISOString(), new Date(now.getTime() + 5 * 24 * 60 * 60 * 1000).toISOString()]);
+  });
+
+  it("defaults `now` to the real clock when the caller omits it", async () => {
+    const { db, calls } = fakeDb([{ match: "FROM items i", rows: [] }]);
+    const repo = new D1DoorRepository(db);
+    const before = Date.now();
+
+    await repo.upcoming({ days: 1, includeOverdue: false });
+
+    const [windowStartIso] = calls[0]!.values as string[];
+    expect(new Date(windowStartIso).getTime()).toBeGreaterThanOrEqual(before);
   });
 });
 
