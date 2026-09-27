@@ -19,7 +19,7 @@ Terms as we use them in this project. When code and this file disagree, fix one 
 - **Facet** — An optional typed structure on an Item (`course-identity`, `deadline`, `thread`, `author`, …). Open vocabulary. (ADR-0016)
 - **Capability / primitive** — A capability binds one facet field to one of five behavior primitives: `temporal`, `state`, `relation`, `actor`, `scalar`. New capabilities need no kernel change. (ADR-0019, ADR-0020)
 - **course-identity** — The facet that names a course: `code`, `term`, `title`. `term` distinguishes offerings of the same code. (ADR-0036)
-- **Course resolver** — The ladder that answers "which Items are this course": confirmed relation → normalised code (+ term) → nothing automatic. ADR-0036 specifies a `suggest_links` admin tool for fuzzy candidates beyond that; it is **not implemented** — an item the resolver can't place comes back `unlabeled`. Ambiguity is returned, never guessed. (ADR-0036)
+- **Course resolver** — The ladder that answers "which Items are this course": confirmed relation → normalised code (+ term) → nothing automatic. An item the resolver can't place comes back `unlabeled` for harness triage (`label_items`); `suggest_links` was dropped (ADR-0045). Ambiguity is returned, never guessed. (ADR-0036)
 - **Relation** — A confirmed link between two Items across sources (`same-course`), written by `link_items`. The first rung of the resolver. (ADR-0005, ADR-0036)
 - **Ingestion / cycle** — The hourly scheduler-driven pull: fetch, normalize, diff, events, structural labels, daily digest, retention. LLM-free end to end. (ADR-0021, ADR-0034)
 - **keep-alive** — A cycle step that loads Moodle `/my/` to keep the Okta session warm and derive a fresh `sesskey`. (ADR-0003)

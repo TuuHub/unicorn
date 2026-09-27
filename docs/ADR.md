@@ -886,3 +886,18 @@ Unchanged from the original policy and still enforced: `SELECT`/`WITH` only as t
 - Every clock-dependent query is deterministic and unit-testable with a fixed `now`, and every call within one cycle agrees on what "now" means.
 - `DoorDeps.now` and the digest's `now` parameter are the one seam to fake in a test; there is no second, hidden clock inside the SQL to also account for.
 - Production behaviour is unchanged — `deps.now ?? (() => new Date())` still reads the real clock when no override is supplied.
+
+## ADR-0045 — `add_source` and `suggest_links` dropped; the user's local date is the unit of time
+
+**Status:** Accepted (2026-09-27; supersedes the `add_source` clause of ADR-0035 and the `suggest_links` clause of ADR-0036)
+
+**Context.** ADR-0035 listed an `add_source` admin tool and ADR-0036 a `suggest_links` tool for fuzzy course-link candidates. Neither was built. Two other mechanisms shipped that already cover them: the `/settings` source form (ADR-0038, ADR-0039), and harness-side triage through `label_items` (ADR-0036). Separately, the end-to-end check found two places that used the UTC date where the user means their local one.
+
+**Decision.**
+- Drop `add_source`. Sources are onboarded in `/settings` or with `npm run setup`. A tool that accepts credentials over MCP would widen the surface for no gain.
+- Drop `suggest_links`. When the resolver can't place an item, it comes back `unlabeled`, and the `triage` playbook has the user's model file it with `label_items` (`labeled_by = client`). That model already sees titles and bodies, so a server-side fuzzy candidate list would only re-derive what it knows. `link_items` stays on `/mcp/admin` for confirmed cross-source course relations.
+- Any user-facing day or week is computed in `settings.timezone`, never taken from the UTC date. This covers the digest's due times (`formatDue` in `src/digest.ts`) and the `weekly-plan` ISO week (`isoWeekOf` in `src/mcp/door.ts`). A Melbourne-midnight deadline is 13:00Z the previous day, and a Monday-morning run is still Sunday in UTC.
+
+**Consequences.**
+- The admin surface stays small, and the course resolver never guesses. Where a fuzzy match might have helped, the item is left unlabelled, and triage makes it visible.
+- A new clock-dependent feature must take both `now` (ADR-0044) and the timezone.

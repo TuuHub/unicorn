@@ -76,7 +76,7 @@ One course exists in Moodle, Ed, Canvas and mail under different ids. The **cour
 
 1. a confirmed relation (`link_items`, admin);
 2. exact match on the normalised code (`normalizeCourseCode`, `src/kernel/courses.ts`), with `term` when both sides carry one, else the current active offering;
-3. nothing automatic beyond that. ADR-0036 specifies a `suggest_links` tool to list fuzzy candidates for the agent to confirm; it is not implemented (see the gap note in section 7) — an item the resolver can't place is returned `unlabeled`, not fuzzy-matched.
+3. nothing automatic beyond that: an item the resolver can't place is returned `unlabeled`, and the harness files it with `label_items` during triage (`suggest_links` was dropped, ADR-0045).
 
 Assessment ↔ Ed category uses the same ladder on normalised titles (`matchCategoryToAssessment`): exact slug match, else a unique word-boundary prefix match, else null — never a guess between two equally-good candidates. Ambiguity is returned, never resolved by guessing.
 
@@ -171,7 +171,7 @@ That is 14 fixed tools (`src/mcp/door.ts`) plus the user's own.
 
 `POST /mcp/admin` is the operator surface (`src/mcp/server.ts`): `list_items`, `get_item`, `list_upcoming`, `list_changes`, `list_relations`, `link_items`, `list_plugin_manifests`, `put_plugin_manifest`, `get_sync_status`, `list_corrections`, plus the user-tool admin tools `describe_schema` / `define_tool` / `list_tools` / `delete_tool` / `browse_tools` / `install_tool` / `publish_tool`. A client agent never mounts it.
 
-> **Gap, not a deviation:** ADR-0035/ADR-0036 also describe `add_source` and `suggest_links` admin tools (source onboarding and fuzzy course-link candidates). Neither is implemented — `/mcp/admin` has no such tool today. Source onboarding instead happens through the `/settings` source form (wave2/sources, ADR-0038), and there is no fuzzy-match candidate tool yet; the course resolver's third rung ("nothing automatic beyond confirmed relations and exact code match") is real, but nothing surfaces fuzzy candidates for a client to confirm. Flagged here rather than silently documented as shipped.
+> `add_source` and `suggest_links` (ADR-0035/0036) were dropped by ADR-0045: sources are onboarded in `/settings` or `npm run setup`, and unplaceable items go through harness triage (`label_items`).
 
 ---
 
@@ -257,7 +257,7 @@ Everything below is shipped and covered by tests, not a plan. Section numbers po
 - **The body is unchanged and running**: hourly Durable Object alarm (§4), Ed + Moodle + Canvas ingest (§5), the zero-LLM daily digest (§4, `src/digest.ts`) bound to an injected clock rather than `julianday('now')` (ADR-0044), retention.
 - **Tier-1 declarative plugins** support pagination (`link-header`, cursor, page-number) and fan-out over a parent list (`src/plugins/declarative/plugin.ts`), plus the `mcp` transport for remote-MCP sources like Gmail (§5, ADR-0033).
 - **The door has 14 fixed tools** (§7, `src/mcp/door.ts`) — including `upcoming`, added past ADR-0035's original list (ADR-0040) — plus the four playbooks as MCP prompts and `run_playbook`, and up to 20 user-defined SQL tools with the hardened guard (§9, ADR-0042).
-- **The admin surface** (§7, `src/mcp/server.ts`) has the item/plugin/sync inspection tools, `link_items`, and the full user-tool admin set. `add_source` and `suggest_links`, described in ADR-0035/ADR-0036, are **not implemented** — see the gap note in §7.
+- **The admin surface** (§7, `src/mcp/server.ts`) has the item/plugin/sync inspection tools, `link_items`, and the full user-tool admin set. `add_source` and `suggest_links` were dropped (ADR-0045).
 - **OAuth authorization server** (§10, `src/oauth-server.ts`) is live: DCR, PKCE S256-only, the `/authorize` consent page behind `/settings` Basic auth, and CIMD (ADR-0043).
 - **Six widgets** (§11, `src/widgets/`) are built and snapshot-tested, with the model-collaboration loop (`ui/message` / `sendFollowUpMessage`, `ui/update-model-context`) capability-gated per host.
 - **Buckets, `course()`, `life()`, `label_items`, and the `triage` playbook** (§6) are live; structural labelling runs every cycle (`src/kernel/courses.ts`).
