@@ -336,11 +336,11 @@ export class DeclarativePlugin implements Plugin {
       const url = new URL(manifest.url);
       const headers: Record<string, string> = { Accept: "application/rss+xml" };
       this.applyHttpAuth(url, headers, manifest.auth);
-      const response = await this.fetcher(url, { headers, redirect: "manual", signal: AbortSignal.timeout(15_000) });
+      const response = await this.safeFetch(url, { headers, redirect: "manual", signal: AbortSignal.timeout(15_000) });
       if (!response.ok) {
         throw new Error(`Declarative plugin ${this.id} returned HTTP ${response.status}.`);
       }
-      const records = parseFeed(await response.text());
+      const records = parseFeed(await readLimitedText(response, this.id));
       return records.map((record) => this.mapItem(record));
     }
 
@@ -396,11 +396,11 @@ export class DeclarativePlugin implements Plugin {
       const headers: Record<string, string> = { Accept: "application/json" };
       this.applyHttpAuth(url, headers, auth);
       budget.consume();
-      const response = await this.fetcher(url, { headers, redirect: "manual", signal: AbortSignal.timeout(15_000) });
+      const response = await this.safeFetch(url, { headers, redirect: "manual", signal: AbortSignal.timeout(15_000) });
       if (!response.ok) {
         throw new Error(`Declarative plugin ${this.id} returned HTTP ${response.status}.`);
       }
-      const payload = await response.json();
+      const payload = JSON.parse(await readLimitedText(response, this.id));
       const pageRecords = itemsPath ? readPath(payload, itemsPath) : payload;
       if (!Array.isArray(pageRecords)) {
         throw new Error(`Declarative plugin ${this.id} itemsPath did not resolve to an array.`);
@@ -500,6 +500,24 @@ export class DeclarativePlugin implements Plugin {
       return JSON.parse(textBlock.text);
     } catch {
       throw new DeclarativeMcpError("mcp_bad_payload", `Declarative plugin ${this.id} MCP tool ${tool} returned invalid JSON.`);
+    }
+  }
+
+  // Wraps this.fetcher so a network-level failure (DNS, TLS, timeout, a
+  // connection reset, ...) can never carry the request URL out through
+  // Error.message. applyHttpAuth's "query" auth type puts the plugin's
+  // secret directly in that URL's query string, and the scheduler's alarm()
+  // handler (src/runtime/cycle.ts, ADR-0035) logs any pull failure's
+  // error.message verbatim as low-sensitivity observability data — a fetch
+  // implementation that happens to echo the request URL in a thrown error
+  // would otherwise leak the secret into those logs. HTTP-level failures
+  // (response.ok false) are unaffected: those already throw a fixed,
+  // URL-free message right after this call.
+  private async safeFetch(url: URL, init: RequestInit): Promise<Response> {
+    try {
+      return await this.fetcher(url, init);
+    } catch {
+      throw new Error(`Declarative plugin ${this.id} request failed.`);
     }
   }
 
@@ -608,6 +626,50 @@ class SubrequestBudget {
       );
     }
   }
+}
+
+// A manifest's URL is whatever the user (or an AI writing a manifest for them)
+// typed in — it isn't attacker-controlled in the way a redirect target is, but the
+// *response* body from it is: a compromised or just misbehaving server can return
+// an arbitrarily large body. Neither `response.text()` nor `response.json()` caps
+// how much they'll buffer, and a Worker has a hard ~128MB memory ceiling shared
+// with everything else in the request — one huge response is enough to OOM the
+// whole invocation. Streaming with a running byte count, rather than trusting
+// Content-Length (a hostile server can omit or lie about it), is the only way to
+// actually bound this.
+const MAX_RESPONSE_BYTES = 5 * 1024 * 1024; // 5MB: generous for a course/assignment JSON page or an RSS feed.
+
+async function readLimitedText(response: Response, pluginId: string): Promise<string> {
+  const reader = response.body?.getReader();
+  if (!reader) {
+    // No streaming body available (some minimal test fetch stubs) — fall back to
+    // buffering whole, then enforcing the same cap after the fact.
+    const text = await response.text();
+    if (text.length > MAX_RESPONSE_BYTES) {
+      throw new Error(`Declarative plugin ${pluginId} response exceeded ${MAX_RESPONSE_BYTES} bytes.`);
+    }
+    return text;
+  }
+  const decoder = new TextDecoder();
+  let text = "";
+  let bytes = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      bytes += value.byteLength;
+      if (bytes > MAX_RESPONSE_BYTES) {
+        throw new Error(`Declarative plugin ${pluginId} response exceeded ${MAX_RESPONSE_BYTES} bytes.`);
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
+  text += decoder.decode();
+  return text;
 }
 
 // RFC 8288: `<url>; rel="next", <url2>; rel="prev"`. Resolved against `base` so a

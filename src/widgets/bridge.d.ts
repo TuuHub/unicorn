@@ -23,3 +23,7 @@ export function detectCapabilities(
   hostCapabilities: HostCapabilities | null | undefined,
   openaiGlobal: OpenAIGlobal | null | undefined,
 ): BridgeCapabilities;
+
+export function isTrustedMessageSource(eventSource: unknown, parentWindow: unknown): boolean;
+
+export function isSafeLinkUrl(url: unknown): boolean;

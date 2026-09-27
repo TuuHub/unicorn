@@ -52,6 +52,35 @@ export function detectCapabilities(hostCapabilities, openaiGlobal) {
   };
 }
 
+// True only for a message whose `source` really is the frame we did our
+// handshake with. `window.addEventListener("message", ...)` fires for a
+// postMessage from *any* window that got a handle to this iframe — not just
+// our host — and this bridge has no fixed host origin to check against (the
+// resourceUri can be embedded by any MCP Apps host). Without this check, any
+// other frame that obtains a reference to this widget's window could resolve
+// a pending callTool()/request() promise itself (spoofing a tool result) or
+// fire a fake ui/notifications/tool-result with attacker-chosen
+// structuredContent. Checking event.source's identity — rather than trusting
+// jsonrpc shape alone — is the check that still works without knowing the
+// host's origin in advance.
+export function isTrustedMessageSource(eventSource, parentWindow) {
+  return eventSource === parentWindow;
+}
+
+const SAFE_LINK_SCHEMES = new Set(["http", "https", "mailto"]);
+
+// Mirrors markdown.js's safeUrl allowlist. openLink's url can come from
+// ingested item/course data (an Ed post, a Gmail message, a Canvas item) —
+// none of it trustworthy — and it is handed either to window.open() directly
+// (preview mode) or to the host via ui/open-link, neither of which is
+// guaranteed to reject a "javascript:"/"data:" URL on its own.
+export function isSafeLinkUrl(url) {
+  const trimmed = String(url ?? "").trim();
+  const schemeMatch = trimmed.match(/^([a-zA-Z][a-zA-Z0-9+.-]*):/);
+  if (!schemeMatch) return true; // relative or "#anchor" — never a script/data URL
+  return SAFE_LINK_SCHEMES.has(schemeMatch[1].toLowerCase());
+}
+
 (function () {
   "use strict";
 
@@ -77,6 +106,7 @@ export function detectCapabilities(hostCapabilities, openaiGlobal) {
 
   if (inIframe) {
     window.addEventListener("message", (event) => {
+      if (!isTrustedMessageSource(event.source, window.parent)) return;
       const data = event.data;
       if (!data || data.jsonrpc !== "2.0") return;
       if (typeof data.id !== "undefined" && pending.has(data.id)) {
@@ -147,6 +177,7 @@ export function detectCapabilities(hostCapabilities, openaiGlobal) {
     },
 
     openLink(url) {
+      if (!isSafeLinkUrl(url)) return Promise.reject(new Error("Unsafe link scheme"));
       if (!inIframe) {
         window.open(url, "_blank", "noopener,noreferrer");
         return Promise.resolve();

@@ -3,6 +3,7 @@ import {
   buildZodInputSchema,
   extractParamOrder,
   MAX_SQL_LENGTH,
+  MAX_VIEW_REFERENCES,
   RESERVED_DOOR_TOOL_NAMES,
   ToolGuardError,
   validateDescription,
@@ -108,6 +109,69 @@ describe("validateSql — structural guards", () => {
   it("quotes the offending fragment in the error message", () => {
     const error = guardErrorOf(ok("SELECT * FROM items"));
     expect(error.message).toContain("items");
+  });
+});
+
+describe("validateSql — balanced parens (LIMIT 200 wrap escape)", () => {
+  // wrapSql() splices the tool's SQL into `SELECT * FROM (<sql>) LIMIT 200`.
+  // A stray unmatched ")" in <sql> closes that wrapper's own "(" early; the
+  // rest of <sql> — here a "--" comment with no following newline — then
+  // runs on past the wrapper's real ") LIMIT 200" and comments it out, so
+  // the statement actually executes with the attacker's own LIMIT (or none)
+  // instead of 200. Confirmed against real SQLite (node:sqlite): the wrapped
+  // form of this exact payload returns every row in the table, not 200.
+  it("rejects the unmatched-paren-plus-comment payload that defeats the row cap", () => {
+    const error = guardErrorOf(ok("SELECT * FROM v_items) LIMIT 999999999 --"));
+    expect(error.code).toBe("SQL_UNBALANCED_PARENS");
+  });
+
+  it("rejects a bare unmatched closing paren with no comment involved", () => {
+    expect(guardErrorOf(ok("SELECT * FROM v_items WHERE (course = 'FIT2004'))")).code).toBe("SQL_UNBALANCED_PARENS");
+  });
+
+  it("rejects an unclosed opening paren", () => {
+    expect(guardErrorOf(ok("SELECT * FROM v_items WHERE (course = 'FIT2004'")).code).toBe("SQL_UNBALANCED_PARENS");
+  });
+
+  it("still accepts legitimate nested parens: function calls, subqueries and grouped WHERE clauses", () => {
+    const sql =
+      "SELECT COUNT(*) AS n FROM (SELECT * FROM v_items WHERE (course = :course OR bucket = :course)) WHERE n > 0";
+    expect(() => validateSql(sql, ["course"])).not.toThrow();
+  });
+});
+
+describe("validateSql — bounded join count (resource exhaustion)", () => {
+  // v_items runs two correlated subqueries per row; an unbounded self-join
+  // multiplies that cost combinatorially before the outer LIMIT 200 ever
+  // trims the result, so it isn't itself a defence against this.
+  it("rejects a statement that self-joins the same view past the cap", () => {
+    const aliases = Array.from({ length: MAX_VIEW_REFERENCES + 1 }, (_, i) => `v_items t${i}`).join(", ");
+    const error = guardErrorOf(ok(`SELECT * FROM ${aliases}`));
+    expect(error.code).toBe("SQL_TOO_MANY_JOINS");
+  });
+
+  it("rejects a long chain of explicit JOINs across the five views past the cap", () => {
+    const sql = [
+      "SELECT * FROM v_items i",
+      "JOIN v_upcoming u ON u.item_id = i.item_id",
+      "JOIN v_changes c ON c.item_id = i.item_id",
+      "JOIN v_courses co ON co.code = i.course",
+      "JOIN v_buckets b ON b.bucket = i.bucket",
+      "JOIN v_items i2 ON i2.item_id = i.item_id",
+      "JOIN v_items i3 ON i3.item_id = i.item_id",
+    ].join(" ");
+    expect(guardErrorOf(ok(sql)).code).toBe("SQL_TOO_MANY_JOINS");
+  });
+
+  it("accepts a join across all five views at exactly the cap", () => {
+    const sql = [
+      "SELECT * FROM v_items i",
+      "JOIN v_upcoming u ON u.item_id = i.item_id",
+      "JOIN v_changes c ON c.item_id = i.item_id",
+      "JOIN v_courses co ON co.code = i.course",
+      "JOIN v_buckets b ON b.bucket = i.bucket",
+    ].join(" ");
+    expect(() => validateSql(sql, [])).not.toThrow();
   });
 });
 
@@ -267,6 +331,48 @@ describe("validateSql — nested subqueries and UNION reaching raw tables", () =
   it("allows UNION across two allowed views", () => {
     const sql = "SELECT source, item_id FROM v_items UNION SELECT source, item_id FROM v_upcoming";
     expect(() => validateSql(sql, [])).not.toThrow();
+  });
+});
+
+describe("validateSql — comma-joined FROM lists (old implicit-join syntax)", () => {
+  // `FROM a, b` names a second table with no "FROM"/"JOIN" keyword directly
+  // in front of it. A guard that only looks at the single token right after
+  // "FROM"/"JOIN" never inspects it — this was a full bypass of the
+  // allowed-view check: `SELECT * FROM v_items, oauth_tokens` validated
+  // clean and, unwrapped, would have handed a user tool read access to
+  // every table in the database, sensitive or not.
+  it("rejects a second table introduced by a comma, with no JOIN keyword", () => {
+    const error = guardErrorOf(ok("SELECT * FROM v_items, oauth_tokens"));
+    expect(error.code).toBe("SQL_FORBIDDEN_TABLE");
+    expect(error.message).toContain("oauth_tokens");
+  });
+
+  it("rejects the sensitive table even when it's third in the comma list, after two allowed views", () => {
+    const error = guardErrorOf(ok("SELECT * FROM v_items, v_courses, settings"));
+    expect(error.code).toBe("SQL_FORBIDDEN_TABLE");
+    expect(error.message).toContain("settings");
+  });
+
+  it("rejects a comma-joined sensitive table even when both sides carry aliases", () => {
+    const error = guardErrorOf(ok("SELECT * FROM v_items i, agent_notes n WHERE i.item_id = n.item_id"));
+    expect(error.code).toBe("SQL_FORBIDDEN_TABLE");
+    expect(error.message).toContain("agent_notes");
+  });
+
+  it("rejects a comma-joined sensitive table reached inside a subquery", () => {
+    const error = guardErrorOf(ok("SELECT * FROM (SELECT * FROM v_items, source_credentials)"));
+    expect(error.code).toBe("SQL_FORBIDDEN_TABLE");
+    expect(error.message).toContain("source_credentials");
+  });
+
+  it("still accepts a legitimate comma-joined cross join across allowed views", () => {
+    const sql = "SELECT i.title, c.term FROM v_items i, v_courses c WHERE i.course = c.code";
+    expect(() => validateSql(sql, [])).not.toThrow();
+  });
+
+  it("counts every comma-joined reference toward the join cap", () => {
+    const aliases = Array.from({ length: MAX_VIEW_REFERENCES + 1 }, (_, i) => `v_items t${i}`).join(", ");
+    expect(guardErrorOf(ok(`SELECT * FROM ${aliases}`)).code).toBe("SQL_TOO_MANY_JOINS");
   });
 });
 
