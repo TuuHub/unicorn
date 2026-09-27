@@ -113,7 +113,7 @@ git show 09c78ae:wrangler.jsonc   # the "ai" binding, AGENT_SESSIONS DO, AI_BASE
 git show 09c78ae:SETUP.md         # the secret-put commands below
 ```
 
-These Worker Secrets are no longer read by anything in `src/` and can be deleted:
+See what's actually set first with `npx wrangler secret list`. These Worker Secrets are no longer read by anything in `src/` and can be deleted:
 
 ```bash
 npx wrangler secret delete AI_API_KEY           # BYOK model credential
@@ -165,21 +165,22 @@ curl https://<your-worker>/schedule -H "Authorization: Bearer <ADMIN_TOKEN>"
 
 ## Rollback
 
-D1 migrations are one-directional; there's no `wrangler d1 migrations revert`. To roll
-back to the pre-upgrade state:
+D1 migrations only go forward, and `backup.sql` can't be replayed over the migrated
+database because its `CREATE TABLE`s collide with the tables that are already there.
+So restore into a **new** database and point the old code at it:
 
-1. Redeploy the old code: `git checkout 09c78ae && wrangler deploy` (or whichever commit
-   you upgraded from).
-2. Restore the pre-upgrade schema and data from the backup you took in step 1:
-   ```bash
-   npx wrangler d1 execute unicorn --remote --file backup.sql
-   ```
-   Restoring the backup is required, not optional — the old code expects
-   `agent_conversations` / `agent_messages` / `notifications_outbox` and the rest of
-   `0012`'s dropped tables to exist; redeploying old code without restoring the backup
-   leaves it erroring against a schema that no longer has them.
-3. The Durable Object migration (`AgentSession` deleted) does not reverse itself by
-   redeploying old code — a fresh `AgentSession` class is created under a new instance
-   the next time old code needs one, since `wrangler.jsonc`'s `migrations` array only
-   ever adds forward. Conversation history inside `AgentSession` instances from before
-   the upgrade is not recoverable by this rollback; only D1 state is.
+```bash
+npx wrangler d1 create unicorn-rollback                                  # prints a database_id
+npx wrangler d1 execute unicorn-rollback --remote --file backup.sql
+git checkout 09c78ae                                                     # or the commit you upgraded from
+```
+
+Edit that checkout's `wrangler.jsonc`: set `database_name` to `unicorn-rollback` and
+`database_id` to the new id. Then append a Durable Object migration that re-creates the
+class `v3` deleted — `{ "tag": "v4", "new_sqlite_classes": ["AgentSession"] }` — because
+Cloudflare has already applied `v3`, and an old config whose last tag is `v2` is
+rejected. Then run `npx wrangler deploy`.
+
+`AgentSession` instance storage (old Pi conversation routing) doesn't come back; only D1
+state does. The original `unicorn` database stays untouched, so you can roll forward
+again later.
