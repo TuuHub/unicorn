@@ -5265,6 +5265,14 @@ input[type="checkbox"] {
         flex-wrap: wrap;
         row-gap: var(--u-space-2);
       }
+      /* A long title wraps to several lines; keep the time pinned to the
+         first line instead of drifting to the vertical middle of the block. */
+      .deadline-title-row {
+        align-items: flex-start;
+      }
+      .deadline-title-row .u-num {
+        padding-top: 2px;
+      }
       .no-date-section h3 {
         color: var(--u-text-muted);
         font-size: 12.5px;
@@ -5924,7 +5932,7 @@ if (typeof window !== "undefined") {
           const time = formatDateTime(item.dueAt, undefined, { hour: "2-digit", minute: "2-digit" });
           return \`
             <div class="deadline-item">
-              <div class="u-between">
+              <div class="u-between deadline-title-row">
                 <span class="item-title-line">\${esc(item.title)}</span>
                 <span class="u-muted u-num" style="white-space:nowrap;">\${esc(time || "")}</span>
               </div>
