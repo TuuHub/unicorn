@@ -31,6 +31,7 @@ import {
   type PlanResult,
   type PlaybookName,
   type PlaybookRun,
+  type SourceStatus,
   type StatusView,
 } from "./door-contracts";
 import type { DoorRepository, LabelItemInput } from "./door-repository";
@@ -46,6 +47,10 @@ export interface DoorDeps {
   repo: DoorRepository;
   settings: SettingsRepository;
   schedulerStatus: () => Promise<{ running: boolean }>;
+  // The built-in sources (Ed, Moodle, Canvas, Gmail) and whether each has usable
+  // credentials, so `status` can name a source that is set up but has not synced
+  // yet. Optional: without it, every source seen in a cycle counts as configured.
+  sourcePresets?: () => Promise<Array<{ id: string; label: string; configured: boolean }>>;
   now?: () => Date;
   // D1 handle for the ADR-0035 user-defined tools registered below. Optional
   // so existing callers/tests that don't touch D1 keep working unchanged;
@@ -320,16 +325,28 @@ export async function createDoorMcpServer(deps: DoorDeps): Promise<McpServer> {
       _meta: widgetToolMeta("connectionStatus"),
     },
     async () => {
-      const [repoStatus, scheduler, settings] = await Promise.all([deps.repo.sourceStatus(), deps.schedulerStatus(), deps.settings.get()]);
+      const [repoStatus, scheduler, settings, presets] = await Promise.all([
+        deps.repo.sourceStatus(),
+        deps.schedulerStatus(),
+        deps.settings.get(),
+        deps.sourcePresets ? deps.sourcePresets() : Promise.resolve([]),
+      ]);
+      const presetById = new Map(presets.map((preset) => [preset.id, preset]));
+      const sources: SourceStatus[] = repoStatus.sources.map((source) => ({
+        id: source.id,
+        label: source.label,
+        configured: presetById.get(source.id)?.configured ?? true,
+        lastSyncAt: source.lastSyncAt,
+        lastError: source.lastError,
+        items: source.items,
+      }));
+      for (const preset of presets) {
+        if (preset.configured && !sources.some((source) => source.id === preset.id)) {
+          sources.push({ id: preset.id, label: preset.label, configured: true, lastSyncAt: null, lastError: null, items: 0 });
+        }
+      }
       const view: StatusView = {
-        sources: repoStatus.sources.map((source) => ({
-          id: source.id,
-          label: source.label,
-          configured: true,
-          lastSyncAt: source.lastSyncAt,
-          lastError: source.lastError,
-          items: source.items,
-        })),
+        sources,
         scheduler: { running: scheduler.running, lastCycleAt: repoStatus.lastCycleAt },
         latestCursor: repoStatus.latestCursor,
         timezone: settings.timezone,
@@ -639,12 +656,16 @@ function renderLabelItemsResult(result: { updated: number; unknownItems: string[
 function renderStatusView(view: StatusView): string {
   const lines = ["# Status"];
   if (view.sources.length === 0) {
-    lines.push("No sources have synced yet.");
+    lines.push("No sources are configured. The user adds them in /settings on their unicorn Worker.");
   }
   for (const source of view.sources) {
     const bits = [`${source.label} (${source.id})`, `${source.items} item${source.items === 1 ? "" : "s"}`];
-    if (source.lastSyncAt) {
+    if (!source.configured) {
+      bits.push("not configured");
+    } else if (source.lastSyncAt) {
       bits.push(`last sync ${source.lastSyncAt}`);
+    } else {
+      bits.push("configured, waiting for its first sync");
     }
     if (source.lastError) {
       bits.push(`error: ${source.lastError}`);

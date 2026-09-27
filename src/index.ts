@@ -13,7 +13,7 @@ import { D1ManifestStore } from "./plugins/declarative/store";
 import gmailPreset from "./plugins/presets/gmail.json";
 import { runCycle, Scheduler, type CycleResult, type Env } from "./runtime/cycle";
 import { constantTimeEqual, D1SettingsRepository, handleSettings, isBasicAuthorized, type LastCycleInfo } from "./settings";
-import { D1SourceCredentialStore, itemCountsByPlugin } from "./sources";
+import { buildSourcePlugins, D1SourceCredentialStore, itemCountsByPlugin, PLUGIN_ID, SOURCE_PRESETS } from "./sources";
 
 export { Scheduler };
 
@@ -98,6 +98,17 @@ async function handleDoor(request: Request, env: Env, _ctx: ExecutionContext): P
     repo: new D1DoorRepository(env.DB),
     settings: new D1SettingsRepository(env.DB),
     schedulerStatus: async () => ({ running: (await operationalStatus(env)).schedulerRunning }),
+    sourcePresets: async () => {
+      const [plugins, gmailConnected] = await Promise.all([
+        buildSourcePlugins(env, new D1SourceCredentialStore(env.DB, env.ADMIN_TOKEN)),
+        new D1OAuthTokenStore(env.DB).has("gmail"),
+      ]);
+      const configured = new Set(plugins.map((plugin) => plugin.id));
+      return SOURCE_PRESETS.map((preset) => {
+        const id = PLUGIN_ID[preset.id];
+        return { id, label: preset.label, configured: preset.id === "gmail" ? gmailConnected : configured.has(id) };
+      });
+    },
     db: env.DB,
   });
   await server.connect(transport);

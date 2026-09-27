@@ -518,6 +518,32 @@ describe("unicorn door MCP server", () => {
   });
 
   describe("status", () => {
+    it("names a configured source that has not synced yet, and flags one whose credentials are gone", async () => {
+      const repo = fakeRepo({
+        sourceStatus: vi.fn().mockResolvedValue({
+          sources: [{ id: "campus-moodle", label: "Moodle", lastSyncAt: "2026-09-26T21:05:00.000Z", lastError: null, items: 12 }],
+          latestCursor: "3",
+          lastCycleAt: "2026-09-26T21:05:00.000Z",
+        }),
+      });
+      const sourcePresets = vi.fn().mockResolvedValue([
+        { id: "campus-ed", label: "Ed", configured: true },
+        { id: "campus-moodle", label: "Moodle", configured: false },
+        { id: "campus-canvas", label: "Canvas", configured: false },
+      ]);
+      const client = await connectClient(fakeDeps({ repo, sourcePresets }));
+
+      const result = await client.callTool({ name: "status", arguments: {} });
+
+      const view = result.structuredContent as StatusView;
+      expect(view.sources.map((source) => [source.id, source.configured])).toEqual([
+        ["campus-moodle", false],
+        ["campus-ed", true],
+      ]);
+      expect(textOf(result)).toContain("Ed (campus-ed) — 0 items — configured, waiting for its first sync");
+      expect(textOf(result)).toContain("Moodle (campus-moodle) — 12 items — not configured");
+    });
+
     it("assembles sources, scheduler, cursor and timezone from independent deps", async () => {
       const repo = fakeRepo({
         sourceStatus: vi.fn().mockResolvedValue({
