@@ -19,6 +19,10 @@ export const MAX_SQL_LENGTH = 4_000;
 export const MAX_DESCRIPTION_LENGTH = 500;
 export const MAX_PARAMS = 10;
 export const RESULT_ROW_LIMIT = 200;
+// A generous cap on total FROM/JOIN targets (views + CTEs) in one statement —
+// enough for a real multi-view join, not enough for an accidental or
+// deliberate N-way self cross join. See the resource-exhaustion note below.
+export const MAX_VIEW_REFERENCES = 6;
 export const RESULT_TEXT_BUDGET_BYTES = 50_000;
 
 // The only tables a user tool's SQL may name after FROM/JOIN. Kept as both
@@ -419,42 +423,120 @@ export function validateSql(sql: string, declaredParams: readonly string[]): Sql
   }
 
   // --- every FROM/JOIN target must be an allowed view or a CTE this statement defines
+  //
+  // SQL's old comma-join syntax — `FROM v_items, oauth_tokens` — names a
+  // second table with no "FROM"/"JOIN" keyword in front of it at all. A
+  // guard that only inspects the single token right after "FROM"/"JOIN"
+  // never looks at it, so `FROM v_items, oauth_tokens` sailed through
+  // unchecked: the comma-joined table was never validated against
+  // ALLOWED_VIEW_SET. validateFromList below walks the *whole*
+  // comma-separated reference list every "FROM"/"JOIN" introduces —
+  // `target [[AS] alias] (, target [[AS] alias])*` — so every table name in
+  // it gets the same allowed-view/CTE check, however it's joined.
+  const TABLE_LIST_TERMINATORS = new Set([
+    "where",
+    "group",
+    "having",
+    "order",
+    "window",
+    "limit",
+    "union",
+    "intersect",
+    "except",
+    "join",
+    "on",
+    "using",
+    "values",
+  ]);
+
+  // Skips an optional alias (`AS name` or a bare `name`) right after a
+  // validated table reference, stopping at a clause keyword or the next
+  // comma so it's never mistaken for another reference.
+  function skipOptionalAlias(index: number): number {
+    if (body[index]?.type === "word" && body[index]?.norm === "as") {
+      return body[index + 1]?.type === "word" ? index + 2 : index + 1;
+    }
+    if (body[index]?.type === "word" && !TABLE_LIST_TERMINATORS.has(body[index]!.norm) && body[index]!.norm !== "from") {
+      return index + 1;
+    }
+    return index;
+  }
+
+  let viewReferenceCount = 0;
   for (let i = 0; i < body.length; i += 1) {
     const keyword = body[i]!;
     if (keyword.type !== "word" || (keyword.norm !== "from" && keyword.norm !== "join")) {
       continue;
     }
-    const target = body[i + 1];
-    if (!target) {
-      continue;
-    }
-    if (target.type === "punct" && target.raw === "(") {
-      continue; // subquery — its own FROM/JOINs are caught by this same loop
-    }
-    if (target.type !== "word" && target.type !== "qident" && target.type !== "string") {
-      continue; // malformed SQL; EXPLAIN will reject it with a real syntax error
-    }
-    const after = body[i + 2];
-    if (after?.type === "punct" && after.raw === ".") {
-      throw guardError(
-        "SQL_FORBIDDEN_TABLE",
-        `Schema-qualified names are not allowed, near "${fragment(sql, target.start)}".`,
-        "Reference v_items, v_upcoming, v_changes, v_courses or v_buckets by their bare name.",
-      );
-    }
-    if (after?.type === "punct" && after.raw === "(") {
-      throw guardError(
-        "SQL_TABLE_FUNCTION",
-        `Table-valued function calls are not allowed, near "${fragment(sql, target.start)}".`,
-        "FROM/JOIN may only name v_items, v_upcoming, v_changes, v_courses, v_buckets or a CTE.",
-      );
-    }
-    if (!ALLOWED_VIEW_SET.has(target.norm) && !cteNames.has(target.norm)) {
-      throw guardError(
-        "SQL_FORBIDDEN_TABLE",
-        `"${target.raw}" is not one of the allowed views, near "${fragment(sql, target.start)}".`,
-        "FROM/JOIN may only name v_items, v_upcoming, v_changes, v_courses, v_buckets or a CTE defined in this statement.",
-      );
+
+    let j = i + 1;
+    for (;;) {
+      const target = body[j];
+      if (!target) {
+        break;
+      }
+      if (target.type === "punct" && target.raw === "(") {
+        // Subquery — skip past its matching close paren; the outer loop
+        // reaches whatever FROM/JOIN it contains on its own later iteration.
+        let depth = 0;
+        while (j < body.length) {
+          if (body[j]!.type === "punct" && body[j]!.raw === "(") depth += 1;
+          if (body[j]!.type === "punct" && body[j]!.raw === ")") {
+            depth -= 1;
+            if (depth === 0) {
+              j += 1;
+              break;
+            }
+          }
+          j += 1;
+        }
+        j = skipOptionalAlias(j);
+      } else if (target.type === "word" || target.type === "qident" || target.type === "string") {
+        const after = body[j + 1];
+        if (after?.type === "punct" && after.raw === ".") {
+          throw guardError(
+            "SQL_FORBIDDEN_TABLE",
+            `Schema-qualified names are not allowed, near "${fragment(sql, target.start)}".`,
+            "Reference v_items, v_upcoming, v_changes, v_courses or v_buckets by their bare name.",
+          );
+        }
+        if (after?.type === "punct" && after.raw === "(") {
+          throw guardError(
+            "SQL_TABLE_FUNCTION",
+            `Table-valued function calls are not allowed, near "${fragment(sql, target.start)}".`,
+            "FROM/JOIN may only name v_items, v_upcoming, v_changes, v_courses, v_buckets or a CTE.",
+          );
+        }
+        if (!ALLOWED_VIEW_SET.has(target.norm) && !cteNames.has(target.norm)) {
+          throw guardError(
+            "SQL_FORBIDDEN_TABLE",
+            `"${target.raw}" is not one of the allowed views, near "${fragment(sql, target.start)}".`,
+            "FROM/JOIN may only name v_items, v_upcoming, v_changes, v_courses, v_buckets or a CTE defined in this statement.",
+          );
+        }
+        // v_items computes two correlated subqueries per row (due_at, state);
+        // a statement that names/joins a view or CTE many times can multiply
+        // that cost combinatorially (a comma/cross join is a cartesian
+        // product before the outer LIMIT 200 ever trims the output) — cap it
+        // rather than trust every tool author to add a selective WHERE.
+        viewReferenceCount += 1;
+        if (viewReferenceCount > MAX_VIEW_REFERENCES) {
+          throw guardError(
+            "SQL_TOO_MANY_JOINS",
+            `More than ${MAX_VIEW_REFERENCES} view/CTE references in one statement, near "${fragment(sql, target.start)}".`,
+            "Split this into a narrower query — a user tool is one focused lookup, not a multi-way join.",
+          );
+        }
+        j = skipOptionalAlias(j + 1);
+      } else {
+        break; // malformed SQL; EXPLAIN will reject it with a real syntax error
+      }
+
+      if (body[j]?.type === "punct" && body[j]?.raw === ",") {
+        j += 1;
+        continue; // another comma-joined reference in this same list
+      }
+      break;
     }
   }
 
