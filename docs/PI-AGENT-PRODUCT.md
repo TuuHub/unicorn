@@ -1,5 +1,12 @@
 # Pi resident agent product contract
 
+> **Historical.** This document describes the in-Worker Pi resident agent — `POST /agent`,
+> Telegram, BYOK/Workers AI model calls, the `resident-agent` job. ADR-0034 removed all of it:
+> unicorn runs no model and calls no LLM provider. Reasoning now runs in the student's own
+> harness (Claude Code, claude.ai, ChatGPT, Cowork) against the door (`docs/ARCHITECTURE.md`
+> §7, `docs/ADR.md` ADR-0034). Kept here for the design trail; nothing below describes current
+> code.
+
 ## Outcome
 
 unicorn is a single-user resident secretary running on one Cloudflare Worker. It keeps the deterministic ingestion kernel as its source of truth and uses Pi only for bounded conversational reasoning over that truth.
