@@ -1,6 +1,6 @@
 import path from "node:path";
 import type { Plugin } from "vite";
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 
 // Tests run under plain Node, not workerd (no @cloudflare/vitest-pool-workers) — every existing
 // test fakes D1/KV rather than needing the real runtime. @cloudflare/workers-oauth-provider
@@ -25,6 +25,8 @@ function stubCloudflareWorkers(): Plugin {
 export default defineConfig({
   plugins: [stubCloudflareWorkers()],
   test: {
+    // Agent worktrees under .claude/ hold stale copies of tests/.
+    exclude: [...configDefaults.exclude, ".claude/**"],
     // Vitest externalizes node_modules for SSR by default (imported via Node's native loader,
     // bypassing Vite's plugin pipeline including the resolveId hook above) — inlining this one
     // package routes its `cloudflare:workers` import back through that pipeline instead.
