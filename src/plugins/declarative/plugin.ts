@@ -7,6 +7,7 @@ import type { CapabilityBinding, Facet, ItemInput, JsonValue } from "../../kerne
 import { courseMentionFacet, extractUnitCodes } from "../course-mention";
 import type { Plugin } from "../plugin";
 import { asRecord, toJson } from "../source-values";
+import { HttpStatusError } from "../http-error";
 
 export type ValueSpec = { path: string } | { value: JsonValue };
 
@@ -338,7 +339,7 @@ export class DeclarativePlugin implements Plugin {
       this.applyHttpAuth(url, headers, manifest.auth);
       const response = await this.safeFetch(url, { headers, redirect: "manual", signal: AbortSignal.timeout(15_000) });
       if (!response.ok) {
-        throw new Error(`Declarative plugin ${this.id} returned HTTP ${response.status}.`);
+        throw new HttpStatusError(response.status, `Declarative plugin ${this.id} returned HTTP ${response.status}.`);
       }
       const records = parseFeed(await readLimitedText(response, this.id));
       return records.map((record) => this.mapItem(record));
@@ -398,7 +399,7 @@ export class DeclarativePlugin implements Plugin {
       budget.consume();
       const response = await this.safeFetch(url, { headers, redirect: "manual", signal: AbortSignal.timeout(15_000) });
       if (!response.ok) {
-        throw new Error(`Declarative plugin ${this.id} returned HTTP ${response.status}.`);
+        throw new HttpStatusError(response.status, `Declarative plugin ${this.id} returned HTTP ${response.status}.`);
       }
       const payload = JSON.parse(await readLimitedText(response, this.id));
       const pageRecords = itemsPath ? readPath(payload, itemsPath) : payload;

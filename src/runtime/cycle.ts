@@ -211,12 +211,25 @@ async function syncSources(env: Env, settings: AppSettings): Promise<SourceCycle
   return results;
 }
 
-function syncErrorCode(error: unknown): string {
+export function syncErrorCode(error: unknown): string {
   if (error instanceof MoodleProbeError) {
     return error.code;
   }
-  if (error && typeof error === "object" && "code" in error) {
-    return String((error as InvalidItemError).code);
+  // DOMException carries a legacy numeric `code` (23 for a timeout) — name it instead.
+  if (error instanceof Error && error.name === "TimeoutError") {
+    return "timeout";
+  }
+  if (error instanceof Error && error.name === "AbortError") {
+    return "aborted";
+  }
+  if (error && typeof error === "object" && "code" in error && typeof (error as InvalidItemError).code === "string") {
+    return (error as InvalidItemError).code;
+  }
+  if (error && typeof error === "object" && "status" in error && typeof error.status === "number") {
+    return error.status === 401 || error.status === 403 ? "unauthorized" : `http_${error.status}`;
+  }
+  if (error instanceof TypeError) {
+    return "network";
   }
   return "sync_failed";
 }

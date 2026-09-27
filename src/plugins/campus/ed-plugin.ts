@@ -2,6 +2,7 @@ import { normalizeTerm } from "../../kernel/courses";
 import type { Facet, ItemInput } from "../../kernel/types";
 import type { Plugin } from "../plugin";
 import { asArray, asBoolean, asNumber, asRecord, asString, toJson } from "../source-values";
+import { HttpStatusError } from "../http-error";
 
 // Ed's web app is region-scoped by URL path (edstem.org/us/..., /au/..., /eu/...);
 // verified against edstem-archiver's course URLs. The JSON API, by contrast, is
@@ -75,10 +76,10 @@ export class EdPlugin implements Plugin {
       signal: AbortSignal.timeout(15_000),
     });
     if (response.status === 401) {
-      throw new Error("Ed authentication failed.");
+      throw new HttpStatusError(401, "Ed authentication failed.");
     }
     if (!response.ok) {
-      throw new Error(`Ed API returned HTTP ${response.status}.`);
+      throw new HttpStatusError(response.status, `Ed API returned HTTP ${response.status}.`);
     }
     return asRecord(await response.json());
   }

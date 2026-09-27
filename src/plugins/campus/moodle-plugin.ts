@@ -1,6 +1,7 @@
 import { normalizeTerm } from "../../kernel/courses";
 import type { Facet, ItemInput } from "../../kernel/types";
 import { parseSesskey } from "../../moodle-probe";
+import { HttpStatusError } from "../http-error";
 import type { Plugin } from "../plugin";
 import {
   asArray,
@@ -46,7 +47,7 @@ export class MoodlePlugin implements Plugin {
     const headers = { cookie: `MoodleSession=${this.session}` };
     const dashboard = await this.fetcher(`${this.baseUrl}/my/`, { headers, redirect: "manual" });
     if (!dashboard.ok) {
-      throw new Error(`Moodle dashboard returned HTTP ${dashboard.status}.`);
+      throw new HttpStatusError(dashboard.status, `Moodle dashboard returned HTTP ${dashboard.status}.`);
     }
     const sesskey = parseSesskey(await dashboard.text());
     const now = this.now();
@@ -79,7 +80,7 @@ export class MoodlePlugin implements Plugin {
       ]),
     });
     if (!response.ok) {
-      throw new Error(`Moodle AJAX returned HTTP ${response.status}.`);
+      throw new HttpStatusError(response.status, `Moodle AJAX returned HTTP ${response.status}.`);
     }
 
     const envelope = await response.json();
