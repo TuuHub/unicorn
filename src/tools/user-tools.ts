@@ -314,6 +314,32 @@ export function validateSql(sql: string, declaredParams: readonly string[]): Sql
     );
   }
 
+  // --- balanced parens: wrapSql() splices this SQL into `SELECT * FROM (<sql>) LIMIT 200`.
+  // A stray unmatched ")" closes that wrapper's own "(" early, turning the rest of <sql> —
+  // typically ending in a "--" line comment with no trailing newline — into text that runs
+  // past the wrapper's real ") LIMIT 200" and swallows it as part of the comment, so the
+  // statement executes with whatever LIMIT the attacker wrote (or none) instead of 200. A
+  // depth counter that must never go negative and must end at zero closes this off structurally,
+  // independent of which token (comment, quote, …) would otherwise carry the escape.
+  let parenDepth = 0;
+  for (const token of body) {
+    if (token.type !== "punct") continue;
+    if (token.raw === "(") parenDepth += 1;
+    else if (token.raw === ")") {
+      parenDepth -= 1;
+      if (parenDepth < 0) {
+        throw guardError(
+          "SQL_UNBALANCED_PARENS",
+          `Unmatched ")" near "${fragment(sql, token.start)}".`,
+          "Every closing parenthesis needs a matching opening one earlier in the statement.",
+        );
+      }
+    }
+  }
+  if (parenDepth !== 0) {
+    throw guardError("SQL_UNBALANCED_PARENS", "The statement has an unclosed \"(\".", "Add the matching \")\".");
+  }
+
   // --- no anonymous positional parameters
   const qmark = body.find((t) => t.type === "qmark");
   if (qmark) {

@@ -111,6 +111,34 @@ describe("validateSql — structural guards", () => {
   });
 });
 
+describe("validateSql — balanced parens (LIMIT 200 wrap escape)", () => {
+  // wrapSql() splices the tool's SQL into `SELECT * FROM (<sql>) LIMIT 200`.
+  // A stray unmatched ")" in <sql> closes that wrapper's own "(" early; the
+  // rest of <sql> — here a "--" comment with no following newline — then
+  // runs on past the wrapper's real ") LIMIT 200" and comments it out, so
+  // the statement actually executes with the attacker's own LIMIT (or none)
+  // instead of 200. Confirmed against real SQLite (node:sqlite): the wrapped
+  // form of this exact payload returns every row in the table, not 200.
+  it("rejects the unmatched-paren-plus-comment payload that defeats the row cap", () => {
+    const error = guardErrorOf(ok("SELECT * FROM v_items) LIMIT 999999999 --"));
+    expect(error.code).toBe("SQL_UNBALANCED_PARENS");
+  });
+
+  it("rejects a bare unmatched closing paren with no comment involved", () => {
+    expect(guardErrorOf(ok("SELECT * FROM v_items WHERE (course = 'FIT2004'))")).code).toBe("SQL_UNBALANCED_PARENS");
+  });
+
+  it("rejects an unclosed opening paren", () => {
+    expect(guardErrorOf(ok("SELECT * FROM v_items WHERE (course = 'FIT2004'")).code).toBe("SQL_UNBALANCED_PARENS");
+  });
+
+  it("still accepts legitimate nested parens: function calls, subqueries and grouped WHERE clauses", () => {
+    const sql =
+      "SELECT COUNT(*) AS n FROM (SELECT * FROM v_items WHERE (course = :course OR bucket = :course)) WHERE n > 0";
+    expect(() => validateSql(sql, ["course"])).not.toThrow();
+  });
+});
+
 describe("validateSql — parameters", () => {
   it("rejects anonymous ? placeholders", () => {
     expect(guardErrorOf(ok("SELECT * FROM v_items WHERE course = ?")).code).toBe("SQL_POSITIONAL_PARAM");
