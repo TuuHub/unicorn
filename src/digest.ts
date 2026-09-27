@@ -38,7 +38,11 @@ const CHANGE_TYPE_LABEL: Record<Exclude<ChangeType, "notice.posted">, string> = 
 // Pure and unit-tested independently of the D1 query below: given the sections
 // for the day, produce the brief's title/body, or null when there is nothing
 // to report (the caller skips writing a brief entirely in that case).
-export function renderDigest(sections: DigestSections, dateLabel: string): { title: string; body: string } | null {
+export function renderDigest(
+  sections: DigestSections,
+  dateLabel: string,
+  timeZone: string,
+): { title: string; body: string } | null {
   const { dueSoon, notices, changes } = sections;
   if (dueSoon.length === 0 && notices.length === 0 && changes.length === 0) {
     return null;
@@ -49,7 +53,7 @@ export function renderDigest(sections: DigestSections, dateLabel: string): { tit
   if (dueSoon.length > 0) {
     parts.push(
       "## Due soon",
-      ...dueSoon.map((row) => `- ${link(row.title, row.url)} — due ${row.dueAt.slice(0, 10)}`),
+      ...dueSoon.map((row) => `- ${link(row.title, row.url)} — due ${formatDue(row.dueAt, timeZone)}`),
     );
   }
   if (notices.length > 0) {
@@ -63,6 +67,19 @@ export function renderDigest(sections: DigestSections, dateLabel: string): { tit
   }
 
   return { title: `unicorn daily digest — ${dateLabel}`, body: parts.join("\n\n") };
+}
+
+// Deadlines in the user's own timezone: a Melbourne-midnight deadline is 13:00Z the
+// previous day, so the UTC date would name the wrong day.
+function formatDue(iso: string, timeZone: string): string {
+  return new Intl.DateTimeFormat("en-AU", {
+    timeZone,
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(iso));
 }
 
 function link(title: string, url: string | null): string {
@@ -171,7 +188,7 @@ export async function runDailyDigest(
   const previous = await briefs.latestByKind("digest");
   const since = previous?.createdAt ?? new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
   const sections = await loadDigestSections(db, since, now);
-  const rendered = renderDigest(sections, date);
+  const rendered = renderDigest(sections, date, timezone);
   if (!rendered) {
     return { status: "skipped", reason: "empty" };
   }
