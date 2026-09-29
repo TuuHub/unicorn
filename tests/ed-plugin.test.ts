@@ -93,7 +93,7 @@ describe("EdPlugin.pull", () => {
         }),
         expect.objectContaining({
           type: "engagement",
-          data: { replies: 3, votes: 5, views: 150, stars: 2 },
+          data: { replies: 3, votes: 5, stars: 2 },
         }),
         expect.objectContaining({
           type: "discussion-category",
@@ -105,6 +105,8 @@ describe("EdPlugin.pull", () => {
     expect(String(fetcher.mock.calls[1]?.[0])).toContain("courses/100/threads?limit=30");
     expect(fetcher.mock.calls[0]?.[1]?.headers).toMatchObject({ Authorization: "Bearer ed-secret" });
     expect(items[2]).not.toHaveProperty("body");
+    // View counters tick on every read; keeping them in raw would rewrite the item every sync.
+    expect((items[1] as { raw: Record<string, unknown> }).raw).not.toHaveProperty("view_count");
     const thread2Facets = (items[2] as { facets: Array<{ type: string; data: Record<string, unknown> }> }).facets;
     const authorFacet = thread2Facets.find((facet) => facet.type === "author");
     expect(authorFacet?.data).toEqual({ actor: "ed-user:100" });

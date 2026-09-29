@@ -155,13 +155,11 @@ export class EdPlugin implements Plugin {
         data: {
           replies: asNumber(thread.reply_count),
           votes: asNumber(thread.vote_count),
-          views: asNumber(thread.view_count),
           stars: asNumber(thread.star_count),
         },
         capabilities: [
           { name: "has-reply-count", primitive: "scalar", field: "replies" },
           { name: "has-vote-count", primitive: "scalar", field: "votes" },
-          { name: "has-view-count", primitive: "scalar", field: "views" },
           { name: "has-star-count", primitive: "scalar", field: "stars" },
         ],
       },
@@ -188,10 +186,23 @@ export class EdPlugin implements Plugin {
       timestamp: new Date(createdAt).toISOString(),
       url: `https://edstem.org/${this.region}/courses/${courseId}/discussion/${number}`,
       ...(body ? { body } : {}),
-      raw: toJson(thread),
+      raw: toJson(stableThread(thread)),
       facets,
     };
   }
+}
+
+// Fields that tick on every read (view counters) or track this user's own
+// read state. Keeping them would make every sync see a "changed" thread and
+// rewrite the item, its facets and its FTS row for nothing.
+const VOLATILE_THREAD_FIELDS = ["view_count", "unique_view_count", "is_seen", "glanced_at", "new_reply_count"];
+
+function stableThread(thread: Record<string, unknown>): Record<string, unknown> {
+  const stable = { ...thread };
+  for (const field of VOLATILE_THREAD_FIELDS) {
+    delete stable[field];
+  }
+  return stable;
 }
 
 function ensureTrailingSlash(value: string): string {
