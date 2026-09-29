@@ -79,6 +79,9 @@ interface ItemRow {
   item_id: string;
   kind: string;
   title: string;
+  course: string | null;
+  bucket: string | null;
+  labeled_by: string | null;
 }
 
 interface FacetJoinRow {
@@ -109,7 +112,7 @@ export async function labelStructure(db: D1Database): Promise<{ labeled: number 
       .all<{ source: string; item_id: string; data_json: string | null }>(),
     db
       .prepare(
-        `SELECT source, item_id, kind, title
+        `SELECT source, item_id, kind, title, course, bucket, labeled_by
          FROM items
          WHERE archived_at IS NULL AND (labeled_by IS NULL OR labeled_by = 'structure')`,
       )
@@ -209,6 +212,12 @@ export async function labelStructure(db: D1Database): Promise<{ labeled: number 
       bucket = matched ? `course/${code}/${bucketSlug(matched)}` : `course/${code}/general`;
     } else {
       bucket = `course/${code}/general`;
+    }
+    // Runs every cycle over every item: rewriting an unchanged label costs a
+    // row write per index and FTS trigger, which alone ate most of the D1
+    // free-tier write quota. Only write labels that actually moved.
+    if (row.labeled_by === "structure" && row.course === code && row.bucket === bucket) {
+      continue;
     }
     updates.push({ source: row.source, itemId: row.item_id, course: code, bucket });
   }

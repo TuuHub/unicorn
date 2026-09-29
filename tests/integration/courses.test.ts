@@ -101,21 +101,22 @@ describe("labelStructure (real schema)", () => {
       bucket: "life/admin",
       labeled_by: "triage",
     });
-    // The triage-protected item is excluded from candidateRows entirely, so
-    // it never counts toward this run's labeled total either.
+    // The triage-protected item is excluded from candidateRows entirely, and
+    // every structure label is already current, so this run writes nothing.
     const relabeledKeys = [...labels.entries()].filter(([, row]) => row.labeled_by === "structure").map(([key]) => key);
     expect(relabeledKeys).not.toContain("campus-ed\u0000thread:11");
-    expect(result.labeled).toBe(relabeledKeys.length);
+    expect(result.labeled).toBe(0);
   });
 
-  it("is idempotent: a second run with no changes re-derives the same labels", async () => {
+  it("is idempotent: a second run with no changes keeps the labels and writes nothing", async () => {
     const first = await labelStructure(db);
     const firstLabels = await readLabels(db);
 
     const second = await labelStructure(db);
     const secondLabels = await readLabels(db);
 
-    expect(second.labeled).toBe(first.labeled);
+    expect(first.labeled).toBeGreaterThan(0);
+    expect(second.labeled).toBe(0);
     expect(secondLabels).toEqual(firstLabels);
   });
 });
