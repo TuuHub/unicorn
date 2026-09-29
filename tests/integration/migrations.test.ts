@@ -31,7 +31,8 @@ describe("migrations", () => {
   it("0012 copies existing v1 events into v2 changes, preserving old type names and item state", async () => {
     const sqlite = await openRawSqlite();
     const files = listMigrationFiles();
-    const preMemoryLayer = files.filter((file) => !file.includes("0012"));
+    // Only what precedes 0012: later migrations (e.g. 0015) depend on it.
+    const preMemoryLayer = files.slice(0, files.findIndex((file) => file.includes("0012")));
     const memoryLayerMigration = files.find((file) => file.includes("0012"));
     if (!memoryLayerMigration) {
       throw new Error("expected a 0012 migration file to exist");
@@ -102,7 +103,8 @@ describe("migrations", () => {
   it("0012 rebuilds briefs without the closed kind CHECK, preserving existing rows", async () => {
     const sqlite = await openRawSqlite();
     const files = listMigrationFiles();
-    const preMemoryLayer = files.filter((file) => !file.includes("0012"));
+    // Only what precedes 0012: later migrations (e.g. 0015) depend on it.
+    const preMemoryLayer = files.slice(0, files.findIndex((file) => file.includes("0012")));
     const memoryLayerMigration = files.find((file) => file.includes("0012"));
     if (!memoryLayerMigration) {
       throw new Error("expected a 0012 migration file to exist");
@@ -164,5 +166,37 @@ describe("migrations", () => {
     await db.prepare("DELETE FROM items WHERE item_id = '1'").run();
     const goneAfterDelete = await db.prepare("SELECT rowid FROM items_fts WHERE items_fts MATCH ?").bind('"Renamed"').all();
     expect(goneAfterDelete.results).toHaveLength(0);
+  });
+  it("0015 converges a drifted, unscoped FTS update trigger and skips no-op title/body writes", async () => {
+    const sqlite = await openRawSqlite();
+    const files = listMigrationFiles();
+    for (const file of files.filter((name) => !name.includes("0015"))) {
+      applyMigrationFile(sqlite, file);
+    }
+    // Production applied 0012 before its trigger was scoped: reproduce that.
+    sqlite.exec(`
+      DROP TRIGGER items_fts_update;
+      CREATE TRIGGER items_fts_update AFTER UPDATE ON items BEGIN
+        INSERT INTO items_fts(items_fts, rowid, title, body) VALUES ('delete', old.rowid, old.title, old.body);
+        INSERT INTO items_fts(rowid, title, body) VALUES (new.rowid, new.title, new.body);
+      END;
+    `);
+    applyMigrationFile(sqlite, files.find((name) => name.includes("0015"))!);
+
+    sqlite.exec(`
+      INSERT INTO items (source, item_id, kind, title, timestamp, url, body, raw_json, created_at, updated_at)
+      VALUES ('s', '1', 'thread', 'Assignment One', '2026-01-01T00:00:00.000Z', NULL, 'body', '{}', 'now', 'now');
+    `);
+    const totalChanges = () => (sqlite.prepare("SELECT total_changes() AS n").get() as { n: number }).n;
+    const writesFor = (sql: string) => {
+      const before = totalChanges();
+      sqlite.exec(sql);
+      return totalChanges() - before;
+    };
+
+    // Only the items row itself is written — the FTS trigger stays quiet.
+    expect(writesFor("UPDATE items SET course = 'FIT2004', bucket = 'course/FIT2004/general' WHERE item_id = '1'")).toBe(1);
+    expect(writesFor("UPDATE items SET title = 'Assignment One', body = 'body', raw_json = '{\"x\":1}' WHERE item_id = '1'")).toBe(1);
+    expect(writesFor("UPDATE items SET title = 'Renamed' WHERE item_id = '1'")).toBeGreaterThan(1);
   });
 });
