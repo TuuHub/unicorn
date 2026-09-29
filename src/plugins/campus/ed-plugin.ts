@@ -192,10 +192,12 @@ export class EdPlugin implements Plugin {
   }
 }
 
-// Fields that tick on every read (view counters) or track this user's own
-// read state. Keeping them would make every sync see a "changed" thread and
-// rewrite the item, its facets and its FTS row for nothing.
-const VOLATILE_THREAD_FIELDS = ["view_count", "unique_view_count", "is_seen", "glanced_at", "new_reply_count"];
+// Fields that tick on every read (view counters), track this user's own read
+// state, or bump on activity nothing here tracks (Ed's updated_at moved on
+// ~a third of threads per hour with no reply/vote/state change). Keeping them
+// would make every sync see a "changed" thread and rewrite the item and its
+// facets for nothing; any real change still moves a field that stays.
+const VOLATILE_THREAD_FIELDS = ["view_count", "unique_view_count", "is_seen", "glanced_at", "new_reply_count", "updated_at"];
 
 function stableThread(thread: Record<string, unknown>): Record<string, unknown> {
   const stable = { ...thread };
