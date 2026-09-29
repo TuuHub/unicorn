@@ -199,4 +199,37 @@ describe("migrations", () => {
     expect(writesFor("UPDATE items SET title = 'Assignment One', body = 'body', raw_json = '{\"x\":1}' WHERE item_id = '1'")).toBe(1);
     expect(writesFor("UPDATE items SET title = 'Renamed' WHERE item_id = '1'")).toBeGreaterThan(1);
   });
+  it("0016 prunes v1 counter noise from changes, keeping real news, seq values and the seq high-water mark", async () => {
+    const sqlite = await openRawSqlite();
+    const files = listMigrationFiles();
+    for (const file of files.filter((name) => !name.includes("0016"))) {
+      applyMigrationFile(sqlite, file);
+    }
+    sqlite.exec(`
+      INSERT INTO changes (type, source, item_id, kind, title, field, created_at) VALUES
+        ('item.created', 's', '1', 'thread', 'T', NULL, '2026-07-01'),
+        ('item.updated', 's', '1', 'thread', 'T', NULL, '2026-07-02'),
+        ('capability.changed', 's', '1', 'thread', 'T', 'views', '2026-07-02'),
+        ('capability.changed', 's', '1', 'thread', 'T', 'dueAt', '2026-07-03'),
+        ('capability.changed', 's', '1', 'thread', 'T', 'answerStatus', '2026-07-03'),
+        ('state.changed', 's', '1', 'thread', 'T', 'has-answer-status', '2026-09-28'),
+        ('capability.changed', 's', '1', 'thread', 'T', 'votes', '2026-09-29');
+    `);
+    applyMigrationFile(sqlite, files.find((name) => name.includes("0016"))!);
+
+    const rows = sqlite.prepare("SELECT seq, type, field FROM changes ORDER BY seq").all();
+    expect(rows).toEqual([
+      { seq: 1, type: "item.created", field: null },
+      { seq: 4, type: "capability.changed", field: "dueAt" },
+      { seq: 5, type: "capability.changed", field: "answerStatus" },
+      { seq: 6, type: "state.changed", field: "has-answer-status" },
+    ]);
+
+    // The pruned seq 7 was the latest: the next change must not reuse it.
+    sqlite.exec("INSERT INTO changes (type, source, item_id, kind, title, created_at) VALUES ('item.added', 's', '2', 'thread', 'U', 'now')");
+    expect(sqlite.prepare("SELECT MAX(seq) AS seq FROM changes").get()).toEqual({ seq: 8 });
+
+    expect(sqlite.prepare("SELECT COUNT(*) AS n FROM v_changes").get()).toEqual({ n: 5 });
+    expect(sqlite.prepare("SELECT name FROM sqlite_master WHERE name = 'changes_source_item_idx'").get()).toBeTruthy();
+  });
 });

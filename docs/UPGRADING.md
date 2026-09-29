@@ -11,7 +11,7 @@ npx wrangler d1 migrations list unicorn --remote
 ```
 
 Everything below assumes you're moving from `0011` to the current `HEAD` (through
-`0013`, plus `0014` once wave2/sources merges).
+`0016`).
 
 ## 1. Back up first
 
@@ -43,8 +43,8 @@ cycle fail until the migration lands. Don't run `wrangler deploy` on its own for
 upgrade; use `npm run upgrade` (or the two commands above, in that order) every time.
 
 `wrangler d1 migrations apply` only runs migrations not already recorded as applied, so
-running it against a deploy already on `0011` applies exactly `0012` and `0013` (and
-`0014` once wave2/sources merges) — it does not re-run `0001`–`0011`.
+running it against a deploy already on `0011` applies exactly `0012`–`0016` — it does
+not re-run `0001`–`0011`.
 
 ## 3. What migration `0012` does to your data
 
@@ -84,6 +84,20 @@ credentials (see the ADR-0039 amendment in [ADR.md](ADR.md)). If an existing dep
 already has `ED_API_TOKEN` / `MOODLE_SESSION` / `PLUGIN_SECRET_CANVAS_TOKEN` set as
 Worker Secrets, this migration changes nothing about how those sources authenticate —
 a Worker Secret always wins over anything later pasted into `/settings`.
+
+## 4b. What `0015` and `0016` do
+
+`0015_fts_update_trigger.sql` re-creates the FTS update trigger so it only reindexes when
+an item's title or body actually changes. Deploys that applied `0012` early got an
+unscoped trigger that reindexed on every update; this converges them.
+
+`0016_prune_legacy_changes.sql` is the one destructive step: it drops the v1 event noise
+`0012` carried into `changes` — `item.updated` and counter/author `capability.changed`
+rows (views, votes, stars, replies, actor). Real v1 news (`item.created`, deadline and
+answer/pin state changes) stays under its old type names. `seq` values and the
+AUTOINCREMENT high-water mark are preserved, so existing door cursors keep working. It
+rebuilds the table instead of deleting in place, which keeps it well inside D1's free
+daily write quota even with ~100k noise rows.
 
 ## 5. Bindings that provision or change themselves
 
