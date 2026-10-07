@@ -1,21 +1,28 @@
+<p align="center"><a href="https://unicorn.tuuhub.com"><img src=".github/assets/hero.jpg" alt="unicorn: the memory layer for the AI agent you already use" width="100%"></a></p>
+
 # unicorn
 
-> The memory layer of a student's own AI agent. unicorn ingests a student's campus
-> sources — Ed, Moodle, Canvas, Gmail — into one Cloudflare Worker on their own free
-> account, remembers what they looked like, joins one course across systems, and hands
-> the result to whatever agent the student already runs through an MCP door with
-> widgets. **It has no model of its own** (ADR-0034). Bring your own harness — Claude
-> Code, claude.ai, ChatGPT, Cowork — and it does the reasoning; unicorn remembers,
-> connects, notices change, and draws.
+**The memory layer for the AI agent you already use: a Cloudflare Worker on your own account that reads your campus sources every hour, remembers what each said, and tells your agent what changed.**
 
-The rule that answers "why not just mount the source in Claude": a source mounted in
-the client is *live*; the same source ingested by unicorn is *memory*. Both at once is
-the design. A client with every source mounted still cannot answer "what changed since
-Tuesday", cannot see that one course lives in three systems, cannot share a plan
-between a laptop session and a phone session, and cannot show a card instead of a
-paragraph. Those four are the product.
+[![Apache-2.0 License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-Production deployment: [unicorn.bunizao.workers.dev](https://unicorn.bunizao.workers.dev/health)
+unicorn ingests a student's campus sources (Ed, Moodle, Canvas, Gmail) into one Cloudflare Worker on their own free account, remembers what they looked like, joins one course across systems, and hands the result to whatever agent the student already runs, through an MCP door with widgets. **It has no model of its own** (ADR-0034). Bring your own harness (Claude Code, claude.ai, ChatGPT, Cowork) and it does the reasoning; unicorn remembers, connects, notices change, and draws.
+
+unicorn is the memory layer of a project with two layers. The live layer is three CLIs ([moodle-cli](https://github.com/bunizao/moodle-cli), [edstem-cli](https://github.com/bunizao/edstem-cli), [ontrack](https://github.com/bunizao/ontrack-cli)) that give people, scripts and AI agents terminal access (plus MCP for Moodle and Ed) to the systems a university runs. The rule: **live tools answer what is there now; unicorn answers what changed.** See [Part of unicorn](#part-of-unicorn).
+
+## Quick start
+
+```bash
+npm run setup
+```
+
+See [SETUP.md](SETUP.md) for the full step list (source-by-source onboarding, non-interactive flags for coding agents, and the manual path), and [docs/CONNECTORS.md](docs/CONNECTORS.md) for adding unicorn to Claude Code, claude.ai, Claude mobile/Cowork, or ChatGPT once it's deployed. Upgrading an existing deployment instead of a first install: [docs/UPGRADING.md](docs/UPGRADING.md).
+
+Hosted docs: [unicorn.tuuhub.com/docs/unicorn](https://unicorn.tuuhub.com/docs/unicorn). Production deployment: [unicorn.bunizao.workers.dev](https://unicorn.bunizao.workers.dev/health).
+
+## Live vs. memory
+
+The rule that answers "why not just mount the source in Claude": a source mounted in the client is *live*; the same source ingested by unicorn is *memory*. Both at once is the design. A client with every source mounted still cannot answer "what changed since Tuesday", cannot see that one course lives in three systems, cannot share a plan between a laptop session and a phone session, and cannot show a card instead of a paragraph. Those four are the product.
 
 ## Architecture, at a glance
 
@@ -132,32 +139,11 @@ listing what changed since the last digest, deadlines in the next 7 days, and st
 posts — skipped entirely when nothing happened. Read it through `get_briefs` like any
 other brief.
 
-## Quickstart
+## Security notes
 
-```bash
-npm run setup
-```
-
-See [SETUP.md](SETUP.md) for the full step list (source-by-source onboarding,
-non-interactive flags for coding agents, and the manual path), and
-[docs/CONNECTORS.md](docs/CONNECTORS.md) for adding unicorn to Claude Code, claude.ai,
-Claude mobile/Cowork, or ChatGPT once it's deployed. Upgrading an existing deployment
-instead of a first install: [docs/UPGRADING.md](docs/UPGRADING.md).
-
-## Docs index
-
-| doc | what's in it |
-|---|---|
-| [SETUP.md](SETUP.md) | Deploy and onboard sources, human or coding-agent path |
-| [docs/UPGRADING.md](docs/UPGRADING.md) | Upgrading a production deploy from the pre-memory-layer agent |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | The end-state system, section by section, and what's shipped |
-| [docs/ADR.md](docs/ADR.md) | The decision trail — read this when this doc and the code disagree |
-| [docs/GLOSSARY.md](docs/GLOSSARY.md) | Vocabulary: bucket, cursor, brief, plan, playbook, widget, door, CIMD, … |
-| [docs/CONNECTORS.md](docs/CONNECTORS.md) | Adding unicorn as a connector to each client |
-| [docs/MANIFESTS.md](docs/MANIFESTS.md) | Writing a Tier-1 declarative plugin manifest |
-| [docs/GMAIL.md](docs/GMAIL.md) | The Gmail source: OAuth, scope, the preset manifest |
-| [docs/PI-AGENT-PRODUCT.md](docs/PI-AGENT-PRODUCT.md) | *Historical* — the in-Worker agent ADR-0034 removed |
-| [docs/SPIKE-0001-MOODLE-AUTH.md](docs/SPIKE-0001-MOODLE-AUTH.md) | The original Moodle feasibility spike |
+- Read-only on every source: unicorn never writes to Ed, Moodle, Canvas or Gmail. Widget actions change only unicorn's own state.
+- Single-user, self-deployed: your own Worker on your own Cloudflare account, no shared service.
+- The Gmail OAuth refresh token is stored in plaintext in your D1 database (`oauth_tokens` table). Treat access to that database, and to your Cloudflare account, like access to your mailbox.
 
 ## Design principles
 
@@ -182,6 +168,21 @@ instead of a first install: [docs/UPGRADING.md](docs/UPGRADING.md).
   Claude Code plugin are what get new effort; new sources are plugins, not new
   reasoning code (ADR-0029, ADR-0034).
 
+## Docs index
+
+| doc | what's in it |
+|---|---|
+| [SETUP.md](SETUP.md) | Deploy and onboard sources, human or coding-agent path |
+| [docs/UPGRADING.md](docs/UPGRADING.md) | Upgrading a production deploy from the pre-memory-layer agent |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | The end-state system, section by section, and what's shipped |
+| [docs/ADR.md](docs/ADR.md) | The decision trail — read this when this doc and the code disagree |
+| [docs/GLOSSARY.md](docs/GLOSSARY.md) | Vocabulary: bucket, cursor, brief, plan, playbook, widget, door, CIMD, … |
+| [docs/CONNECTORS.md](docs/CONNECTORS.md) | Adding unicorn as a connector to each client |
+| [docs/MANIFESTS.md](docs/MANIFESTS.md) | Writing a Tier-1 declarative plugin manifest |
+| [docs/GMAIL.md](docs/GMAIL.md) | The Gmail source: OAuth, scope, the preset manifest |
+| [docs/PI-AGENT-PRODUCT.md](docs/PI-AGENT-PRODUCT.md) | *Historical* — the in-Worker agent ADR-0034 removed |
+| [docs/SPIKE-0001-MOODLE-AUTH.md](docs/SPIKE-0001-MOODLE-AUTH.md) | The original Moodle feasibility spike |
+
 ## Architecture Decision Records
 
 Read [docs/ADR.md](docs/ADR.md) in order — it's the source of truth when this file and
@@ -197,12 +198,30 @@ resident-agent design that was built, measured, and then removed.
 | **0036** | **Change model and buckets: lossless events, five buckets, harness-side triage** |
 | **0037** | **Widgets: MCP Apps resources, six widgets, text fallback** |
 | **0038** | **Canvas: Tier-2 ingest plugin; canvas-mcp is the live toolbelt; onboarding by source** |
-| 0039+ | 2026-09-27 amendments — source-credential encryption, `upcoming`, the widget model-collaboration loop, the SQL guard hardening, OAuth CIMD, the injected clock. See [docs/ADR.md](docs/ADR.md). |
+| 0039+ | 2026-09-27 amendments — source credentials, `upcoming`, the widget model-collaboration loop, the SQL guard hardening, OAuth CIMD, the injected clock. See [docs/ADR.md](docs/ADR.md). |
 
-## Related projects
+## Part of unicorn
 
-- [edstem-cli](https://github.com/bunizao/edstem-cli) — terminal-first Ed Discussion client
-- [moodle-cli](https://github.com/bunizao/moodle-cli) — terminal-first Moodle client
+unicorn is one project in two layers. The live tools answer what is there now; unicorn answers what changed.
+
+| Project | Layer | What it does | Repo |
+| --- | --- | --- | --- |
+| **unicorn** (you are here) | **Memory** | **A Cloudflare Worker on your own account. Reads Moodle, Ed, Canvas, Gmail and feeds every hour, remembers what each said, and tells your AI agent what changed.** | [TuuHub/unicorn](https://github.com/TuuHub/unicorn) |
+| moodle-cli | Live | Moodle from the terminal and MCP: units, deadlines, grades, forums, files, submissions. | [bunizao/moodle-cli](https://github.com/bunizao/moodle-cli) |
+| edstem-cli | Live | Ed Discussion from the terminal and MCP: units, threads, lessons, files, posting. | [bunizao/edstem-cli](https://github.com/bunizao/edstem-cli) |
+| ontrack | Live | OnTrack / Doubtfire from the terminal: units, tasks, chats, submissions. CLI only, no MCP server. | [bunizao/ontrack-cli](https://github.com/bunizao/ontrack-cli) |
+
+The three live tools share one command contract through [@bunizao/cli-kit](https://github.com/bunizao/cli-kit).
+Docs for everything: [unicorn.tuuhub.com/docs](https://unicorn.tuuhub.com/docs). This project: [unicorn.tuuhub.com/docs/unicorn](https://unicorn.tuuhub.com/docs/unicorn). CLIs overview: [unicorn.tuuhub.com/cli](https://unicorn.tuuhub.com/cli).
+
+## Built on
+
+unicorn stands on the live layer. Its Moodle and Ed readers grew out of the API work in moodle-cli and edstem-cli: ADR-0002 reimplemented the subset of calls it needed in TypeScript, so no code is shared and unicorn does not import the CLIs.
+
+- [moodle-cli](https://github.com/bunizao/moodle-cli): live Moodle access; its use of Moodle's front-end JSON API (`/lib/ajax/service.php`) is what the Moodle reader follows.
+- [edstem-cli](https://github.com/bunizao/edstem-cli): live Ed Discussion access; the Ed reader follows the same Ed REST API.
+- [ontrack](https://github.com/bunizao/ontrack-cli): live OnTrack / Doubtfire access, used from the terminal next to unicorn. unicorn has no OnTrack source today.
+- [@bunizao/cli-kit](https://github.com/bunizao/cli-kit): the command contract shared by the three CLIs.
 
 ## License
 
