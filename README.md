@@ -1,14 +1,23 @@
 <p align="center"><a href="https://unicorn.tuuhub.com"><img src=".github/assets/hero.jpg" alt="unicorn: the memory layer for the AI agent you already use" width="100%"></a></p>
 
-# unicorn
+# 🦄 unicorn
 
-**The memory layer for the AI agent you already use: a Cloudflare Worker on your own account that reads your campus sources every hour, remembers what each said, and tells your agent what changed.**
+**Give your AI agent a memory of your campus.**
+
+unicorn is a Cloudflare Worker on your own free account. Every hour it reads Ed, Moodle, Canvas, Gmail and feeds, remembers what each said, joins one course across systems, and tells your agent what changed. It is a **remote MCP server** with widgets: connect it to Claude, ChatGPT or Claude Code and that agent does the reasoning. **unicorn has no model of its own.**
 
 [![Apache-2.0 License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-unicorn ingests a student's campus sources (Ed, Moodle, Canvas, Gmail) into one Cloudflare Worker on their own free account, remembers what they looked like, joins one course across systems, and hands the result to whatever agent the student already runs, through an MCP door with widgets. **It has no model of its own** (ADR-0034). Bring your own harness (Claude Code, claude.ai, ChatGPT, Cowork) and it does the reasoning; unicorn remembers, connects, notices change, and draws.
+> 🦄 **The memory layer of unicorn.** Live tools answer what is there now; unicorn answers what changed.
+>
+> 📖 **[Read the docs → unicorn.tuuhub.com/docs/unicorn](https://unicorn.tuuhub.com/docs/unicorn)**
 
-unicorn is the memory layer of a project with two layers. The live layer is three CLIs ([moodle-cli](https://github.com/bunizao/moodle-cli), [edstem-cli](https://github.com/bunizao/edstem-cli), [ontrack](https://github.com/bunizao/ontrack-cli)) that give people, scripts and AI agents terminal access (plus MCP for Moodle and Ed) to the systems a university runs. The rule: **live tools answer what is there now; unicorn answers what changed.** See [Part of unicorn](#part-of-unicorn).
+| Use it from | How |
+| --- | --- |
+| Claude, ChatGPT or any web AI | Add your Worker's `/mcp` as a custom connector (OAuth) |
+| Claude Code, Cowork or another local agent | Add the same `/mcp` endpoint as a remote MCP server |
+
+Step by step for each client: [docs/CONNECTORS.md](docs/CONNECTORS.md).
 
 ## Quick start
 
@@ -16,15 +25,76 @@ unicorn is the memory layer of a project with two layers. The live layer is thre
 npm run setup
 ```
 
-See [SETUP.md](SETUP.md) for the full step list (source-by-source onboarding, non-interactive flags for coding agents, and the manual path), and [docs/CONNECTORS.md](docs/CONNECTORS.md) for adding unicorn to Claude Code, claude.ai, Claude mobile/Cowork, or ChatGPT once it's deployed. Upgrading an existing deployment instead of a first install: [docs/UPGRADING.md](docs/UPGRADING.md).
+Setup deploys the Worker to your Cloudflare account and onboards your sources one at a time. [SETUP.md](SETUP.md) has the full step list, non-interactive flags for coding agents, and the manual path. Upgrading an existing deployment: [docs/UPGRADING.md](docs/UPGRADING.md).
 
-Hosted docs: [unicorn.tuuhub.com/docs/unicorn](https://unicorn.tuuhub.com/docs/unicorn). Production deployment: [unicorn.bunizao.workers.dev](https://unicorn.bunizao.workers.dev/health).
+## Quick links
 
-## Live vs. memory
+- [Why memory](#why-memory)
+- [What your agent gets](#what-your-agent-gets)
+- [How it works](#how-it-works)
+- [Docs](#docs)
 
-The rule that answers "why not just mount the source in Claude": a source mounted in the client is *live*; the same source ingested by unicorn is *memory*. Both at once is the design. A client with every source mounted still cannot answer "what changed since Tuesday", cannot see that one course lives in three systems, cannot share a plan between a laptop session and a phone session, and cannot show a card instead of a paragraph. Those four are the product.
+## Why memory
 
-## Architecture, at a glance
+A source mounted directly in your client is *live*; the same source ingested by unicorn is *memory*. Both at once is the design. A client with every source mounted still cannot answer "what changed since Tuesday", cannot see that one course lives in three systems, cannot share a plan between a laptop session and a phone session, and cannot show a card instead of a paragraph. Those four are the product.
+
+## What your agent gets
+
+### The door (`POST /mcp`): 14 tools, read-only on every source
+
+| tool | purpose |
+|---|---|
+| `get_briefs` / `ack_briefs` | the durable inbox |
+| `write_brief` | routines deposit their output here; idempotent on `idempotencyKey` |
+| `changes_since` | the lossless feed since a cursor — `{ events[], nextCursor, counts }` |
+| `course` | one course across every source, grouped by bucket |
+| `life` | the non-course buckets (`life/events`, `life/admin`, `life/other`) |
+| `search_items` | FTS5 over title and body, ranked |
+| `upcoming` | items with a deadline in the next N days, across every course |
+| `get_plan` / `save_plan` | shared per-subject plan state |
+| `remember` | verbatim corrections, zero-LLM |
+| `label_items` | the triage routine's write path into buckets |
+| `run_playbook` | a playbook's procedure text plus its pre-fetched data, for tool-only clients |
+| `status` | last sync and error per source, no secrets |
+
+Every result carries a full text rendering ending in a deterministic `Next:` line, plus `structuredContent` for widgets. `POST /mcp/admin` (bearer `ADMIN_TOKEN`) is a separate operator surface that a client agent never mounts.
+
+### Widgets
+
+Six `ui://unicorn/<name>` resources, rendered by ChatGPT and Claude (web, desktop, mobile) through MCP Apps, with a full text fallback elsewhere:
+
+| widget | tool | actions |
+|---|---|---|
+| brief card | `get_briefs` | `ack_briefs` |
+| course view | `course` | — |
+| changes feed | `changes_since` | — |
+| plan checklist | `get_plan` | `save_plan` |
+| deadline timeline | `upcoming` / `search_items` | — |
+| connection status | `status` | — |
+
+A widget action never writes to a source, only to unicorn's own state.
+
+### Playbooks
+
+Four procedures, `weekly-plan`, `decompose-assignment`, `forum-brief` and `triage`, ship as MCP prompts (slash commands in Claude Code) and through `run_playbook` for tool-only clients like ChatGPT. Your harness's own scheduler runs them on a cadence; unicorn runs no model, so it runs no schedule for them.
+
+### Changes, buckets and the daily digest
+
+- Every change is a typed event (`deadline.changed`, `grade.changed`, `notice.posted`, …) with a monotonic cursor, and events are never pruned.
+- Every item sits in a bucket: `course/<CODE>/<assignment>`, `course/<CODE>/general`, `life/events`, `life/admin` or `life/other`. Nothing is guessed; unresolved items come back `unlabeled`.
+- A zero-LLM digest lands once a day after 07:00 with what changed, the next 7 days of deadlines, and staff posts, and is skipped when nothing happened.
+
+### Your own tools
+
+Your agent can add up to 20 tools without a redeploy: each is a name, an input schema and one read-only SQL statement over five fixed views, checked by a mechanical guard. Tools are shared through a GitHub repository, not a hosted registry. Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+## Security
+
+- Read-only on every source: unicorn never writes to Ed, Moodle, Canvas or Gmail. Widget actions change only unicorn's own state.
+- Single-user, self-deployed: your own Worker on your own Cloudflare account, no shared service.
+- The Gmail OAuth refresh token is stored in plaintext in your D1 database (`oauth_tokens` table). Treat access to that database, and to your Cloudflare account, like access to your mailbox.
+
+## How it works
 
 ```
    the student's harness (not our code)                    ONE CLOUDFLARE WORKER (ours)
@@ -49,126 +119,12 @@ The rule that answers "why not just mount the source in Claude": a source mounte
                                                  └──────────────────────────────────────────────┘
 ```
 
-Reasoning lives in the harness (interactively or on a schedule). unicorn is
-deterministic end to end: ingest, diff, label, digest, retain — zero model calls
-anywhere in the Worker.
+- **Memory layer, not a brain.** unicorn ingests, labels and remembers deterministically; zero model calls anywhere in the Worker (ADR-0034).
+- **Facets are the contract.** Plugins only ingest and declare facets; change detection, buckets and retention bind to facet capabilities, so a new source with a deadline facet gets deadline tracking for free (ADR-0016, ADR-0019, ADR-0020).
+- **Two plugin tiers.** Declarative JSON, RSS or remote-MCP manifests for most sources, installable without a deploy; in-repo TypeScript for Ed, Moodle and Canvas (ADR-0017, ADR-0038).
+- **Single-user self-deploy.** Your Worker, your Cloudflare account, your credentials (ADR-0001).
 
-## Features
-
-### The door (`POST /mcp`) — 14 tools, read-only on every source
-
-| tool | purpose |
-|---|---|
-| `get_briefs` / `ack_briefs` | the durable inbox |
-| `write_brief` | routines deposit their output here; idempotent on `idempotencyKey` |
-| `changes_since` | the lossless feed since a cursor — `{ events[], nextCursor, counts }` |
-| `course` | one course across every source, grouped by bucket |
-| `life` | the non-course buckets (`life/events`, `life/admin`, `life/other`) |
-| `search_items` | FTS5 over title and body, ranked |
-| `upcoming` | items with a deadline in the next N days, across every course |
-| `get_plan` / `save_plan` | shared per-subject plan state |
-| `remember` | verbatim corrections, zero-LLM |
-| `label_items` | the triage routine's write path into buckets |
-| `run_playbook` | a playbook's procedure text plus its pre-fetched data, for tool-only clients |
-| `status` | last sync and error per source, no secrets |
-
-Plus up to 20 **user-defined tools** (below). Every result carries a full text
-rendering ending in a deterministic `Next:` line, and `structuredContent` for widgets.
-
-`POST /mcp/admin` (bearer `ADMIN_TOKEN`) is the separate operator surface: item/plugin
-inspection, `link_items`, and the user-tool admin tools below. A client agent never
-mounts it.
-
-### Widgets
-
-Six `ui://unicorn/<name>` resources, rendered by ChatGPT and Claude (web, desktop,
-mobile) via the MCP Apps extension, with a full text fallback for hosts that don't
-render them:
-
-| widget | tool | actions |
-|---|---|---|
-| brief card | `get_briefs` | `ack_briefs` |
-| course view | `course` | — |
-| changes feed | `changes_since` | — |
-| plan checklist | `get_plan` | `save_plan` |
-| deadline timeline | `upcoming` / `search_items` | — |
-| connection status | `status` | — |
-
-A widget action never writes to a source — only unicorn's own state (acknowledging,
-planning, remembering, labelling).
-
-### Playbooks
-
-Four procedures — `weekly-plan`, `decompose-assignment`, `forum-brief`, `triage` —
-shipped as markdown in `playbooks/*.md`, registered as MCP prompts (`prompts/list`, so
-Claude Code shows them as slash commands) and returned by `run_playbook` for tool-only
-clients like ChatGPT. Door tools are required; live source MCPs are optional
-enrichment, and every procedure completes without them. The harness's own scheduler —
-Claude Code routines, Cowork scheduled tasks — runs them on a cadence; unicorn runs no
-model, so it runs no schedule for them either.
-
-### The tool library and user-defined tools
-
-A student's own agent can grow the door without a redeploy: `define_tool` on the admin
-surface stores a name, description, input schema and one read-only SQL statement over
-five fixed views (`v_items`, `v_upcoming`, `v_changes`, `v_courses`, `v_buckets`) — a
-tool is data, never code. Guards are mechanical (a hand-rolled SQL tokenizer, not a
-model judgment): `SELECT`/`WITH` only, one statement, bound named parameters, every
-FROM/JOIN target checked against the five views or the statement's own CTEs, a forced
-`LIMIT 200` wrap that can't be escaped by paren or comment tricks, a cap of 20 tools,
-and an `EXPLAIN` against the real schema at definition time. `describe_schema` reads
-back each view's columns and an example row. Sharing is a GitHub repository
-(`unicorn-tools`, `index.json`): `browse_tools`, `install_tool`, `publish_tool` (which
-hands the caller's agent a PR-ready payload — the Worker never pushes to GitHub
-itself). No hosted registry.
-
-### changes_since and buckets
-
-Every change is a typed event (`item.added`, `item.archived`, `item.restored`,
-`deadline.changed`, `state.changed`, `grade.changed`, `content.changed`,
-`notice.posted`) with a monotonic cursor. Events are never pruned. Every item also
-carries a bucket — `course/<CODE>/<assignment>`, `course/<CODE>/general`,
-`life/events`, `life/admin`, `life/other` — labelled deterministically at ingest for
-structured sources, or by the `triage` playbook for free text. Nothing is guessed:
-unresolved items come back flagged `unlabeled` for the client to place.
-
-### The daily digest
-
-A zero-LLM brief, written once a day at or after 07:00 in the configured timezone,
-listing what changed since the last digest, deadlines in the next 7 days, and staff
-posts — skipped entirely when nothing happened. Read it through `get_briefs` like any
-other brief.
-
-## Security notes
-
-- Read-only on every source: unicorn never writes to Ed, Moodle, Canvas or Gmail. Widget actions change only unicorn's own state.
-- Single-user, self-deployed: your own Worker on your own Cloudflare account, no shared service.
-- The Gmail OAuth refresh token is stored in plaintext in your D1 database (`oauth_tokens` table). Treat access to that database, and to your Cloudflare account, like access to your mailbox.
-
-## Design principles
-
-- **Memory layer, not a brain.** unicorn ingests, labels, and remembers deterministically;
-  the harness's own model does all the reasoning (ADR-0034). The whole Worker is
-  LLM-free — no BYOK, no token ledger, no degradation chain to reason about.
-- **Live vs. memory, not live vs. mounted.** Mounting a source directly in the client
-  gives real-time reach; ingesting it into unicorn gives a baseline, change detection,
-  and a cross-source join. Both together is the design, not a redundancy.
-- **Facets are the contract.** Plugins only ingest and declare which facets they emit.
-  Change detection, buckets, and retention bind to facet *capabilities* — five
-  primitives (`temporal`, `state`, `relation`, `actor`, `scalar`) — not to plugins, so a
-  new source that emits a `has-deadline` facet inherits deadline tracking for free.
-  (ADR-0016, ADR-0019, ADR-0020)
-  Details:
-  - **Two plugin tiers.** Declarative JSON/RSS/remote-MCP manifests for most sources
-    (installable without a deploy); in-repo TypeScript for the few needing real logic
-    — Ed, Moodle, and Canvas (ADR-0017, ADR-0038).
-- **Single-user self-deploy.** Your own Worker on your own free Cloudflare account. No
-  multi-tenant service, no shared quota, credentials stay yours (ADR-0001).
-- **The harness is the investment.** Playbooks, tool projections, widgets, and the
-  Claude Code plugin are what get new effort; new sources are plugins, not new
-  reasoning code (ADR-0029, ADR-0034).
-
-## Docs index
+## Docs
 
 | doc | what's in it |
 |---|---|
@@ -183,38 +139,24 @@ other brief.
 | [docs/PI-AGENT-PRODUCT.md](docs/PI-AGENT-PRODUCT.md) | *Historical* — the in-Worker agent ADR-0034 removed |
 | [docs/SPIKE-0001-MOODLE-AUTH.md](docs/SPIKE-0001-MOODLE-AUTH.md) | The original Moodle feasibility spike |
 
-## Architecture Decision Records
+[docs/ADR.md](docs/ADR.md) is the source of truth when this file and the code disagree. The current design is ADR-0034 to ADR-0038 plus the 2026-09-27 amendments (ADR-0039 onwards); earlier ADRs record the resident-agent design that was built, measured and removed.
 
-Read [docs/ADR.md](docs/ADR.md) in order — it's the source of truth when this file and
-the code disagree. The current end-state is ADR-0034 through ADR-0038 plus the
-2026-09-27 amendments (ADR-0039–0044); everything before ADR-0034 documents the
-resident-agent design that was built, measured, and then removed.
-
-| ADR | Decision |
-|-----|----------|
-| 0001–0033 | Superseded design history — self-deploy, the plugin/facet model, the resident Pi agent, the four-tool door, playbooks and briefs, Gmail ingest. Kept for the trail. |
-| **0034** | **Brain removed: unicorn is the memory layer; reasoning runs in the harness** |
-| **0035** | **Door v2: state tools, MCP prompts, OAuth for connectors, user-defined SQL tools** |
-| **0036** | **Change model and buckets: lossless events, five buckets, harness-side triage** |
-| **0037** | **Widgets: MCP Apps resources, six widgets, text fallback** |
-| **0038** | **Canvas: Tier-2 ingest plugin; canvas-mcp is the live toolbelt; onboarding by source** |
-| 0039+ | 2026-09-27 amendments — source credentials, `upcoming`, the widget model-collaboration loop, the SQL guard hardening, OAuth CIMD, the injected clock. See [docs/ADR.md](docs/ADR.md). |
-
-## Part of unicorn
+## 🦄 Part of unicorn
 
 unicorn is one project in two layers. The live tools answer what is there now; unicorn answers what changed.
 
-| Project | Layer | What it does | Repo |
-| --- | --- | --- | --- |
-| **unicorn** (you are here) | **Memory** | **A Cloudflare Worker on your own account. Reads Moodle, Ed, Canvas, Gmail and feeds every hour, remembers what each said, and tells your AI agent what changed.** | [TuuHub/unicorn](https://github.com/TuuHub/unicorn) |
-| moodle-cli | Live | Moodle from the terminal and MCP: units, deadlines, grades, forums, files, submissions. | [bunizao/moodle-cli](https://github.com/bunizao/moodle-cli) |
-| edstem-cli | Live | Ed Discussion from the terminal and MCP: units, threads, lessons, files, posting. | [bunizao/edstem-cli](https://github.com/bunizao/edstem-cli) |
-| ontrack | Live | OnTrack / Doubtfire from the terminal: units, tasks, chats, submissions. CLI only, no MCP server. | [bunizao/ontrack-cli](https://github.com/bunizao/ontrack-cli) |
+| Project | Layer | What it does |
+| --- | --- | --- |
+| **[🦄 unicorn](https://github.com/TuuHub/unicorn)** (you are here) | **Memory** | **A Cloudflare Worker on your own account. Reads Moodle, Ed, Canvas, Gmail and feeds every hour, remembers what each said, and tells your AI agent what changed. Remote MCP.** |
+| [moodle-cli](https://github.com/bunizao/moodle-cli) | Live | Moodle: units, deadlines, grades, forums, files, submissions. CLI, local and remote MCP. |
+| [edstem-cli](https://github.com/bunizao/edstem-cli) | Live | Ed Discussion: units, threads, lessons, files, posting. CLI, local and remote MCP. |
+| [ontrack](https://github.com/bunizao/ontrack-cli) | Live | OnTrack / Doubtfire: units, tasks, chats, submissions. CLI only. |
 
-The three live tools share one command contract through [@bunizao/cli-kit](https://github.com/bunizao/cli-kit).
-Docs for everything: [unicorn.tuuhub.com/docs](https://unicorn.tuuhub.com/docs). This project: [unicorn.tuuhub.com/docs/unicorn](https://unicorn.tuuhub.com/docs/unicorn). CLIs overview: [unicorn.tuuhub.com/cli](https://unicorn.tuuhub.com/cli).
+The three CLIs share one command contract through [@bunizao/cli-kit](https://github.com/bunizao/cli-kit).
 
-## Built on
+📖 **Docs:** [this project](https://unicorn.tuuhub.com/docs/unicorn) · [all projects](https://unicorn.tuuhub.com/docs) · [CLIs overview](https://unicorn.tuuhub.com/cli) · [MCP clients](https://unicorn.tuuhub.com/docs/mcp)
+
+### Built on
 
 unicorn stands on the live layer. Its Moodle and Ed readers grew out of the API work in moodle-cli and edstem-cli: ADR-0002 reimplemented the subset of calls it needed in TypeScript, so no code is shared and unicorn does not import the CLIs.
 
