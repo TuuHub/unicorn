@@ -337,7 +337,7 @@ export function renderConnectedApps(grants: GrantSummary[]): string {
           </li>`;
         })
         .join("")
-    : `<p class="hint">No connected apps yet. Add unicorn as a connector from claude.ai, ChatGPT or Cowork — see docs/CONNECTORS.md.</p>`;
+    : `<p class="hint">No connected apps yet. Add unicorn as a connector from claude.ai, ChatGPT or Cowork — see <a href="https://unicorn.tuuhub.com/docs/unicorn/connect" target="_blank" rel="noopener">Connect a client</a>.</p>`;
   return `
     <section class="card" aria-labelledby="connected-apps-title">
       <div class="card-head"><h2 id="connected-apps-title">Connected apps</h2><p class="card-sub">OAuth clients that can read your unicorn memory through /mcp.</p></div>

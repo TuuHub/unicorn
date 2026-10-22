@@ -64,7 +64,7 @@ export const SOURCE_PRESETS: SourcePreset[] = [
       { key: "session", label: "Session cookie (advanced)", type: "password" },
     ],
     instructions: "Run `npm run moodle:push` from your machine to push a fresh session; paste one below only if you can't run that locally.",
-    instructionsUrl: "https://github.com/TuuHub/unicorn/blob/main/SETUP.md",
+    instructionsUrl: "https://unicorn.tuuhub.com/docs/unicorn/sources#moodle",
   },
   {
     id: "canvas",

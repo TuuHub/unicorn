@@ -592,7 +592,7 @@ function renderGmailSourceCard(status: SourceStatus, runtime: SettingsRuntime): 
   const configured = connections.google === true;
   const connected = connections.gmailConnected === true;
   const body = !configured
-    ? `<p class="hint">Set <code>PLUGIN_SECRET_GOOGLE_CLIENT_ID</code> and <code>PLUGIN_SECRET_GOOGLE_CLIENT_SECRET</code> with <code>wrangler secret put</code>, then reload this page. See docs/GMAIL.md for the full setup.</p>`
+    ? `<p class="hint">Set <code>PLUGIN_SECRET_GOOGLE_CLIENT_ID</code> and <code>PLUGIN_SECRET_GOOGLE_CLIENT_SECRET</code> with <code>wrangler secret put</code>, then reload this page. See <a href="https://unicorn.tuuhub.com/docs/unicorn/sources#gmail" target="_blank" rel="noopener">the Gmail setup</a>.</p>`
     : connected
       ? `<p class="notice" role="status">Connected — Gmail threads sync on the hourly cycle.</p>`
       : `<p class="hint">Not connected yet.</p><div class="actions"><a class="button" href="/settings/oauth/gmail/start">Connect Gmail</a></div>`;
@@ -666,7 +666,7 @@ function renderConnectAgentCard(doorUrl: string, mcpToken: string): string {
   const claudeCodeCommand = `claude mcp add --transport http unicorn ${doorUrl} --header "Authorization: Bearer ${mcpToken}"`;
   return `
     <section class="card" aria-labelledby="connect-title">
-      <div class="card-head"><h2 id="connect-title">Connect your agent</h2><p class="card-sub">Full setup: <a href="https://github.com/TuuHub/unicorn/blob/main/docs/CONNECTORS.md" target="_blank" rel="noopener">docs/CONNECTORS.md</a>.</p></div>
+      <div class="card-head"><h2 id="connect-title">Connect your agent</h2><p class="card-sub">Full setup: <a href="https://unicorn.tuuhub.com/docs/unicorn/connect" target="_blank" rel="noopener">Connect a client</a>.</p></div>
       <div class="card-body">
         <div class="rows">
           ${renderCopyRow("Claude Code plugin", pluginMarketplaceCommand)}
