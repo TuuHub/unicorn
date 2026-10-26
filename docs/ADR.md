@@ -901,3 +901,58 @@ Unchanged from the original policy and still enforced: `SELECT`/`WITH` only as t
 **Consequences.**
 - The admin surface stays small, and the course resolver never guesses. Where a fuzzy match might have helped, the item is left unlabelled, and triage makes it visible.
 - A new clock-dependent feature must take both `now` (ADR-0044) and the timezone.
+
+---
+
+## ADR-0046 — Campus credentials: a local broker mints them, the Worker only receives
+
+**Status:** Accepted (2026-10-27; withdraws ADR-0003's opt-in full-auto layer and settles its open push question; amends ADR-0039)
+
+**Context.** OnTrack is the source no keep-alive can save. Doubtfire's refresh token is a server-side record with a fixed expiry, one week by upstream default and at Monash. `POST /api/auth/access-token` mints access tokens from it but never rotates or extends it ([doubtfire-api `c91418e`](https://github.com/doubtfire-lms/doubtfire-api/blob/c91418e128e97df1fb61d0f774715475b757d8f4/app/api/authentication_api.rb)). Anything that holds only the access and refresh tokens therefore dies seven days after the sign-in that issued them, however often it uses them, and only a fresh Okta sign-in with MFA issues another. There is nothing to measure here: the refresh cookie's `Expires` is copied from that server record. This is why OnTrack has no unicorn plugin and no hosted MCP; ADR-0034 counts it among the remote MCP servers, but it was deferred on exactly this problem. Moodle is easier because its session is idle-based and the hourly cycle keeps it warm (ADR-0003). Its re-push is still manual, though, and `npm run moodle:push` writes `MOODLE_SESSION` with `wrangler secret put`, which deploys a new Worker version per push and, as an env secret, shadows anything stored later (ADR-0039).
+
+Two ways to remove the weekly human step were weighed.
+
+- **Okta in the cloud**, ADR-0003's opt-in layer: password and TOTP secret as Worker secrets, re-login through Browser Run, whose free plan allows ten minutes a day. Rejected. Both factors in one Cloudflare secret store put the whole Monash identity (mail, Moodle, OnTrack, enrolment) behind one account, which is MFA in name only. `okta-auth` is Python Playwright and would need a TypeScript twin. A fresh datacenter browser on every login is what Okta risk policy flags, and a headless login that breaks when Okta changes its widget fails with nobody watching. moodle-cli's remote sign-in through Browser Run is a different thing: a human types the credentials and nothing is stored.
+- **A local broker.** The root credential stays on the laptop, in the keyring where `okta-auth` already keeps it. A scheduled job mints app credentials there and pushes only those: short-lived, scoped to one app, revocable on their own. moodle-cli already ships this shape for its own Worker (`moodle mcp renewal`, `PUT /session` behind a dedicated sync token).
+
+**Decision.** The local broker, behind three seams, each owned by the tool that understands it.
+
+1. **`okta login <url> --stop-at <regex> --json`** (okta-auth). Signs in as today, then aborts the first top-level navigation whose URL matches `<regex>` before the page loads, and prints `{"success": true, "stopped_at": "<url>"}`. Nothing is written to the session store. Exit 3 when a human must act (missing or rejected credentials, no TOTP factor, the URL never matched); exit 1 for anything worth retrying. okta-auth learns no app semantics. OnTrack needs the stop because Doubtfire's SAML callback redirects to `/sign_in?authToken=<one-time>&username=<user>`, and the SPA would spend that token on `POST /api/auth` the moment it loaded, with "Remember me" unticked in a fresh browser, so no refresh cookie.
+2. **`<cli> auth login --okta`** and **`<cli> auth export --json`** (ontrack-cli first). `auth login --okta` runs seam 1 with `--stop-at '/sign_in\?authToken='`, sends `POST /api/auth {username, auth_token, remember: true}` itself, and saves the result through the existing cache path, refusing a different account. `auth export` reads the cache, makes no network request, and prints the **credential envelope**:
+
+   ```json
+   {
+     "source": "ontrack",
+     "base_url": "https://ontrack.example.edu",
+     "account": "abcd0001",
+     "expires_at": "2026-11-03T02:10:00.000Z",
+     "fields": { "username": "abcd0001", "refresh_token": "…" }
+   }
+   ```
+
+   `account` and `expires_at` are `null` when the app does not say (Moodle). The envelope keeps the CLIs' snake_case because it is their output contract. Both commands exit 3 when a human must sign in, which is cli-kit's `auth` code. Export never renews and login never prints a secret, so running the two by hand shows exactly what the broker sees.
+3. **`PUT /credentials/:source`** (unicorn). The body is the envelope, verbatim. A new `CREDENTIAL_SYNC_TOKEN` Worker secret authorizes this route and nothing else; `npm run setup` generates it next to `ADMIN_TOKEN` and `MCP_TOKEN`. The broker never holds `ADMIN_TOKEN`, which since ADR-0039 is also key material. The Worker, in order:
+   - answers `404 unknown_source` for a source with no plugin, and `422 envelope_mismatch` when `source` differs from the path or `base_url` from the configured one;
+   - answers `409 shadowed_by_secret` when an env secret for that source is set, instead of storing a value the resolver would ignore;
+   - answers `409 account_changed` when `account` differs from the stored credential's (when both are known); switching accounts goes through `/settings`;
+   - tests the credential upstream and stores nothing on `422 credential_rejected` or `502 upstream_unreachable`, so a dead credential never replaces a live one;
+   - stores `{ baseUrl: base_url, ...fields }` encrypted as ADR-0039 does, `account` and `expires_at` in new plaintext columns (migration `0017`), and returns `{"source", "expires_at", "updated_at"}`.
+
+   There are no revision numbers. moodle-cli needs `expectedRevision` because its Worker rewrites the session itself (a keep-alive that rotates the cookie, mobile-token renewal, remote sign-in). unicorn's Worker never writes a source credential, and `/settings` is a manual writer, so the broker is the only automatic one.
+
+The broker itself is `scripts/sync-credentials.mjs`, installed by `npm run credentials:install` as a launchd agent that runs at load and every six hours; launchd folds runs missed during sleep into one on wake. For each configured source it runs export, and when `expires_at` is under 48 hours away or export exits 3, runs `auth login --okta` and exports again, then PUTs the envelope. An exit 3 from `auth login --okta`, or a `409` or `422` from the Worker, posts a macOS notification naming what to do by hand; a `502`, a network error or any other exit is logged and retried on the next run. It reads `CREDENTIAL_SYNC_TOKEN` from the login Keychain. With a seven-day refresh token and a 48-hour threshold, that is one Okta sign-in about every five days, a person's cadence.
+
+The scheduled sources start with OnTrack, together with its ingest plugin. Moodle's `moodle:push` keeps reading `okta cookies`, builds the envelope itself, and switches its transport from `wrangler secret put` to `PUT /credentials/moodle`. Moodle joins the schedule only if pushed sessions are seen dying under the hourly keep-alive, and if Monash's Moodle has the mobile app service on, moodle-cli's mobile-token renewal is the better fix to adopt first.
+
+ADR-0034 removed the notifier, so the remote side of failure is pull-only: `/settings` and the door's `status` / `get_sync_status` show the credential's `expires_at`, and the harness sees "OnTrack credential expires in 20 h" when the user next asks. The broker's local notification covers the case where the laptop is on but a human is needed.
+
+**Consequences.**
+- The Okta password and TOTP secret never leave the user's machine. What reaches Cloudflare is at most a seven-day OnTrack refresh token and a Moodle session cookie, each scoped to one app and validated before it is stored.
+- The new failure mode is the laptop: closed for more than about five days, OnTrack lapses, and opening it is the fix because the next run catches up. An always-on machine such as a home server removes even that without changing any seam.
+- The remaining MFA collapse is local and predates this ADR: okta-auth already keeps both factors in one keyring.
+- Work lands in order (seam 1, seam 2, the endpoint with the `moodle:push` migration, then the OnTrack plugin with the broker schedule), and each step is usable on its own.
+- A hosted ontrack MCP, if built, accepts the same envelope at its own `PUT /credentials/ontrack`; the broker gains a second sink, not a second job.
+- A deploy that already has `MOODLE_SESSION` set must delete it once (`wrangler secret delete MOODLE_SESSION`) before pushes take effect, and the `409` says so.
+- ADR-0003's full-auto layer is withdrawn, not deferred. Its open question of where the push lives is answered: the schedule and transport live in this repo, and app logic lives in each CLI.
+
+**Reversal condition.** Cloud-side login is reconsidered only if Monash issues a credential that Okta does not gate: a longer `DF_REFRESH_TOKEN_EXPIRY_SECONDS`, rotating refresh tokens, or a Moodle mobile-app token that unicorn can use the way moodle-cli's Worker does. Each of these would delete broker work rather than move secrets.
