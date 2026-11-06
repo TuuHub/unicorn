@@ -2,7 +2,7 @@
 
 This describes the whole system in its intended final form, from zero. It's the synthesized picture; the decision trail and rationale live in [ADR.md](ADR.md), the vocabulary in [GLOSSARY.md](GLOSSARY.md). When this doc and an ADR disagree, the ADR is authoritative (it records *why*); fix this doc.
 
-Rewritten 2026-09-21 for ADR-0034 – ADR-0038; updated 2026-09-27 for the amendments in ADR-0039–0044. Section 13 is a status list, not a build order — everything in it is shipped.
+Rewritten 2026-09-21 for ADR-0034 – ADR-0038; updated 2026-09-27 for the amendments in ADR-0039–0044; updated 2026-11-06 for ADR-0046 (hosted multi-tenant mode), ADR-0047 (memory v2 and SOUL.md) and ADR-0048 (the panel and activity log). Section 13 is a status list, not a build order — everything in it is shipped.
 
 ---
 
@@ -43,7 +43,9 @@ The rule that settles every "why not just mount the source in Claude": **a sourc
 - **Plugins** — bring sources. Ingestion-only (ADR-0018): fetch and map to Items and facets, nothing downstream.
 - **Door** (`/mcp`) — the one surface a client agent mounts: state tools, MCP prompts, widgets, user-defined tools (ADR-0035, ADR-0037).
 - **Admin** (`/mcp/admin`) — operator tools for the student or their coding agent: sources, links, tool definitions, inspection.
-- **`/settings`** — the only web page: onboarding by source, OAuth consent, timezone, sync status. It is not a dashboard; anything about reading data belongs to the agent.
+- **`/settings`** — onboarding by source, OAuth consent, timezone, sync status.
+- **`/panel`** (ADR-0048) — overview, the transparent activity log, memory editing, and connect instructions. It shows what unicorn did; anything that interprets data belongs to the agent.
+- **Hosted mode** (ADR-0046) — the same handlers behind a Node server with accounts and one SQLite file per student (`server/`, `docs/HOSTED.md`).
 - **Harness** — the client, its scheduler, and the plugin we ship for it. Playbooks run there. That is where reasoning lives.
 
 ---
@@ -159,13 +161,14 @@ Structured sources label themselves. Free text is labelled by the **triage playb
 | `run_playbook(name)` | playbook text plus its data, for tool-only clients |
 | `label_items` | the triage routine's write path |
 | `status()` | last sync and error per source |
+| `get_memory` / `memory` | the agent memory: user profile, notes, term, corrections (ADR-0047) |
 | *user-defined* | up to 20 saved SQL tools (section 9) |
 
-That is 14 fixed tools (`src/mcp/door.ts`) plus the user's own.
+That is 16 fixed tools (`src/mcp/door.ts`) plus the user's own. Every call is written to the activity log (ADR-0048).
 
-**Prompts.** The four playbooks — `weekly-plan`, `decompose-assignment`, `forum-brief`, `triage` — are registered under `prompts/list` so Claude Code shows them as slash commands; the same markdown comes back from `run_playbook` for ChatGPT, which consumes tools only.
+**Prompts.** The seven playbooks — `weekly-plan`, `decompose-assignment`, `forum-brief`, `triage`, and (ADR-0047) `onboard`, `catch-up`, `exam-prep` — are registered under `prompts/list` so Claude Code shows them as slash commands; the same markdown comes back from `run_playbook` for ChatGPT, which consumes tools only.
 
-**Instructions.** The server tells the client: pull briefs on session start; call `changes_since` when asked what is new; call `remember` on every correction; never answer course questions from its own knowledge.
+**Instructions.** The server's `instructions` are `prompts/SOUL.md` (identity, session-start protocol, memory protocol, tool-selection table, live vs memory, hard rules) followed by a snapshot of the agent memory, frozen when the client initializes (ADR-0047). Every successful result carries a one-line `Memory:` nudge above its `Next:` line.
 
 **Error shape and the `Next:` line (ADR-0041).** Every tool's text output ends with a deterministic `Next: ...` line naming concrete follow-up calls computed from the data returned, so a client doesn't have to guess arguments. A tool failure returns `structuredContent: { error: { code, message, hint } }` plus a text block of the same shape (`Error (code): message\nNext: hint`) — never a thrown exception the client can't parse.
 
@@ -242,10 +245,10 @@ Absent by decision, not omission:
 
 - no model in the Worker, no BYOK, no token ledger (ADR-0034);
 - no push channels — no Telegram, Discord or email out; the client pulls (ADR-0032, ADR-0034);
-- no hosted multi-tenant service, no app-directory listing; self-deploy only (ADR-0001);
+- no app-directory listing. Self-deploy is the default (ADR-0001); a hosted multi-tenant server is a second mode that runs the same code (ADR-0046);
 - no source writes from unicorn, ever — not from tools, not from widgets;
 - no vector search; a semester's corpus is small and FTS5 with a strong client model is enough;
-- no dashboard; `/settings` onboards and reports, the agent reads.
+- no dashboard that interprets data: `/settings` onboards, `/panel` shows what happened and what the agent remembers (ADR-0048), and the agent reads.
 
 ---
 
@@ -263,5 +266,9 @@ Everything below is shipped and covered by tests, not a plan. Section numbers po
 - **Buckets, `course()`, `life()`, `label_items`, and the `triage` playbook** (§6) are live; structural labelling runs every cycle (`src/kernel/courses.ts`).
 - **The Claude Code plugin** (§8, `claude-plugin/`) ships the door config, the four playbook skills, a `SessionStart` hook that pulls briefs, and `setup-routines`.
 - **Source onboarding by preset and encrypted D1 credentials** (§10, ADR-0038, ADR-0039) — the `/settings` source form, `source_credentials` (migration `0014`) — lands with the wave2/sources branch, which merges before release; documented here as present per that branch's code.
+
+- **Memory v2 and SOUL.md** (ADR-0047): `get_memory` / `memory`; the user, notes, term and corrections stores; TERM kept by the kernel (`src/term.ts`); the `onboard`, `catch-up` and `exam-prep` playbooks.
+- **Panel and activity log** (ADR-0048): `src/panel.ts`, `src/activity.ts`, migration `0017`.
+- **Hosted multi-tenant server** (ADR-0046): `server/`, `npm run server:build`, `Dockerfile`, `deploy/`, `docs/HOSTED.md`; covered by `tests/hosted/`.
 
 **Before any public post** (unchanged bar): three named students install it successfully; one of them on Canvas + Ed.
