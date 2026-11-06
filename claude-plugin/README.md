@@ -1,7 +1,7 @@
 # unicorn (Claude Code plugin)
 
 Mounts your self-deployed [unicorn](https://github.com/TuuHub/unicorn) Worker's door as an MCP server,
-ships the four playbooks as skills, and pulls unread briefs into every session start.
+ships the seven playbooks as skills, and pulls unread briefs into every session start.
 
 ## Install
 

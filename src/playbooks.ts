@@ -26,6 +26,37 @@ export interface Playbook {
 
 export const PLAYBOOKS: Playbook[] = [
   {
+    id: "catch-up",
+    title: "Catch up",
+    description: "Use when the user has been away (sick, travelling, busy with another unit) and asks what they missed, or says \"catch me up\". Summarises every change since a date across all units, ranks what needs action, and proposes a recovery plan.",
+    trigger: "on-demand",
+    output: "brief and, if accepted, a weekly plan",
+    arguments: [{ name: "since", description: "Optional ISO date the user was away from (e.g. \"2026-10-28\"). Omit to start from the last catch-up or the last 14 days.", required: false }],
+    procedure: `Goal: turn a pile of missed changes into "here is what matters, in order, and a plan to get back on track".
+
+Door tools required: \`changes_since\`, \`upcoming\`, \`course\`, \`get_memory\`, \`memory\`, \`write_brief\`,
+\`save_plan\`. Source MCPs, if mounted, are optional enrichment for reading a missed announcement in full.
+
+1. The prefetched data holds \`events\` (changes since the start point), \`overdue\` and \`upcoming\` items, and
+   \`since\`. If the user gave a different date, page \`changes_since\` yourself until \`hasMore\` is false and
+   drop events older than that date.
+2. Bucket every event into exactly one of:
+   - **Act now** — a deadline missed or within 72 hours, a grade that needs a response, a staff notice that
+     changes an assessment (new due date, new requirement, extension policy).
+   - **Read soon** — staff answers on threads in an assessment bucket the user has work in, new lecture
+     material for an upcoming assessment.
+   - **Background** — everything else (student questions, minor edits, life items).
+3. For each **Act now** item give one line: what changed, the unit, the deadline in the user's timezone and
+   weekday, and the link. Group **Read soon** by unit. Collapse **Background** into a count per unit.
+4. If anything is overdue, say so plainly first, and suggest the concrete next step (ask for special
+   consideration, email the unit's staff) — never draft a fake reason for them.
+5. Offer a recovery plan for the next 7 days. If accepted, save it with \`save_plan({kind:"weekly",
+   subject:<ISO week>, content:...})\` using \`- [ ]\` lines, respecting CORRECTIONS (e.g. no-Sunday rules).
+6. File the summary: \`write_brief({kind:"catch-up", subject:<since>, title:"While you were away",
+   body:..., idempotencyKey:"catch-up-<since>-<nextCursor>"})\`, and end the body with \`cursor: <nextCursor>\`.
+7. Add one dated entry to \`notes\` with \`memory\` naming the follow-ups the user committed to.`,
+  },
+  {
     id: "decompose-assignment",
     title: "Decompose assignment",
     description: "Use when the user wants an assignment broken into a day-by-day task list, or to run the unicorn decompose-assignment routine. Reads the assessment and its course bucket, splits the remaining work into dated tasks, and saves the plan.",
@@ -76,6 +107,38 @@ for each. For a named \`assignment\` argument that already had a plan, say so an
 (via \`get_plan\`) instead of silently doing nothing.`,
   },
   {
+    id: "exam-prep",
+    title: "Exam prep",
+    description: "Use when the user asks to prepare for an exam, test or final in one unit, or \"what should I revise for UNIT\". Gathers every exam notice, staff hint and assessment in the unit and builds a revision plan up to the exam date.",
+    trigger: "on-demand",
+    output: "plan and brief",
+    arguments: [{ name: "course", description: "The unit code to prepare for, e.g. \"FIT2004\".", required: true }],
+    procedure: `Goal: one revision plan per exam, grounded only in what the unit's staff actually said.
+
+Door tools required: \`course\`, \`search_items\`, \`upcoming\`, \`get_plan\`, \`save_plan\`, \`write_brief\`,
+\`memory\`. Source MCPs (Ed lessons, Moodle resources), if mounted, are optional enrichment for reading
+lecture lists and past-paper pages — use them when available, but complete on door tools alone.
+
+1. The prefetched data has \`course\` (the unit, grouped by bucket), \`examItems\` (full-text matches for
+   exam, final, test, revision, past paper in that unit) and \`upcoming\` for the unit. If \`course\` is
+   ambiguous, ask which offering before going on.
+2. Establish the exam facts, each with its source link: date and time, duration, format (open/closed
+   book, online/in person), weighting, hurdle, allowed materials, covered weeks or topics. If a fact is
+   not in the data, write "not announced" — never assume a typical value.
+3. Collect every staff hint about content: posts in \`course/<CODE>/general\` and exam buckets where the
+   author is staff, and threads asking "is X examinable". Quote the staff line briefly.
+4. Build a revision plan from today to the exam: topics first by weighting or staff emphasis, then
+   practice (past papers, tutorial questions), with the last two days for review. Respect other deadlines
+   from \`upcoming\` across all units and every CORRECTIONS line.
+5. Save it: \`save_plan({kind:"assignment", subject:"<exam item source>:<itemId>", content:...})\` when
+   there is an exam item; otherwise \`save_plan({kind:"weekly", subject:<ISO week>, ...})\` for this week's
+   slice. Use \`- [ ]\` lines.
+6. File \`write_brief({kind:"exam-prep", subject:<CODE>, title:"<CODE> exam prep", body:<facts + plan
+   summary>, idempotencyKey:"exam-prep-<CODE>-<today>"})\`.
+7. Add to \`notes\` with \`memory\`: "<CODE> exam <date>: revision plan saved; weak topics: …" so later
+   sessions can check in on it.`,
+  },
+  {
     id: "forum-brief",
     title: "Forum brief",
     description: "Use when the user wants a summary of staff forum activity since the last check, or to run the unicorn forum-brief routine. Reads changes since the last forum brief and reports staff notices per course.",
@@ -122,6 +185,46 @@ Writing the brief:
 
 When run interactively: tell the user how many courses had new forum activity and read the lines for
 each; if nothing was new, say so in one sentence.`,
+  },
+  {
+    id: "onboard",
+    title: "Onboard",
+    description: "Use on the first session with unicorn, when the USER PROFILE in memory is empty, or when the user says \"get to know me\", \"set me up\" or starts a new term. Builds a cold-start picture of the student from their synced courses and a few questions, and saves it to memory.",
+    trigger: "on-demand; first session; new term detected",
+    output: "memory (user, notes) and one brief",
+    arguments: [],
+    procedure: `Goal: in one short exchange, know who this student is and what their term looks like, and leave that in
+memory so every later session — on any device, in any app — starts informed.
+
+Door tools required: \`get_memory\`, \`memory\`, \`status\`, \`upcoming\`, \`course\`, \`write_brief\`. Source MCPs
+(Ed, Moodle, canvas-mcp), if mounted, are optional enrichment — this procedure must complete on door tools
+alone.
+
+1. Read the prefetched \`memory\`, \`status\`, \`term\` and \`upcoming\` data. If \`status\` shows no source has ever
+   synced, stop: tell the user unicorn has not synced anything yet, point them to the unicorn panel's
+   Sources page, and offer to continue once a sync has run. Do not invent a term.
+2. From the TERM memory and \`upcoming\`, draft what you already know without asking: the units this term,
+   what is due in the next three weeks, which unit looks heaviest (most dated items soonest).
+3. For each unit in TERM (at most five), call \`course({ code })\` once and note anything that changes
+   the picture: a big assessment, an exam, a staff notice about arrangements.
+4. Show the user a compact summary (units, the next three deadlines, the heaviest week) and ask **at most
+   four** questions in one message, skipping any the data already answers:
+   - What are you studying and which year are you in?
+   - What matters most this term (a grade target, passing a hard unit, a job alongside)?
+   - How do you like plans: day-by-day checklists, a weekly overview, or only reminders?
+   - Anything to always or never do (language, no work on Sundays, be blunt)?
+5. When they answer, save in one call per target:
+   - \`memory({target:"user", operations:[...]})\` — one entry per fact: degree and year, goals, work
+     style, constraints, language. Keep each entry to a sentence.
+   - \`memory({target:"notes", operations:[...]})\` — anything they are actively following up, dated.
+   - Use \`remember\` for any hard rule they state verbatim ("never schedule work on Sundays").
+   If USER PROFILE already had entries, \`patch\` them instead of adding duplicates.
+6. File one brief: \`write_brief({kind:"onboard", subject:"<term or today's date>", title:"Getting to know
+   you", body:<what you saved, as a short list>, idempotencyKey:"onboard-<today's date>"})\`.
+7. Offer the next useful step in one line: "Want me to plan this week?" (\`weekly-plan\`) or, in Claude Code,
+   setting up the scheduled routines.
+
+Never save a guess as a fact. If the user skips a question, leave that entry out.`,
   },
   {
     id: "triage",
