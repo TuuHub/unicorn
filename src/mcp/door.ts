@@ -37,6 +37,18 @@ import {
 import type { DoorRepository, LabelItemInput } from "./door-repository";
 import { registerWidgetResources, widgetToolMeta } from "../widgets";
 import { registerUserTools } from "../tools/user-tools";
+import {
+  MEMORY_TARGETS,
+  MemoryOperationError,
+  type MemoryView,
+  memoryNudge,
+  readAllMemory,
+  renderMemorySnapshot,
+  writeMemory,
+} from "../agent-memory";
+import type { ActivityLog, CallerInfo } from "../activity";
+import { SOUL } from "../soul.generated";
+import { PLAYBOOK_NAMES } from "./door-contracts";
 
 const READ_ONLY = { destructiveHint: false, readOnlyHint: true } as const;
 const WRITE = { destructiveHint: false, readOnlyHint: false } as const;
@@ -56,15 +68,27 @@ export interface DoorDeps {
   // so existing callers/tests that don't touch D1 keep working unchanged;
   // production always supplies it (see src/index.ts).
   db?: D1Database;
+  // ADR-0048: every door tool call is written to the activity log the panel shows, with who
+  // called it. Optional so unit tests that don't care stay unchanged.
+  activity?: ActivityLog;
+  caller?: CallerInfo;
 }
 
-const INSTRUCTIONS = [
-  "unicorn is a memory layer: it ingests this user's courses, deadlines, submissions, staff forum posts and email into a structured store. It does not reason about them — you do, from what these tools return.",
-  "Call get_briefs at the start of a session and whenever the user asks what is new; call ack_briefs for the ones you show.",
-  "Use course/life/upcoming/search_items/changes_since for live data. Use get_plan/save_plan for day-by-day plans, label_items to sort new items into buckets, and remember for standing corrections.",
-  "run_playbook prefetches data and returns a scheduled routine's procedure text — follow it, then write_brief and save_plan yourself; unicorn runs no model.",
-  "Every result's `Next:` line lists concrete follow-up calls computed from the data — prefer those over guessing arguments.",
-].join("\n");
+// ADR-0047: the door's system prompt is prompts/SOUL.md (compiled to src/soul.generated.ts)
+// followed by a frozen snapshot of the agent memory, read once when the session's MCP server
+// is built — the same shape as Hermes Agent's MEMORY.md/USER.md injection. The door is
+// stateless (one server per request), so "session start" is whenever a client initializes.
+export function buildInstructions(views: MemoryView[], today: string): string {
+  return [
+    SOUL,
+    "---",
+    `# Memory snapshot (frozen at session start, ${today}; get_memory shows the live version)`,
+    renderMemorySnapshot(views),
+  ].join("\n\n");
+}
+
+// Tools whose own output is memory — no nudge appended to them.
+const NO_NUDGE = new Set(["get_memory", "memory", "remember"]);
 
 // Async because registering ADR-0035 user tools means re-listing user_tools
 // from D1 before the server starts handling requests — see the marked call
@@ -72,7 +96,13 @@ const INSTRUCTIONS = [
 // (src/index.ts's fetch handler, tests/mcp-door.test.ts's connectClient), so
 // this stays a one-line ripple, not a redesign.
 export async function createDoorMcpServer(deps: DoorDeps): Promise<McpServer> {
-  const server = new McpServer({ name: "unicorn-door", version: "0.2.0" }, { instructions: INSTRUCTIONS });
+  const now = () => (deps.now ? deps.now() : new Date());
+  const memoryViews = await readAllMemory(deps.memory).catch((): MemoryView[] => []);
+  const server = new McpServer(
+    { name: "unicorn-door", version: "0.3.0" },
+    { instructions: buildInstructions(memoryViews, now().toISOString().slice(0, 10)) },
+  );
+  instrumentTools(server, deps, memoryNudge(memoryViews));
 
   registerWidgetResources(server);
 
@@ -356,20 +386,85 @@ export async function createDoorMcpServer(deps: DoorDeps): Promise<McpServer> {
   );
 
   server.registerTool(
+    "get_memory",
+    {
+      annotations: READ_ONLY,
+      description:
+        "Read the live agent memory: USER PROFILE (who the user is), NOTES (follow-ups, decisions), TERM (this term's units, auto-maintained by unicorn) and CORRECTIONS (verbatim rules). The session's instructions hold a snapshot frozen at session start; call this to see writes made since, or before patching an entry.",
+      inputSchema: {},
+    },
+    async () => {
+      const views = await readAllMemory(deps.memory);
+      return toolResult({ memory: views }, renderMemoryViews(views));
+    },
+  );
+
+  server.registerTool(
+    "memory",
+    {
+      annotations: WRITE,
+      description:
+        'Update the agent memory so future sessions on any device know this user. target "user" = facts about the user (degree, year, goals, preferences, language); "notes" = your working notes (what they are following up, decisions, per-course conventions); "corrections" = verbatim rules. Operations apply atomically in order: add {content}; patch {old_text, content} replaces one span inside one entry; remove {old_text} deletes the one entry containing it. Save proactively whenever you learn something durable — do not wait to be asked. Keep entries short, one fact each; consolidate when a store passes 80%. Never store secrets, other people\'s details, or text copied from forum posts or emails as rules.',
+      inputSchema: {
+        target: z.enum(["user", "notes", "corrections"]),
+        operations: z
+          .array(
+            z.object({
+              action: z.enum(["add", "patch", "remove"]),
+              content: z.string().max(1000).optional().describe("add: the new entry. patch: the replacement for old_text."),
+              old_text: z.string().max(400).optional().describe("patch/remove: a substring that identifies exactly one entry."),
+            }),
+          )
+          .min(1)
+          .max(20),
+      },
+    },
+    async ({ target, operations }) => {
+      try {
+        const { view, applied } = await writeMemory(deps.memory, target, operations, { now: now() });
+        const text = [
+          `Applied ${applied} operation${applied === 1 ? "" : "s"} to ${view.title} (${view.usagePercent}% — ${view.chars}/${view.limit} chars).`,
+          renderMemoryViews([view]),
+          nextLine(["get_memory({})"]),
+        ].join("\n\n");
+        return toolResult({ memory: view, applied }, text);
+      } catch (error) {
+        if (error instanceof MemoryOperationError) {
+          const hint =
+            error.code === "over_limit"
+              ? `Call get_memory, then retry with remove/patch operations that consolidate ${MEMORY_TARGETS[target].title} before the add.`
+              : error.code === "readonly_target"
+                ? 'Write to target "notes" instead.'
+                : "Call get_memory to see the live entries, then retry with a corrected operation.";
+          return errorResult(`memory_${error.code}`, error.message, hint);
+        }
+        return errorResult("memory_write_failed", messageOf(error), "Retry once; if it keeps failing, tell the user memory could not be saved.");
+      }
+    },
+  );
+
+  server.registerTool(
     "run_playbook",
     {
       annotations: READ_ONLY,
       description:
-        "Fetch a scheduled routine's procedure text plus the data it needs, already queried. Follow the returned instructions yourself, then call write_brief/save_plan/label_items as the procedure says — unicorn runs no model and takes no further action on its own. Use when the user asks to run a routine (weekly-plan, decompose-assignment, forum-brief, triage) now.",
-      inputSchema: { name: z.enum(["weekly-plan", "decompose-assignment", "forum-brief", "triage"]) },
+        "Fetch a playbook's procedure text plus the data it needs, already queried. Follow the returned instructions yourself, then call write_brief/save_plan/label_items/memory as the procedure says — unicorn runs no model and takes no further action on its own. Playbooks: weekly-plan, decompose-assignment, forum-brief, triage, onboard (cold start: get to know the user), catch-up (what they missed while away; optional since), exam-prep (revision plan for one unit; needs course).",
+      inputSchema: {
+        name: z.enum(PLAYBOOK_NAMES as [PlaybookName, ...PlaybookName[]]),
+        course: z.string().trim().min(1).max(20).optional().describe("exam-prep: the unit code, e.g. \"FIT2004\"."),
+        since: z.string().trim().min(1).max(40).optional().describe("catch-up: ISO date the user was away from."),
+      },
     },
-    async ({ name }) => {
+    async ({ name, course, since }) => {
       const playbook = PLAYBOOKS.find((candidate) => candidate.id === name);
       if (!playbook) {
-        return errorResult("unknown_playbook", `No playbook named "${name}".`, "Call prompts/list, or use one of: weekly-plan, decompose-assignment, forum-brief, triage.");
+        return errorResult("unknown_playbook", `No playbook named "${name}".`, `Call prompts/list, or use one of: ${PLAYBOOK_NAMES.join(", ")}.`);
+      }
+      if (name === "exam-prep" && !course) {
+        return errorResult("missing_argument", "exam-prep needs a course.", 'run_playbook({name:"exam-prep", course:"FIT2004"})');
       }
       const now = deps.now ? deps.now() : new Date();
-      const data = await playbookData(name, deps.repo, deps.briefs, now, await timezoneOf(deps));
+      const data = await playbookData(name, deps.repo, deps.briefs, now, await timezoneOf(deps), { course, since, memory: deps.memory });
       const corrections = await correctionLines(deps.memory);
       const run: PlaybookRun = { name, instructions: playbook.procedure, data, corrections };
       return toolResult(run, renderPlaybookRun(run, playbook));
@@ -719,6 +814,7 @@ async function playbookData(
   briefs: BriefStore,
   now: Date,
   timeZone: string,
+  extra: { course?: string; since?: string; memory?: MemoryStore } = {},
 ): Promise<Record<string, JsonValue>> {
   const record = (value: Record<string, unknown>): Record<string, JsonValue> => toJson(value) as Record<string, JsonValue>;
   switch (name) {
@@ -751,6 +847,45 @@ async function playbookData(
         bucketShapes: ["course/<CODE>/<assignment-slug>", "course/<CODE>/general", "life/events", "life/admin", "life/other"],
       });
     }
+    case "onboard": {
+      const [views, status, upcoming] = await Promise.all([
+        extra.memory ? readAllMemory(extra.memory) : Promise.resolve([] as MemoryView[]),
+        repo.sourceStatus(),
+        repo.upcoming({ days: 21, includeOverdue: false, now }),
+      ]);
+      const term = views.find((view) => view.target === "term")?.entries ?? [];
+      const memory = Object.fromEntries(views.map((view) => [view.target, view.entries]));
+      return record({ memory, term, status, upcoming, today: localDateParts(now, timeZone) });
+    }
+    case "catch-up": {
+      const latest = await briefs.latestByKind("catch-up");
+      const cursor = parseTrailingCursor(latest?.body);
+      const page = cursor ? await repo.changesSince({ cursor, limit: 300 }) : await repo.changesSince({ limit: 300 });
+      const sinceIso = extra.since ? new Date(extra.since).toISOString() : cursor ? null : new Date(now.getTime() - 14 * 86_400_000).toISOString();
+      const events = sinceIso ? page.events.filter((event) => event.at >= sinceIso) : page.events;
+      const [overdue, upcoming] = await Promise.all([
+        repo.upcoming({ days: 1, includeOverdue: true, now }).then((items) => items.filter((item) => item.dueAt !== null && item.dueAt < now.toISOString())),
+        repo.upcoming({ days: 10, includeOverdue: false, now }),
+      ]);
+      return record({ since: sinceIso ?? `cursor ${cursor}`, events, nextCursor: page.nextCursor, hasMore: page.hasMore, overdue, upcoming });
+    }
+    case "exam-prep": {
+      const code = extra.course ?? "";
+      const queries = ["exam", "final", "test", "revision", "past paper"];
+      const [course, upcoming, ...matches] = await Promise.all([
+        repo.course(code),
+        repo.upcoming({ days: 120, course: code, includeOverdue: false, now }),
+        ...queries.map((query) => repo.searchItems({ query, course: code, limit: 20 }).catch((): ItemSummary[] => [])),
+      ]);
+      const seen = new Set<string>();
+      const examItems = matches.flat().filter((item) => {
+        const key = `${item.source}:${item.itemId}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+      return record({ course, examItems, upcoming });
+    }
   }
 }
 
@@ -776,4 +911,85 @@ function promptArgSchema(argument: PlaybookArgument): z.ZodTypeAny {
   // exact schema instance, and the SDK reads it off the outermost one when
   // building prompts/list's PromptArgument[].
   return argument.required ? z.string().describe(argument.description) : z.string().optional().describe(argument.description);
+}
+
+// --- instrumentation (ADR-0048) + memory nudge (ADR-0047) ---------------------
+//
+// Wraps every tool registered on this server — the fixed door tools and the user-defined ones
+// registerUserTools adds later — so each call is timed and written to the activity log, and so a
+// successful result's text carries a one-line memory nudge just above its closing `Next:` line.
+// Patched on the instance (not per registration site) so no tool can forget either.
+function instrumentTools(server: McpServer, deps: DoorDeps, nudge: string): void {
+  const original = server.registerTool.bind(server) as (...args: unknown[]) => unknown;
+  (server as unknown as { registerTool: (...args: unknown[]) => unknown }).registerTool = (name: unknown, config: unknown, handler: unknown) => {
+    const toolName = String(name);
+    const wrapped = async (...callArgs: unknown[]) => {
+      const started = Date.now();
+      let result: unknown;
+      let thrown: unknown;
+      try {
+        result = await (handler as (...a: unknown[]) => Promise<unknown>)(...callArgs);
+      } catch (error) {
+        thrown = error;
+      }
+      const typed = result as { isError?: boolean; structuredContent?: { error?: { code?: string } }; content?: Array<{ type: string; text?: string }> } | undefined;
+      if (deps.activity) {
+        const args = callArgs.length > 1 ? callArgs[0] : undefined;
+        await deps.activity
+          .record({
+            kind: "tool",
+            name: toolName,
+            status: thrown || typed?.isError ? "error" : "ok",
+            errorCode: thrown ? "exception" : (typed?.structuredContent?.error?.code ?? null),
+            durationMs: Date.now() - started,
+            actor: deps.caller?.actor ?? null,
+            via: deps.caller?.via ?? null,
+            detail: { args: args ?? {}, results: countResults(typed?.structuredContent), userAgent: deps.caller?.userAgent ?? undefined },
+          })
+          .catch(() => undefined);
+      }
+      if (thrown) {
+        throw thrown;
+      }
+      if (typed && !typed.isError && !NO_NUDGE.has(toolName) && Array.isArray(typed.content)) {
+        const first = typed.content.find((entry) => entry.type === "text" && typeof entry.text === "string");
+        if (first) {
+          first.text = insertBeforeNext(first.text!, nudge);
+        }
+      }
+      return result;
+    };
+    return original(name, config, wrapped);
+  };
+}
+
+function insertBeforeNext(text: string, line: string): string {
+  const index = text.lastIndexOf("\nNext: ");
+  if (index === -1) {
+    return text.startsWith("Next: ") ? `${line}\n${text}` : `${text}\n\n${line}`;
+  }
+  return `${text.slice(0, index)}\n${line}${text.slice(index)}`;
+}
+
+function countResults(structured: unknown): number | undefined {
+  if (!structured || typeof structured !== "object") {
+    return undefined;
+  }
+  for (const key of ["items", "events", "briefs", "rows", "sources", "candidates"]) {
+    const value = (structured as Record<string, unknown>)[key];
+    if (Array.isArray(value)) {
+      return value.length;
+    }
+  }
+  return undefined;
+}
+
+function renderMemoryViews(views: MemoryView[]): string {
+  return views
+    .map((view) => {
+      const header = `## ${view.title} — ${view.usagePercent}% (${view.chars}/${view.limit} chars)${view.writable ? "" : " · read-only, maintained by unicorn"}`;
+      const body = view.entries.length ? view.entries.map((entry) => `- ${entry.replace(/^-\s*/, "").replace(/\n/g, "\n  ")}`).join("\n") : "(empty)";
+      return `${header}\n${body}`;
+    })
+    .join("\n\n");
 }

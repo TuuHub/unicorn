@@ -64,6 +64,25 @@ export interface OAuthServerEnv {
 
 type FetchHandler<Env> = (request: Request, env: Env, ctx: ExecutionContext) => Promise<Response>;
 
+// What a door request carries in `ctx.props` once the provider has authenticated it. `subject`
+// is the grant's user id: DOOR_USER_ID on a self-deployed Worker, the tenant id on the hosted
+// server (ADR-0046). `clientName` feeds the activity log's "who called" column (ADR-0048).
+export interface DoorProps {
+  subject: string;
+  via: "oauth" | "mcp_token";
+  clientName?: string;
+}
+
+export interface OAuthProviderExtras<Env> {
+  // Overrides the MCP_TOKEN bearer check, e.g. the hosted server's per-tenant tokens.
+  resolveBearer?: (token: string, env: Env) => Promise<DoorProps | null>;
+  // Overrides MAX_REGISTERED_CLIENTS — the hosted server has one client per user, not per Worker.
+  maxClients?: number;
+  // CIMD needs workerd's global_fetch_strictly_public SSRF guard (ADR-0043); Node has no equivalent,
+  // so the hosted server turns it off and clients register through DCR instead.
+  clientIdMetadataDocuments?: boolean;
+}
+
 // The single-user identity every grant is issued to: unicorn has one operator, authenticated by
 // ADMIN_TOKEN (via /authorize's Basic auth) or, for local dev, the MCP_TOKEN bearer directly.
 export const DOOR_USER_ID = "unicorn";
@@ -123,7 +142,9 @@ export function createOAuthProvider<Env extends OAuthServerEnv>(
   origin: string,
   doorHandler: FetchHandler<Env>,
   defaultHandler: FetchHandler<Env>,
+  extras: OAuthProviderExtras<Env> = {},
 ): OAuthProvider<Env> {
+  const maxClients = extras.maxClients ?? MAX_REGISTERED_CLIENTS;
   const resource = doorResource(origin);
   const options: OAuthProviderOptions<Env> = {
     apiRoute: resource,
@@ -138,7 +159,7 @@ export function createOAuthProvider<Env extends OAuthServerEnv>(
     // Client ID Metadata Documents (MCP 2025-11-25 authorization): a client may use an https URL
     // as its client_id instead of registering. Needs the `global_fetch_strictly_public`
     // compatibility flag (wrangler.jsonc) so the metadata fetch can never reach a private address.
-    clientIdMetadataDocumentEnabled: true,
+    clientIdMetadataDocumentEnabled: extras.clientIdMetadataDocuments ?? true,
     // `scopes_supported` here (not just the authorization server's `scopesSupported` above) is
     // what the 401 challenge on /mcp names and what RFC 9728 clients read as required — the
     // library does not accept an S256-downgrade knob for this, only for PKCE (`allowPlainPKCE`,
@@ -149,6 +170,10 @@ export function createOAuthProvider<Env extends OAuthServerEnv>(
     // that lookup misses, so a real OAuth token is never routed through here. Compared in
     // constant time so a response-timing oracle can't recover MCP_TOKEN byte by byte.
     resolveExternalToken: async ({ token, env: requestEnv }) => {
+      if (extras.resolveBearer) {
+        const props = await extras.resolveBearer(token, requestEnv);
+        return props ? { props, audience: resource } : null;
+      }
       if (!requestEnv.MCP_TOKEN || !timingSafeEqual(token, requestEnv.MCP_TOKEN)) {
         return null;
       }
@@ -158,11 +183,11 @@ export function createOAuthProvider<Env extends OAuthServerEnv>(
   // Assigned after the literal so the callback's closure can call getOAuthApi(options, env) —
   // the same options object OAuthProvider itself will use — without a forward reference.
   options.clientRegistrationCallback = async (): Promise<ClientRegistrationCallbackResult | void> => {
-    const clients = await getOAuthApi(options, env).listClients({ limit: MAX_REGISTERED_CLIENTS });
-    if (clients.items.length >= MAX_REGISTERED_CLIENTS) {
+    const clients = await getOAuthApi(options, env).listClients({ limit: maxClients });
+    if (clients.items.length >= maxClients) {
       return {
         code: "invalid_client_metadata",
-        description: `unicorn allows at most ${MAX_REGISTERED_CLIENTS} registered OAuth clients; revoke an unused one under Connected apps in /settings first.`,
+        description: `unicorn allows at most ${maxClients} registered OAuth clients; revoke an unused one under Connected apps in /settings first.`,
         status: 400,
       };
     }
@@ -247,8 +272,12 @@ function redirectResponse(location: string, extra: Headers): Response {
   return new Response(null, { status: 302, headers });
 }
 
-/** GET renders the consent page; POST approves or denies it. Caller has already checked Basic auth. */
-export async function handleAuthorize(request: Request, helpers: OAuthHelpers): Promise<Response> {
+/**
+ * GET renders the consent page; POST approves or denies it. Caller has already authenticated the
+ * user (Basic auth on a self-deployed Worker, a signed-in session on the hosted server) and passes
+ * the grant's user id — DOOR_USER_ID by default, the tenant id when hosted.
+ */
+export async function handleAuthorize(request: Request, helpers: OAuthHelpers, userId: string = DOOR_USER_ID): Promise<Response> {
   if (request.method === "GET") {
     let authRequest;
     try {
@@ -282,12 +311,13 @@ export async function handleAuthorize(request: Request, helpers: OAuthHelpers): 
       const approved = await helpers.approveConsent(request, handle, { scope: [OAUTH_SCOPE] });
       const client = await helpers.lookupClient(approved.request.clientId);
       const clientName = client?.clientName?.trim() ? client.clientName : approved.request.clientId;
+      const props: DoorProps = { subject: userId, via: "oauth", clientName };
       const { redirectTo } = await helpers.completeAuthorization({
         request: approved.request,
-        userId: DOOR_USER_ID,
+        userId,
         metadata: { clientName },
         scope: approved.request.scope,
-        props: { subject: DOOR_USER_ID, via: "oauth" as const },
+        props,
       });
       return redirectResponse(redirectTo, approved.headers);
     } catch (error) {
@@ -304,17 +334,18 @@ export async function handleAuthorize(request: Request, helpers: OAuthHelpers): 
 // --- /settings: Connected apps ---------------------------------------------------------------
 
 /** Revokes a grant. Caller has already checked Basic auth, method and the request's origin. */
-export async function handleRevokeApp(request: Request, helpers: OAuthHelpers): Promise<Response> {
+export async function handleRevokeApp(request: Request, helpers: OAuthHelpers, userId: string = DOOR_USER_ID): Promise<Response> {
   const form = await request.formData();
   const grantId = String(form.get("grantId") ?? "");
   if (grantId) {
-    await helpers.revokeGrant(grantId, DOOR_USER_ID);
+    await helpers.revokeGrant(grantId, userId);
   }
-  return new Response(null, { status: 303, headers: { location: "/settings?revoked=1" } });
+  const back = String(form.get("back") ?? "") === "panel" ? "/panel/connect?revoked=1" : "/settings?revoked=1";
+  return new Response(null, { status: 303, headers: { location: back } });
 }
 
-export async function listConnectedApps(helpers: OAuthHelpers): Promise<GrantSummary[]> {
-  const grants = await helpers.listUserGrants(DOOR_USER_ID, { limit: MAX_REGISTERED_CLIENTS });
+export async function listConnectedApps(helpers: OAuthHelpers, userId: string = DOOR_USER_ID): Promise<GrantSummary[]> {
+  const grants = await helpers.listUserGrants(userId, { limit: MAX_REGISTERED_CLIENTS });
   return grants.items;
 }
 
