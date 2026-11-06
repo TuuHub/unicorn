@@ -1,0 +1,4 @@
+{$UNICORN_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy unicorn:8787
+}
