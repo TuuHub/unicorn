@@ -105,8 +105,8 @@ async function renderOverview(runtime: PanelRuntime): Promise<string> {
   const user = memory.find((view) => view.target === "user")!;
 
   const checklist = [
-    { done: runtime.configuredSources > 0, title: "Add a source", text: "Ed, Moodle, Canvas or Gmail. Paste a token; unicorn keeps it encrypted.", href: "/settings", cta: "Sources" },
-    { done: totalItems > 0, title: "First sync", text: "unicorn pulls every hour. Sync now to start straight away.", href: "/settings", cta: "Sync now" },
+    { done: runtime.configuredSources > 0, title: "Add a source", text: "Paste an Ed, Moodle, Canvas or Gmail token. Stored encrypted.", href: "/settings", cta: "Sources" },
+    { done: totalItems > 0, title: "First sync", text: "Runs hourly; Sync now starts it immediately.", href: "/settings", cta: "Sync now" },
     {
       done: runtime.grants.length > 0 || stats.toolCalls24h > 0 || stats.clients7d.length > 0,
       title: "Connect your AI",
@@ -114,7 +114,7 @@ async function renderOverview(runtime: PanelRuntime): Promise<string> {
       href: "/panel/connect",
       cta: "Connect",
     },
-    { done: user.entries.length > 0, title: "Say hi", text: "Ask your agent “get to know me”. It fills in your profile.", href: "/panel/memory", cta: "Memory" },
+    { done: user.entries.length > 0, title: "Say hi", text: "Ask your agent “get to know me” to fill your profile.", href: "/panel/memory", cta: "Memory" },
   ];
   const doneCount = checklist.filter((step) => step.done).length;
   const setup =
@@ -122,7 +122,7 @@ async function renderOverview(runtime: PanelRuntime): Promise<string> {
       ? ""
       : `<section class="card setup" aria-labelledby="setup-title">
       <div class="card-head row">
-        <div><h2 id="setup-title">Get started</h2><p class="card-sub">Four steps, a few minutes. ${doneCount} of ${checklist.length} done.</p></div>
+        <div><h2 id="setup-title">Get started</h2><p class="card-sub">${doneCount} of ${checklist.length} done</p></div>
         <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="${checklist.length}" aria-valuenow="${doneCount}"><span style="width:${(doneCount / checklist.length) * 100}%"></span></div>
       </div>
       <ol class="setup-steps">${checklist
@@ -141,7 +141,7 @@ async function renderOverview(runtime: PanelRuntime): Promise<string> {
   const stats5 = [
     stat("units", "Units this term", String(courses.length), escapeHtml(courses.find((course) => course.term)?.term ?? (courses.length ? "this term" : "after the first sync"))),
     stat("calendar", "Due in 7 days", String(upcoming.length), upcoming[0]?.dueAt ? `next ${escapeHtml(relative(upcoming[0].dueAt, now))}` : "nothing due"),
-    stat("spark", "Unread briefs", String(unread.length), "your agent reads these first"),
+    stat("spark", "Unread briefs", String(unread.length), "read first each session"),
     stat(
       "agents",
       "Agent calls · 24h",
@@ -167,7 +167,7 @@ async function renderOverview(runtime: PanelRuntime): Promise<string> {
           </li>`,
         )
         .join("")}</ul>`
-    : empty("units", "No units yet. They show up after the first sync, and your agent gets them in memory on its own.");
+    : empty("units", "Appear after the first sync, and go into your agent's TERM memory.");
 
   const weekCalls = stats.daily7d.reduce((sum, day) => sum + day.calls, 0);
   const clients = stats.clients7d.length
@@ -228,7 +228,11 @@ async function renderOverview(runtime: PanelRuntime): Promise<string> {
     title: "unicorn — overview",
     active: "/panel",
     heading: greeting(now, zone),
-    subtitle: `${escapeHtml(longDate(now, zone))}. ${runtime.hosted ? "Your campus memory, hosted." : "Your campus memory."} Everything your agents read and wrote is under Activity.`,
+    subtitle: `${escapeHtml(longDate(now, zone))}. ${
+      upcoming[0]?.dueAt
+        ? `Next due: ${upcoming[0].course ? `${escapeHtml(upcoming[0].course)} ` : ""}${escapeHtml(upcoming[0].title)}, ${escapeHtml(relative(upcoming[0].dueAt, now))}.`
+        : "Nothing due in the next 7 days."
+    }`,
     body,
     wide: true,
     actions,
@@ -287,7 +291,7 @@ function renderWeekChart(days: Array<{ day: string; calls: number; errors: numbe
 
 function renderFeed(entries: ActivityEntry[], now: Date): string {
   if (entries.length === 0) {
-    return empty("activity", "Nothing logged yet. Calls show up here the moment an agent uses unicorn.");
+    return empty("activity", "Nothing yet. Each agent call and sync appears here as it happens.");
   }
   return `<ul class="list feed">${entries
     .map((entry) => {
@@ -466,7 +470,7 @@ async function renderMemoryPage(runtime: PanelRuntime, url: URL): Promise<string
     ${error ? `<p class="notice error" role="alert">${escapeHtml(error)}</p>` : ""}
     <div class="explain">
       <span class="tile-mark lg">${icon("memory", "")}</span>
-      <p>This is everything your AI agents remember about you. Every new session — Claude on your phone, ChatGPT, Claude Code — starts by reading it. Agents keep it current themselves; you can correct anything here. Separate multi-line entries with a line containing only <code>§</code>.</p>
+      <p>Every agent session, in any app on any device, reads all of this first. Agents keep it current; you can edit any of it. A line containing only <code>§</code> separates entries.</p>
     </div>
     <div class="grid2 wide-cards">${cards}</div>
     ${PANEL_STYLE}
@@ -475,7 +479,7 @@ async function renderMemoryPage(runtime: PanelRuntime, url: URL): Promise<string
     title: "unicorn — memory",
     active: "/panel/memory",
     heading: "Memory",
-    subtitle: "Bounded on purpose: small enough to read in full at the start of every session.",
+    subtitle: "Size-capped so an agent can read all of it at the start of every session.",
     body,
     wide: true,
   });
@@ -534,7 +538,7 @@ async function renderConnect(runtime: PanelRuntime, url: URL): Promise<string> {
             <form method="post" action="/settings/oauth/apps/revoke" style="margin:0"><input type="hidden" name="grantId" value="${escapeHtml(grant.id)}"><input type="hidden" name="back" value="panel"><button type="submit" class="secondary sm danger">Revoke</button></form></li>`;
         })
         .join("")}</ul>`
-    : empty("connect", "No apps connected yet. Pick your AI above.");
+    : empty("connect", "None yet.");
 
   const works = ["Claude", "ChatGPT", "Claude Code", "Cursor", "Gemini", "GitHub Copilot", "VS Code", "Windsurf", "Zed"];
   const clientCard = (actor: string, title: string, sub: string, content: string, extra = "") => `
@@ -547,7 +551,7 @@ async function renderConnect(runtime: PanelRuntime, url: URL): Promise<string> {
     ${revoked ? `<p class="notice" role="status">App disconnected.</p>` : ""}
     <section class="card address">
       <div class="card-head row">
-        <div><h2>Your unicorn address</h2><p class="card-sub">Paste it into any app that supports MCP connectors. You sign in once in a pop-up; no token to copy.</p></div>
+        <div><h2>Your unicorn address</h2><p class="card-sub">Paste it as an MCP connector. The app opens a pop-up to sign in; no token needed.</p></div>
       </div>
       <div class="card-body">
         ${copyRow(door)}
@@ -607,7 +611,7 @@ async function renderConnect(runtime: PanelRuntime, url: URL): Promise<string> {
     title: "unicorn — connect",
     active: "/panel/connect",
     heading: "Connect your AI",
-    subtitle: "unicorn works inside the AI you already use. Pick yours.",
+    subtitle: "One address for every client. Each app signs in once and can be revoked below.",
     body,
     wide: true,
   });

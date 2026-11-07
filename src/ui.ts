@@ -6,7 +6,8 @@
 // shouldered buttons, line glyphs in a 1.5 stroke, and the spectrum only where it means a source.
 // The dark scheme is the landing page's night. Token names match unicorn-site's globals.css.
 
-import { icon } from "./marks";
+import { HORN_FALLBACK, HORN_SCRIPT } from "./horn";
+import { clientTile, icon } from "./marks";
 
 interface NavLink {
   path: string;
@@ -125,23 +126,34 @@ h1{margin:0;font-size:clamp(26px,3.2vw,32px);line-height:1.1;font-weight:600;let
 .bare .brand{margin:0 0 28px -8px}
 .bare h1{font-size:26px}
 .bare .sub{margin-bottom:24px}
-.door{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,1fr);min-height:100vh;min-height:100dvh}
-.door-night{position:relative;overflow:hidden;background:var(--night);color:#fff;padding:28px clamp(24px,5vw,64px);display:flex;flex-direction:column;justify-content:space-between;gap:40px}
-.door-night::before{content:"";position:absolute;inset:auto -20% -30% -20%;height:70%;background:radial-gradient(50% 50% at 30% 60%,rgb(255 120 160/.18),transparent 70%),radial-gradient(40% 40% at 65% 45%,rgb(110 190 255/.16),transparent 70%),radial-gradient(35% 35% at 50% 75%,rgb(140 230 160/.10),transparent 70%);filter:blur(10px);pointer-events:none}
-.door-night>*{position:relative}
-.door-night .brand{margin-left:-8px;color:#fff}
-.door-title{margin:0;font-size:clamp(44px,6.4vw,88px);line-height:.92;font-weight:600;letter-spacing:-.045em;max-width:9ch}
-.door-lede{margin:22px 0 0;max-width:34rem;color:rgb(255 255 255/.7);font-size:16.5px;line-height:1.6}
-.door-links{display:flex;gap:10px;flex-wrap:wrap;margin-top:28px}
-.door-meta{color:rgb(255 255 255/.45);font-size:12.5px;display:flex;gap:16px;flex-wrap:wrap}
-.door-meta a{color:rgb(255 255 255/.7)}
+.door{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);min-height:100vh;min-height:100dvh}
+.door-night{position:relative;overflow:hidden;background:#030304;color:#fff;display:flex;flex-direction:column;justify-content:flex-end;min-height:100vh;min-height:100dvh;isolation:isolate}
+.door-night canvas{position:absolute;inset:0;width:100%;height:100%;opacity:0;transition:opacity 1.4s cubic-bezier(.32,.72,0,1);cursor:grab;touch-action:pan-y;z-index:-2}
+.door-night canvas:active{cursor:grabbing}
+.door-night.is-live canvas{opacity:1}
+.horn-fallback{position:absolute;inset:0 0 28% 0;display:grid;place-items:center;transition:opacity .9s ease-out;z-index:-1;pointer-events:none}
+.door-night.is-live .horn-fallback{opacity:0}
+.horn-mark{width:min(52%,300px);height:auto;overflow:visible}
+.horn-mark .draw{stroke-dasharray:1;stroke-dashoffset:1;animation:horn-draw 2.4s cubic-bezier(.23,1,.32,1) .15s forwards}
+@keyframes horn-draw{to{stroke-dashoffset:0}}
+.door-copy{padding:120px clamp(24px,5vw,64px) 32px;background:linear-gradient(to top,#030304 0%,rgb(3 3 4/.88) 45%,transparent);pointer-events:none}
+.door-copy a,.door-copy .facts{pointer-events:auto}
+.door-name{margin:0;font-size:clamp(30px,3.4vw,44px);line-height:1;font-weight:600;letter-spacing:-.04em}
+.facts{display:grid;grid-template-columns:auto minmax(0,1fr);gap:9px 20px;margin:22px 0 0;font-size:14px;max-width:34rem}
+.facts dt{color:rgb(255 255 255/.45)}
+.facts dd{margin:0;color:rgb(255 255 255/.86);display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.facts .tile-mark{background:rgb(255 255 255/.92);border-color:transparent}
+.door-meta{margin-top:26px;padding-top:16px;border-top:1px solid rgb(255 255 255/.1);color:rgb(255 255 255/.45);font-size:12.5px;display:flex;gap:6px 18px;flex-wrap:wrap}
+.door-meta a{color:rgb(255 255 255/.75);display:inline-flex;align-items:center;gap:3px}
+.door-meta a:hover{color:#fff}
+.door-meta .i{width:13px;height:13px}
 .door-form{display:flex;flex-direction:column;justify-content:center;padding:48px clamp(20px,5vw,72px)}
 .door-form>.inner{width:100%;max-width:400px;margin:0 auto}
 .door-form h1{font-size:28px}
 .door-form .sub{margin-bottom:24px}
 .text-spectrum{background-image:linear-gradient(100deg,#ff7a70 0%,#ffc35c 18%,#8be39a 36%,#6dbbff 54%,#b896ff 72%,#ff7a70 90%);background-size:220% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:spectrum-slide 14s linear infinite}
 @keyframes spectrum-slide{to{background-position:-220% 0}}
-@media (max-width:900px){.door{display:block}.door-night{min-height:0;gap:28px;padding-bottom:36px}.door-title{font-size:clamp(44px,13vw,64px)}}
+@media (max-width:900px){.door{display:block}.door-night{min-height:min(78vh,640px)}.horn-fallback{inset:0 0 40% 0}.door-copy{padding-top:80px}}
 
 /* --- buttons ------------------------------------------------------------------------- */
 button,.button{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:34px;padding:0 14px;border:0;border-radius:8px;background:var(--btn-bg);color:var(--btn-ink);box-shadow:var(--btn-shadow);font:inherit;font-size:13.5px;font-weight:500;white-space:nowrap;cursor:pointer;user-select:none;touch-action:manipulation;transition:background-color .15s ease-out,border-color .15s ease-out,color .15s ease-out,scale .15s ease-out}
@@ -335,17 +347,18 @@ export function renderPage(options: PageOptions): string {
     return `${head(options.title)}
 <body>
   <div class="door">
-    <section class="door-night" aria-label="About unicorn">
-      ${brand("/")}
-      <div>
-        <p class="door-title">Campus, <span class="text-spectrum">remembered.</span></p>
-        <p class="door-lede">unicorn reads Ed, Moodle, Canvas and Gmail every hour, remembers what each one said, and tells the AI you already use what changed. It has no model of its own.</p>
-        <div class="door-links">
-          <a class="button night-outline" href="${SITE}" target="_blank" rel="noopener">How it works ${icon("external")}</a>
-          <a class="button night-outline" href="${DOCS}" target="_blank" rel="noopener">Docs ${icon("external")}</a>
-        </div>
+    <section class="door-night" data-horn aria-label="About unicorn">
+      <canvas aria-hidden="true"></canvas>
+      <div class="horn-fallback">${HORN_FALLBACK}</div>
+      <div class="door-copy">
+        <p class="door-name" translate="no">unicorn</p>
+        <dl class="facts">
+          <dt>Reads</dt><dd>Ed, Moodle, Canvas and Gmail, every hour. Read-only.</dd>
+          <dt>Answers</dt><dd>${["Claude", "ChatGPT", "Claude Code"].map((name) => clientTile(name, "sm")).join("")}Claude, ChatGPT, Claude Code, any MCP client</dd>
+          <dt>Knows</dt><dd>What changed, what's due, each unit across systems, your profile.</dd>
+        </dl>
+        <div class="door-meta">${options.actions ?? ""}<a href="${SITE}" target="_blank" rel="noopener">How it works${icon("external")}</a><a href="${DOCS}" target="_blank" rel="noopener">Docs${icon("external")}</a></div>
       </div>
-      <div class="door-meta">${options.actions ?? ""}</div>
     </section>
     <main class="door-form"><div class="inner">
       <h1>${options.heading}</h1>
@@ -353,6 +366,7 @@ export function renderPage(options: PageOptions): string {
       ${options.body}
     </div></main>
   </div>
+  ${HORN_SCRIPT}
 </body>
 </html>`;
   }

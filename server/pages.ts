@@ -67,10 +67,9 @@ export function renderAuthForm(options: AuthFormOptions): Response {
   const instance = options.instance;
   const trust = instance
     ? `<ul class="trust" aria-label="About this instance">
-        <li>${icon("check")}<span><strong>Read-only on your sources.</strong> unicorn never posts, submits or replies anywhere.</span></li>
-        <li>${icon("key")}<span><strong>Encrypted tokens, one database each.</strong> Source credentials are encrypted with a key unique to your account; deleting your account deletes your database.</span></li>
-        <li>${icon("account")}<span><strong>Hosted by ${escapeHtml(instance.operator)}, as is.</strong> A community-run instance with no warranty. Rather nobody else held your tokens? <a href="${escapeHtml(instance.repoUrl)}" target="_blank" rel="noopener">Self-host the same code</a>.</span></li>
-        <li>${icon("units")}<span><strong>Your university's rules apply.</strong> Check that using your own tokens with a third-party tool is allowed where you study.</span></li>
+        <li>${icon("key")}<span><strong>Tokens encrypted per account.</strong> One database each; deleting the account deletes it.</span></li>
+        <li>${icon("account")}<span><strong>Run by ${escapeHtml(instance.operator)}, no warranty.</strong> To keep tokens off this server, <a href="${escapeHtml(instance.repoUrl)}" target="_blank" rel="noopener">self-host the same code</a>.</span></li>
+        <li>${icon("units")}<span><strong>Check your university's rules</strong> on using your own tokens with a third-party tool.</span></li>
       </ul>`
     : "";
   const body = `
@@ -84,20 +83,20 @@ export function renderAuthForm(options: AuthFormOptions): Response {
       <input id="password" name="password" type="password" autocomplete="${isSignup ? "new-password" : "current-password"}" minlength="${isSignup ? 10 : 1}" required>
       ${isSignup && options.needsCode ? `<label class="field" for="code">Invite code</label><input id="code" name="code" type="text" autocomplete="off" required>` : ""}
       <button type="submit" class="lg auth-submit">${isSignup ? "Create account" : "Sign in"}${icon("arrow")}</button>
-      ${isSignup ? `<p class="fine">By creating an account you accept that this is a community-hosted instance provided as is, without warranty. Your source tokens are stored encrypted; you can delete everything at any time from Account.</p>` : ""}
+      ${isSignup ? `<p class="fine">Provided as is, without warranty. Delete everything any time from Account.</p>` : ""}
     </form>
     ${switchLink ? `<p class="auth-switch">${switchLink}</p>` : ""}
     ${options.popup ? "" : trust}
     ${AUTH_STYLE}`;
   const meta = instance
-    ? `<span>Hosted by ${escapeHtml(instance.operator)}</span><span>${instance.accounts} student${instance.accounts === 1 ? "" : "s"} on this instance</span><a href="${escapeHtml(instance.repoUrl)}" target="_blank" rel="noopener">Open source · Apache-2.0</a>`
+    ? `<span>Hosted by ${escapeHtml(instance.operator)} · ${instance.accounts} student${instance.accounts === 1 ? "" : "s"}</span><a href="${escapeHtml(instance.repoUrl)}" target="_blank" rel="noopener">Source</a>`
     : "";
   return htmlResponse(
     renderPage({
       title: isSignup ? "unicorn — create account" : "unicorn — sign in",
       active: "",
       heading: isSignup ? "Create your unicorn" : "Sign in",
-      subtitle: isSignup ? "Your own private campus memory, ready for Claude, ChatGPT and Claude Code." : "Welcome back. Your agents have been busy.",
+      subtitle: isSignup ? "Then add a source token and paste one address into your AI. About five minutes." : "Opens your dashboard: what's due, every agent call, and what your agents remember.",
       body,
       // the OAuth pop-up is a small window: just the form
       layout: options.popup ? "bare" : "door",
@@ -137,7 +136,7 @@ export function renderAccountPage(options: AccountPageOptions): Response {
       button.danger-solid:hover{background:color-mix(in srgb,var(--bad) 85%,#000)}
     </style>`;
   return htmlResponse(
-    renderPage({ title: "unicorn — account", active: "/account", heading: "Account", subtitle: "Your unicorn on this hosted instance.", body }),
+    renderPage({ title: "unicorn — account", active: "/account", heading: "Account", subtitle: "Sign-in, the bearer token, and deleting your data.", body }),
     options.error ? 400 : 200,
   );
 }

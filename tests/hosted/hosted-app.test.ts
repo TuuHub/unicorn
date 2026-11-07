@@ -55,7 +55,7 @@ describe("hosted multi-tenant server", () => {
     const landing = await ctx.app.fetch(new Request(`${ORIGIN}/`));
     expect(landing.status).toBe(200);
     const door = await landing.text();
-    expect(door).toContain("Campus, <span class=\"text-spectrum\">remembered.</span>");
+    expect(door).toContain("data-horn");
     expect(door).toContain('action="/login"');
     const anonymous = await ctx.app.fetch(new Request(`${ORIGIN}/panel`));
     expect(anonymous.status).toBe(303);
