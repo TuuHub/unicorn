@@ -69,9 +69,9 @@ export async function renderPlaybooks(runtime: PanelRuntime): Promise<string> {
       ${cards}
     </ul></section>
     <style>
-      .pb-list{list-style:none;margin:0;padding:0}
-      .pb{display:grid;grid-template-columns:minmax(0,15rem) minmax(0,1fr) 11rem;gap:8px 32px;padding:20px 0;border-top:1px solid var(--rule)}
-      .pb.head{padding:0 0 10px;border-top:0;font-size:12.5px;color:var(--ink-3);font-weight:500}
+      .pb-list{list-style:none;margin:0;padding:4px 20px 6px}
+      .pb{display:grid;grid-template-columns:minmax(0,15rem) minmax(0,1fr) 11rem;gap:8px 32px;padding:18px 0;border-top:1px solid var(--rule-2)}
+      .pb.head{padding:12px 0 10px;border-top:0;font-size:12.5px;color:var(--ink-3);font-weight:500}
       .pb.head .pb-when{color:inherit;font-size:inherit}
       .pb-name p{margin:3px 0 0;font-size:13px;color:var(--ink-3)}
       .pb-does{margin:0;font-size:14.5px;color:var(--ink);max-width:62ch}

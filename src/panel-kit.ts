@@ -11,8 +11,8 @@ export const SOURCE_NAMES: Record<string, string> = {
   gmail: "Gmail",
 };
 
-export function copyRow(value: string, shell = false, night = false): string {
-  return `<div class="cmd${night ? " night" : ""}"><code>${shell ? '<span class="prompt">$ </span>' : ""}${escapeHtml(value)}</code><button type="button" data-copy="${escapeHtml(value)}" aria-label="Copy">${icon("copy")}<span>Copy</span></button></div>`;
+export function copyRow(value: string, shell = false, hero = false): string {
+  return `<div class="cmd${hero ? " hero" : ""}"><code>${shell ? '<span class="prompt">$ </span>' : ""}${escapeHtml(value)}</code><button type="button" data-copy="${escapeHtml(value)}" aria-label="Copy">${icon("copy")}<span>Copy</span></button></div>`;
 }
 
 // --- shared bits --------------------------------------------------------------
@@ -101,17 +101,17 @@ export const PANEL_STYLE = `<style>
 .setup .card-head{align-items:center}
 .progress{width:140px;height:6px;border-radius:999px;background:var(--paper-2);border:1px solid var(--rule-2);overflow:hidden;flex:none}
 .progress>span{display:block;height:100%;background:var(--ink);border-radius:999px}
-.setup-steps{list-style:none;margin:0;padding:18px 0 0;display:grid;grid-template-columns:repeat(auto-fit,minmax(min(200px,100%),1fr));gap:20px 32px}
-.setup-steps li{display:flex;gap:12px}
+.setup-steps{list-style:none;margin:0;padding:16px 20px 20px;display:grid;grid-template-columns:repeat(auto-fit,minmax(min(200px,100%),1fr));gap:12px}
+.setup-steps li{display:flex;gap:12px;padding:14px;border:1px solid var(--rule-2);border-radius:12px;background:var(--paper)}
 .setup-steps h3{font-size:14px}
 .setup-steps p{margin:3px 0 8px;color:var(--ink-2);font-size:13px}
 .setup-steps li.done{opacity:.62}
 .setup-steps li.done p{margin-bottom:0}
-.setup-num{flex:none;display:grid;place-items:center;width:26px;height:26px;border-radius:50%;border:1px solid var(--rule);background:transparent;font-size:12.5px;font-weight:600;font-variant-numeric:tabular-nums;color:var(--ink-2)}
+.setup-num{flex:none;display:grid;place-items:center;width:26px;height:26px;border-radius:50%;border:1px solid var(--rule);background:var(--chip);font-size:12.5px;font-weight:600;font-variant-numeric:tabular-nums;color:var(--ink-2)}
 .setup-num .i{width:14px;height:14px}
 .done .setup-num{background:var(--ink);border-color:var(--ink);color:var(--paper)}
 .agenda{display:flex;flex-direction:column}
-.day{display:grid;grid-template-columns:64px minmax(0,1fr);gap:12px;padding:12px 0;border-top:1px solid var(--rule)}
+.day{display:grid;grid-template-columns:64px minmax(0,1fr);gap:12px;padding:12px 0;border-top:1px solid var(--rule-2)}
 .day:first-child{border-top:0;padding-top:2px}
 .day-label{display:flex;flex-direction:column;line-height:1.15;padding-top:2px}
 .dow{font-size:12px;font-weight:500;color:var(--ink-2)}
@@ -148,18 +148,19 @@ export const PANEL_STYLE = `<style>
 .feed-text strong{font-weight:600}
 .feed .muted{color:var(--ink-3)}
 .client-stack{gap:0}
-.client-stack .tile-mark{margin-right:-4px;box-shadow:0 0 0 2px var(--paper)}
+.client-stack .tile-mark{margin-right:-4px;box-shadow:0 0 0 2px var(--surface)}
 .mem-meta{display:flex;justify-content:space-between;gap:12px;color:var(--ink-3);font-size:12px;margin-bottom:6px;white-space:nowrap}
 .wide-cards{grid-template-columns:repeat(auto-fit,minmax(min(420px,100%),1fr))}
 .mem-actions{display:flex;justify-content:space-between;align-items:center;margin-top:10px}
-.address .cmd{padding:8px 8px 8px 16px;border-radius:10px}
-.address .cmd code{font-size:14.5px}
+.address .card-body{padding-top:8px}
+.address .cmd{padding:8px 8px 8px 16px}
+.address .cmd code{font-size:14px}
 .works{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:14px}
 .works-row{display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap}
 .client-card{display:flex;flex-direction:column}
-.client-head{display:flex;align-items:center;gap:14px}
+.client-head{display:flex;align-items:center;gap:14px;padding-bottom:4px}
 .tile-cluster{display:inline-flex;flex:none}
-.tile-cluster .tile-mark{margin-right:-8px;box-shadow:0 0 0 2px var(--paper)}
+.tile-cluster .tile-mark{margin-right:-8px;box-shadow:0 0 0 2px var(--surface)}
 .tile-cluster .tile-mark:last-child{margin-right:0}
 .apps .grow{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .since{white-space:nowrap}

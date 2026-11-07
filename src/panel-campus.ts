@@ -688,13 +688,12 @@ export const CAMPUS_STYLE = `<style>
 .tile-mark.ev-notice-posted{color:#4a7fd4;background:color-mix(in srgb,#4a7fd4 10%,var(--chip))}
 .tile-mark.ev-item-added{color:var(--ink)}
 a.badge.course:hover{border-color:var(--ink-3)}
-.overdue{border-top-color:var(--bad)}
-.overdue h2{color:var(--bad)}
+.overdue{border-color:color-mix(in srgb,var(--bad) 35%,var(--rule))}
 .overdue .card-title .i{color:var(--bad)}
-.unit-ledger{display:flex;flex-direction:column}
-.unit-row{display:grid;grid-template-columns:minmax(0,2.2fr) minmax(0,1.1fr) 64px 96px 80px minmax(0,1.8fr) 16px;gap:16px;align-items:center;padding:16px 0;border-top:1px solid var(--rule);transition:background-color .15s ease-out}
-.unit-row.head{padding:0 0 10px;border-top:0;font-size:12.5px;color:var(--ink-3);font-weight:500}
-.unit-row:not(.head):hover{background:linear-gradient(90deg,transparent,var(--sel) 8%,var(--sel) 92%,transparent)}
+.unit-ledger{display:flex;flex-direction:column;padding:4px 0 6px}
+.unit-row{display:grid;grid-template-columns:minmax(0,2.2fr) minmax(0,1.1fr) 64px 96px 80px minmax(0,1.8fr) 16px;gap:16px;align-items:center;padding:14px 20px;border-top:1px solid var(--rule-2);transition:background-color .15s ease-out}
+.unit-row.head{padding:12px 20px 10px;border-top:0;font-size:12.5px;color:var(--ink-3);font-weight:500}
+.unit-row:not(.head):hover{background:var(--sel)}
 .u-name{display:flex;flex-direction:column;min-width:0}
 .u-code{font-size:15.5px;font-weight:600;letter-spacing:-.015em}
 .u-title{color:var(--ink-2);font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -708,15 +707,15 @@ a.badge.course:hover{border-color:var(--ink-3)}
 @media (max-width:900px){.unit-row{grid-template-columns:minmax(0,1fr) auto 16px}.unit-row>:nth-child(2),.unit-row>:nth-child(3),.unit-row>:nth-child(4),.unit-row>:nth-child(6){display:none}.unit-row.head{display:none}.unit-row .u-num::after{content:" due";font-size:12px;font-weight:400;color:var(--ink-3)}}
 .unit-sources-row{display:flex;gap:14px;flex-wrap:wrap;margin:-12px 0 20px}
 .bucket-end{display:inline-flex;gap:8px;align-items:center}
-.brief{margin-bottom:32px}
+.brief{padding:0}
 .brief details>summary{list-style:none;display:block;cursor:pointer;max-width:none;color:inherit;font-size:inherit}
 .brief details>summary::before{display:none}
-.brief-head{padding:0}
+.brief-head{padding:16px 20px}
 .brief-title{display:flex;flex-direction:column;gap:6px}
 .brief-title h2{font-size:15.5px}
 .brief-meta{display:flex;gap:8px;align-items:center}
-.brief .card-body{padding:12px 0 0}
-.brief.is-read{border-top-color:var(--rule)}
+.brief .card-body{border-top:1px solid var(--rule-2);margin:0 20px;padding:14px 0 18px}
+.brief.is-read{background:transparent;box-shadow:none}
 .brief.is-read h2{color:var(--ink-2);font-weight:500}
 .brief-actions{display:flex;justify-content:flex-end;margin-top:10px}
 .brief-actions:empty{display:none}
@@ -740,7 +739,7 @@ a.badge.course:hover{border-color:var(--ink-3)}
 .plans li.active .plan-link{font-weight:600}
 .plan-link{display:flex;align-items:center;gap:8px;min-width:0}
 .plan-link .i{width:16px;height:16px;color:var(--ink-3)}
-.search-big{display:flex;align-items:center;gap:10px;padding:6px 6px 6px 16px;background:var(--surface);border:1px solid var(--rule);border-radius:10px;margin-bottom:28px}
+.search-big{display:flex;align-items:center;gap:10px;padding:6px 6px 6px 16px;background:var(--surface);border:1px solid var(--rule);border-radius:12px;box-shadow:var(--lift);margin-bottom:14px}
 .search-big:focus-within{border-color:var(--ink-3);box-shadow:0 0 0 3px var(--sel)}
 .search-big .i{color:var(--ink-3)}
 .search-big input::-webkit-search-cancel-button{display:none}
