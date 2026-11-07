@@ -728,19 +728,18 @@ const PAGE_STYLE = `
       .source{display:flex;align-items:center;gap:12px;padding:12px 0}
       .source-name{font-weight:500}
       .source-state{margin-left:auto;color:var(--ink-2);font-size:13px;font-variant-numeric:tabular-nums;text-align:right}
-      .section-head{margin:36px 0 14px}
+      .section-head{margin:0 0 20px}
       .section-head h2{font-size:16px}
       /* min(400px,100%) — not a bare 400px — so a single mobile-width column
          shrinks to the container instead of forcing horizontal page scroll. */
-      .source-cards{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(min(400px,100%),1fr));align-items:start;margin-bottom:36px}
-      .source-card{margin-bottom:0}
-      .source-card .card-head{padding-top:20px}
+      .source-cards{display:grid;gap:0 48px;grid-template-columns:repeat(auto-fit,minmax(min(400px,100%),1fr));align-items:start;margin-bottom:36px}
+      .source-card{margin-bottom:40px}
       .card-head-row{display:flex;align-items:center;gap:12px;margin-bottom:10px}
       .card-head-row h3{margin:0 0 1px;font-size:15.5px;font-weight:600;letter-spacing:-.015em}
       .card-sub .get-one{white-space:nowrap}
       .meta{margin:0 0 6px;color:var(--ink-3);font-size:12.5px}
       .meta-error{margin:0 0 6px;color:var(--bad);font-size:12.5px}
-      .card-actions{display:flex;gap:8px;margin-top:14px;padding-top:14px;border-top:1px solid var(--rule-2);flex-wrap:wrap}
+      .card-actions{display:flex;gap:8px;margin-top:14px;padding-top:14px;border-top:1px solid var(--rule);flex-wrap:wrap}
       .card-actions form{margin:0}
       .field{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:14px 0}
       .field-stack{flex-direction:column;align-items:stretch;gap:6px}
@@ -757,7 +756,7 @@ const PAGE_STYLE = `
       .switch:checked{background:var(--ink)}
       .switch:checked::after{translate:16px 0;background:var(--paper)}
       .actions{padding-top:14px;display:flex;justify-content:flex-end;gap:8px}
-      .sync-now{margin-top:16px;padding-top:16px;border-top:1px solid var(--rule-2);display:flex;align-items:center;justify-content:space-between;gap:16px}
+      .sync-now{margin-top:16px;padding-top:16px;border-top:1px solid var(--rule);display:flex;align-items:center;justify-content:space-between;gap:16px}
       .sync-now .hint{margin:0}
       .copy-row{align-items:center}
       .copy-row .field-text{flex:1;min-width:0}

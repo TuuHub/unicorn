@@ -230,7 +230,7 @@ export async function renderDeadlines(runtime: PanelRuntime, url: URL): Promise<
   });
 }
 
-function dueAgenda(items: ItemSummary[], zone: string, at: Date): string {
+function dueAgenda(items: ItemSummary[], zone: string, at: Date, inUnit = false): string {
   const groups = new Map<string, ItemSummary[]>();
   for (const item of items) {
     const key = item.dueAt ? dayKey(item.dueAt, zone) : "";
@@ -242,7 +242,7 @@ function dueAgenda(items: ItemSummary[], zone: string, at: Date): string {
       const first = group[0].dueAt ?? at.toISOString();
       return `<div class="day${key === today ? " today" : ""}">
         <div class="day-label"><span class="dow">${escapeHtml(key === today ? "Today" : formatIn(first, zone, { weekday: "short" }))}</span><span class="dom tabular">${escapeHtml(formatIn(first, zone, { day: "numeric" }))}</span><span class="mon">${escapeHtml(formatIn(first, zone, { month: "short" }))}</span></div>
-        <ul class="list">${group.map((item) => itemRow(item, zone, at, true)).join("")}</ul>
+        <ul class="list">${group.map((item) => itemRow(item, zone, at, true, inUnit)).join("")}</ul>
       </div>`;
     })
     .join("")}</div>`;
@@ -306,31 +306,37 @@ export async function renderUnits(runtime: PanelRuntime): Promise<string> {
     runtime.repo.upcoming({ days: 30, includeOverdue: false, now: at }).catch((): ItemSummary[] => []),
   ]);
   const zone = safeZone(runtime.timezone);
-  const cards = courses
+  const rows = courses
     .map((course) => {
       const next = upcoming.find((item) => item.course === course.code && item.dueAt);
       const due = upcoming.filter((item) => item.course === course.code).length;
-      return `<a class="card unit-card plain" href="/panel/units/${encodeURIComponent(course.code)}">
-        <div class="unit-top"><span class="badge course">${escapeHtml(course.code)}</span><span class="unit-sources">${course.sources.map((name) => sourceTile(name, "sm")).join("")}</span></div>
-        <h2>${escapeHtml(course.title ?? course.code)}</h2>
-        <p class="muted small">${escapeHtml(course.term ?? "")}</p>
-        <dl class="unit-stats">
-          <div><dt>Items</dt><dd class="tabular">${items.get(course.code) ?? 0}</dd></div>
-          <div><dt>Changed · 7d</dt><dd class="tabular">${changes.get(course.code) ?? 0}</dd></div>
-          <div><dt>Due · 30d</dt><dd class="tabular">${due}</dd></div>
-        </dl>
-        <p class="unit-next">${next ? `Next: <strong>${escapeHtml(next.title)}</strong> · ${escapeHtml(formatIn(next.dueAt!, zone, { weekday: "short", day: "numeric", month: "short" }))}` : '<span class="muted">Nothing due in 30 days</span>'}</p>
+      return `<a class="unit-row plain" href="/panel/units/${encodeURIComponent(course.code)}">
+        <span class="u-name"><span class="u-code">${escapeHtml(course.code)}</span><span class="u-title">${escapeHtml(course.title ?? "")}</span></span>
+        <span class="u-src">${course.sources.map((name) => `<span class="src-chip">${sourceDot(name)}${escapeHtml(sourceMark(name)?.name ?? name)}</span>`).join("")}</span>
+        <span class="u-num tabular">${items.get(course.code) ?? 0}</span>
+        <span class="u-num tabular">${changes.get(course.code) ?? 0}</span>
+        <span class="u-num tabular">${due}</span>
+        <span class="u-next">${next ? `<span class="truncate">${escapeHtml(next.title)}</span><span class="muted">${escapeHtml(formatIn(next.dueAt!, zone, { weekday: "short", day: "numeric", month: "short" }))}</span>` : '<span class="muted">—</span>'}</span>
+        <span class="u-go" aria-hidden="true">${icon("chevron")}</span>
       </a>`;
     })
     .join("");
+  const term = courses.find((course) => course.term)?.term;
   const body = `
-    ${cards ? `<div class="unit-grid">${cards}</div>` : `<section class="card"><div class="card-body" style="padding-top:18px">${empty("units", "Units appear after the first sync.")}</div></section>`}
+    ${
+      rows
+        ? `<section class="card"><div class="unit-ledger" role="table" aria-label="Units">
+            <div class="unit-row head" role="row"><span>Unit</span><span>Sources</span><span class="u-num">Items</span><span class="u-num">Changed · 7d</span><span class="u-num">Due · 30d</span><span>Next deadline</span><span></span></div>
+            ${rows}
+          </div></section>`
+        : `<section class="card"><div class="card-body">${empty("units", "Units appear after the first sync.")}</div></section>`
+    }
     ${PANEL_STYLE}${CAMPUS_STYLE}${PANEL_SCRIPT}`;
   return renderPage({
     title: "unicorn — units",
     active: "/panel/units",
     heading: "Units",
-    subtitle: "Each unit joined across Moodle, Canvas and Ed. Open one to see it grouped by assignment.",
+    subtitle: `${term ? `${escapeHtml(term)}. ` : ""}Each unit joined across Moodle, Canvas and Ed. Open one to see it grouped by assignment.`,
     body,
     wide: true,
   });
@@ -369,7 +375,7 @@ export async function renderUnit(runtime: PanelRuntime, code: string): Promise<s
     <div class="split">
       <div class="col">${buckets || `<section class="card"><div class="card-body" style="padding-top:18px">${empty("units", "No items in this unit yet.")}</div></section>`}${unlabeled}</div>
       <div class="col">
-        <section class="card"><div class="card-head row"><div class="card-title">${icon("calendar")}<h2>Due</h2></div><a class="more" href="/panel/due?course=${encodeURIComponent(view.code)}">All${icon("arrow")}</a></div><div class="card-body">${upcoming.length ? dueAgenda(upcoming.slice(0, 8), zone, at) : empty("check", "Nothing due in 60 days.")}</div></section>
+        <section class="card"><div class="card-head row"><div class="card-title">${icon("calendar")}<h2>Due</h2></div><a class="more" href="/panel/due?course=${encodeURIComponent(view.code)}">All${icon("arrow")}</a></div><div class="card-body">${upcoming.length ? dueAgenda(upcoming.slice(0, 8), zone, at, true) : empty("check", "Nothing due in 60 days.")}</div></section>
         <section class="card"><div class="card-head row"><div class="card-title">${icon("changes")}<h2>Latest changes</h2></div><a class="more" href="/panel/changes?course=${encodeURIComponent(view.code)}">All${icon("arrow")}</a></div><div class="card-body">${changes.length ? `<ul class="list changes compact">${changes.map((row) => renderChangeRow(row, zone)).join("")}</ul>` : empty("changes", "No changes yet.")}</div></section>
       </div>
     </div>
@@ -682,31 +688,35 @@ export const CAMPUS_STYLE = `<style>
 .tile-mark.ev-notice-posted{color:#4a7fd4;background:color-mix(in srgb,#4a7fd4 10%,var(--chip))}
 .tile-mark.ev-item-added{color:var(--ink)}
 a.badge.course:hover{border-color:var(--ink-3)}
-.overdue{border-color:color-mix(in srgb,var(--bad) 35%,var(--rule))}
+.overdue{border-top-color:var(--bad)}
+.overdue h2{color:var(--bad)}
 .overdue .card-title .i{color:var(--bad)}
-.unit-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(300px,100%),1fr));gap:16px}
-.unit-card{display:flex;flex-direction:column;gap:4px;padding:18px 20px;margin:0;transition:border-color .15s ease-out,box-shadow .15s ease-out,translate .15s ease-out}
-.unit-card:hover{border-color:color-mix(in srgb,var(--rule) 60%,var(--ink-3));box-shadow:var(--lift-2);translate:0 -1px}
-.unit-card h2{font-size:16px;margin-top:8px}
-.unit-card .muted{margin:0}
-.unit-top{display:flex;justify-content:space-between;align-items:center}
-.unit-sources{display:inline-flex;gap:4px}
-.unit-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:14px 0 4px;padding:12px 0;border-top:1px solid var(--rule-2);border-bottom:1px solid var(--rule-2)}
-.unit-stats dt{font-size:11.5px;color:var(--ink-3)}
-.unit-stats dd{margin:0;font-size:20px;font-weight:600;letter-spacing:-.02em}
-.unit-next{margin:8px 0 0;font-size:13px;color:var(--ink-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.unit-next strong{color:var(--ink);font-weight:500}
+.unit-ledger{display:flex;flex-direction:column}
+.unit-row{display:grid;grid-template-columns:minmax(0,2.2fr) minmax(0,1.1fr) 64px 96px 80px minmax(0,1.8fr) 16px;gap:16px;align-items:center;padding:16px 0;border-top:1px solid var(--rule);transition:background-color .15s ease-out}
+.unit-row.head{padding:0 0 10px;border-top:0;font-size:12.5px;color:var(--ink-3);font-weight:500}
+.unit-row:not(.head):hover{background:linear-gradient(90deg,transparent,var(--sel) 8%,var(--sel) 92%,transparent)}
+.u-name{display:flex;flex-direction:column;min-width:0}
+.u-code{font-size:15.5px;font-weight:600;letter-spacing:-.015em}
+.u-title{color:var(--ink-2);font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.u-src{display:flex;gap:10px;flex-wrap:wrap;font-size:13px}
+.u-num{text-align:right;font-size:18px;font-weight:600;letter-spacing:-.02em}
+.unit-row.head .u-num{font-size:12.5px;font-weight:500;letter-spacing:0}
+.u-next{display:flex;flex-direction:column;min-width:0;font-size:13.5px}
+.u-go{color:var(--ink-3);display:grid;place-items:center}
+.u-go .i{width:15px;height:15px;transition:translate .15s ease-out}
+.unit-row:hover .u-go .i{translate:2px 0;color:var(--ink)}
+@media (max-width:900px){.unit-row{grid-template-columns:minmax(0,1fr) auto 16px}.unit-row>:nth-child(2),.unit-row>:nth-child(3),.unit-row>:nth-child(4),.unit-row>:nth-child(6){display:none}.unit-row.head{display:none}.unit-row .u-num::after{content:" due";font-size:12px;font-weight:400;color:var(--ink-3)}}
 .unit-sources-row{display:flex;gap:14px;flex-wrap:wrap;margin:-12px 0 20px}
 .bucket-end{display:inline-flex;gap:8px;align-items:center}
-.brief{padding:0}
+.brief{margin-bottom:32px}
 .brief details>summary{list-style:none;display:block;cursor:pointer;max-width:none;color:inherit;font-size:inherit}
 .brief details>summary::before{display:none}
-.brief-head{padding:16px 20px}
+.brief-head{padding:0}
 .brief-title{display:flex;flex-direction:column;gap:6px}
 .brief-title h2{font-size:15.5px}
 .brief-meta{display:flex;gap:8px;align-items:center}
-.brief .card-body{padding-top:0;border-top:1px solid var(--rule-2);margin:0 20px;padding:14px 0 18px}
-.brief.is-read{background:transparent;box-shadow:none}
+.brief .card-body{padding:12px 0 0}
+.brief.is-read{border-top-color:var(--rule)}
 .brief.is-read h2{color:var(--ink-2);font-weight:500}
 .brief-actions{display:flex;justify-content:flex-end;margin-top:10px}
 .brief-actions:empty{display:none}
@@ -718,7 +728,7 @@ a.badge.course:hover{border-color:var(--ink-3)}
 .prose a{text-decoration:underline;text-decoration-color:var(--rule);text-underline-offset:3px}
 .prose>:first-child{margin-top:0}
 .tasks{list-style:none;margin:4px 0 12px;padding:0}
-.tasks li{border-top:1px solid var(--rule-2)}
+.tasks li{border-top:1px solid var(--rule)}
 .tasks li:first-child{border-top:0}
 .tasks form{display:flex;align-items:flex-start;gap:12px;padding:9px 0;margin:0}
 .tick{flex:none;width:20px;height:20px;padding:0;margin-top:1px;border-radius:6px;background:var(--chip);border:1.5px solid var(--ink-3);box-shadow:none;color:var(--paper)}
@@ -730,7 +740,7 @@ a.badge.course:hover{border-color:var(--ink-3)}
 .plans li.active .plan-link{font-weight:600}
 .plan-link{display:flex;align-items:center;gap:8px;min-width:0}
 .plan-link .i{width:16px;height:16px;color:var(--ink-3)}
-.search-big{display:flex;align-items:center;gap:10px;padding:6px 6px 6px 16px;background:var(--surface);border:1px solid var(--rule);border-radius:12px;box-shadow:var(--lift);margin-bottom:14px}
+.search-big{display:flex;align-items:center;gap:10px;padding:6px 6px 6px 16px;background:var(--surface);border:1px solid var(--rule);border-radius:10px;margin-bottom:28px}
 .search-big:focus-within{border-color:var(--ink-3);box-shadow:0 0 0 3px var(--sel)}
 .search-big .i{color:var(--ink-3)}
 .search-big input::-webkit-search-cancel-button{display:none}

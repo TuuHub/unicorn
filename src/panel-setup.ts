@@ -52,26 +52,37 @@ export async function renderPlaybooks(runtime: PanelRuntime): Promise<string> {
     const args = playbook.arguments.length
       ? `<p class="muted small" style="margin:10px 0 0">Takes ${playbook.arguments.map((arg) => `<code>${escapeHtml(arg.name)}</code>${arg.required ? "" : " (optional)"}`).join(", ")}.</p>`
       : "";
-    return `<section class="card playbook">
-      <div class="card-head row"><div class="card-title"><span class="tile-mark md mono">${icon("playbook", "")}</span><div><h2>${escapeHtml(playbook.title)}</h2><p class="card-sub" style="margin:0">Produces ${escapeHtml(playbook.output)}</p></div></div>
-        <span class="pb-tags">${schedule.map((part) => `<span class="badge">${icon(part.startsWith("routine") ? "clock" : "spark")}${escapeHtml(part.replace(/^routine /, ""))}</span>`).join("")}</span></div>
-      <div class="card-body">
+    const when = schedule.length ? schedule.map((part) => escapeHtml(part.replace(/^routine /, ""))).join("<br>") : '<span class="muted">When you ask</span>';
+    return `<li class="pb">
+      <div class="pb-name"><h2>${escapeHtml(playbook.title)}</h2><p>Produces ${escapeHtml(playbook.output)}</p></div>
+      <div class="pb-main">
         <p class="pb-does">${escapeHtml(copy.does)}</p>
-        <div class="cmd ask"><code>“${escapeHtml(copy.ask)}”</code><button type="button" data-copy="${escapeHtml(copy.ask)}" aria-label="Copy">${icon("copy")}<span>Copy</span></button></div>
-        ${args}
-        <p class="pb-foot muted small">MCP prompt <code>${escapeHtml(playbook.id)}</code>${last ? ` · last brief ${escapeHtml(relative(last.last, now))} · ${last.n} filed` : ""}</p>
+        <p class="pb-ask"><span class="pb-quote">“${escapeHtml(copy.ask)}”</span><button type="button" class="ghost sm" data-copy="${escapeHtml(copy.ask)}" aria-label="Copy the line">${icon("copy")}<span>Copy</span></button></p>
+        <p class="pb-foot">Prompt <code>${escapeHtml(playbook.id)}</code>${playbook.arguments.length ? ` · takes ${playbook.arguments.map((arg) => `${escapeHtml(arg.name)}${arg.required ? "" : "?"}`).join(", ")}` : ""}${last ? ` · last brief ${escapeHtml(relative(last.last, now))}, ${last.n} filed` : ""}</p>
       </div>
-    </section>`;
+      <div class="pb-when">${when}</div>
+    </li>`;
   }).join("");
   const body = `
-    <div class="grid2 wide-cards">${cards}</div>
+    <section class="card"><ul class="pb-list">
+      <li class="pb head"><span>Playbook</span><span>What it does · what to say</span><span class="pb-when">Runs</span></li>
+      ${cards}
+    </ul></section>
     <style>
-      .playbook .card-head{align-items:flex-start}
-      .pb-tags{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
-      .pb-tags .badge .i{width:12px;height:12px}
-      .pb-does{margin:0 0 10px;font-size:14px;color:var(--ink-2)}
-      .ask code{font-family:inherit;font-size:13.5px}
-      .pb-foot{margin:10px 0 0}
+      .pb-list{list-style:none;margin:0;padding:0}
+      .pb{display:grid;grid-template-columns:minmax(0,15rem) minmax(0,1fr) 11rem;gap:8px 32px;padding:20px 0;border-top:1px solid var(--rule)}
+      .pb.head{padding:0 0 10px;border-top:0;font-size:12.5px;color:var(--ink-3);font-weight:500}
+      .pb.head .pb-when{color:inherit;font-size:inherit}
+      .pb-name p{margin:3px 0 0;font-size:13px;color:var(--ink-3)}
+      .pb-does{margin:0;font-size:14.5px;color:var(--ink);max-width:62ch}
+      .pb-ask{display:flex;align-items:center;gap:6px;margin:8px 0 0}
+      .pb-quote{font-size:14.5px;color:var(--ink-2);font-style:italic}
+      .pb-ask button{height:26px;padding:0 8px;background:none;border:0;box-shadow:none;color:var(--ink-3)}
+      .pb-ask button:hover{color:var(--ink);background:var(--sel)}
+      .pb-foot{margin:8px 0 0;font-size:12.5px;color:var(--ink-3)}
+      .pb-foot code{font-size:11.5px;padding:0 4px}
+      .pb-when{font-size:13px;color:var(--ink-2);text-align:right;line-height:1.7}
+      @media (max-width:900px){.pb{grid-template-columns:minmax(0,1fr)}.pb.head{display:none}.pb-when{text-align:left}}
     </style>
     ${PANEL_STYLE}${PANEL_SCRIPT}`;
   return renderPage({

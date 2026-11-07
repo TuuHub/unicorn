@@ -237,7 +237,8 @@ function renderConsentPage(consent: ConsentDescription, handle: string): string 
       </div>
     </section>
     <style>
-      .consent-pair{display:flex;align-items:center;justify-content:center;gap:0;padding:28px 20px 8px}
+      .consent{border-top:0}
+      .consent-pair{display:flex;align-items:center;justify-content:center;gap:0;padding:4px 0 20px}
       .consent-link{width:56px;height:1px;background:repeating-linear-gradient(90deg,var(--ink-3) 0 4px,transparent 4px 8px)}
       .consent .card-head{text-align:center}
       .consent h2{font-size:18px}
@@ -246,7 +247,7 @@ function renderConsentPage(consent: ConsentDescription, handle: string): string 
       .consent-label{display:block;font-weight:500;font-size:14px}
       .consent-scope{display:block;color:var(--ink-2);font-size:13px}
       .rows{margin:4px 0 0;padding:0}
-      .actions{display:flex;justify-content:flex-end;gap:8px;padding-top:16px;border-top:1px solid var(--rule-2);margin-top:4px}
+      .actions{display:flex;justify-content:flex-end;gap:8px;padding-top:16px;border-top:1px solid var(--rule);margin-top:4px}
       .actions button{flex:1}
     </style>`;
   return renderPage({

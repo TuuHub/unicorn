@@ -133,7 +133,8 @@ export function renderAccountPage(options: AccountPageOptions): Response {
         <div style="margin-top:14px;display:flex;justify-content:flex-end"><button type="submit" class="danger-solid">Delete everything</button></div>
       </form></div></section>
     <style>
-      .danger-zone{border-color:color-mix(in srgb,var(--bad) 30%,var(--rule))}
+      .danger-zone{border-top-color:var(--bad)}
+      .danger-zone h2{color:var(--bad)}
       .danger-zone .card-title .i{color:var(--bad)}
       button.danger-solid{background:var(--bad);color:#fff;box-shadow:inset 0 1px 0 rgb(255 255 255/.14),0 1px 2px rgb(18 18 18/.2)}
       button.danger-solid:hover{background:color-mix(in srgb,var(--bad) 85%,#000)}

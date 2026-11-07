@@ -235,7 +235,7 @@ async function renderOverview(runtime: PanelRuntime): Promise<string> {
     ? `<ul class="list">${courses
         .map(
           (course) => `<li>
-            <span class="grow unit-row"><span class="badge course">${escapeHtml(course.code)}</span><span class="truncate">${escapeHtml(course.title ?? "")}</span></span>
+            <span class="grow term-row"><span class="badge course">${escapeHtml(course.code)}</span><span class="truncate">${escapeHtml(course.title ?? "")}</span></span>
             <span class="end src-list">${course.sources.map((name) => `<span class="src-chip" title="${escapeHtml(name)}">${sourceDot(name)}${escapeHtml(name)}</span>`).join("")}</span>
           </li>`,
         )
@@ -629,7 +629,7 @@ async function renderConnect(runtime: PanelRuntime, url: URL): Promise<string> {
         <div><h2>Your unicorn address</h2><p class="card-sub">Add it as a custom MCP connector. The app opens a sign-in pop-up; no token needed.</p></div>
       </div>
       <div class="card-body">
-        ${copyRow(door)}
+        ${copyRow(door, false, true)}
         <div class="works"><span class="muted small">Works with</span><span class="works-row">${works.map((name) => `<span title="${escapeHtml(name)}">${clientTile(name, "sm")}</span>`).join("")}<span class="muted small">and any remote MCP client</span></span></div>
       </div>
     </section>
@@ -668,7 +668,7 @@ async function renderConnect(runtime: PanelRuntime, url: URL): Promise<string> {
         "",
         "Cursor, Codex, anything else",
         "Remote MCP over streamable HTTP, OAuth sign-in.",
-        `<pre class="night">${escapeHtml(jsonConfig)}</pre>`,
+        `<pre>${escapeHtml(jsonConfig)}</pre>`,
         `<span class="tile-cluster">${["Cursor", "Codex", "VS Code", "Windsurf"].map((name) => clientTile(name, "md")).join("")}</span>`,
       )}
     </div>
