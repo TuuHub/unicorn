@@ -341,7 +341,7 @@ export async function renderUnits(runtime: PanelRuntime): Promise<string> {
   const body = `
     ${
       rows
-        ? `<div class="table-wrap"><table><thead><tr><th>Unit</th><th>Sources</th><th class="num">Items</th><th class="num">Changed · 7d</th><th class="num">Due · 30d</th><th>Next deadline</th><th class="num"></th></tr></thead><tbody>${rows}</tbody></table></div>`
+        ? `<div class="table-wrap"><table class="units-table"><thead><tr><th>Unit</th><th>Sources</th><th class="num">Items</th><th class="num">Changed · 7d</th><th class="num">Due · 30d</th><th>Next deadline</th><th class="num"></th></tr></thead><tbody>${rows}</tbody></table></div>`
         : `<section class="card">${empty("units", "Units appear after the first sync.")}</section>`
     }
     ${PANEL_STYLE}${CAMPUS_STYLE}${PANEL_SCRIPT}`;
@@ -709,6 +709,7 @@ export const CAMPUS_STYLE = `<style>
 .u-next .muted{font-size:12.5px}
 td .icon-btn .i{width:16px;height:16px}
 tr.linked{cursor:pointer}
+@media (max-width:760px){.units-table th:nth-child(2),.units-table td:nth-child(2),.units-table th:nth-child(3),.units-table td:nth-child(3),.units-table th:nth-child(4),.units-table td:nth-child(4),.units-table th:nth-child(6),.units-table td:nth-child(6){display:none}.u-title{max-width:180px}}
 .unit-sources-row{display:flex;gap:8px;flex-wrap:wrap;margin:-8px 0 16px}
 .bucket-end{display:inline-flex;gap:8px;align-items:center}
 /* deadlines: a status board */
