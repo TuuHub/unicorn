@@ -16,7 +16,7 @@ function escapeHtml(value: string): string {
 type IconName =
   | "overview" | "activity" | "memory" | "connect" | "sources" | "account" | "docs" | "external"
   | "arrow" | "check" | "copy" | "key" | "clock" | "sync" | "spark" | "calendar" | "units" | "agents"
-  | "signout" | "alert" | "plus" | "horn";
+  | "signout" | "alert" | "plus" | "horn" | "changes" | "brief" | "plan" | "search" | "playbook" | "server" | "download" | "chevron";
 
 const ICON_PATHS: Record<IconName, string[]> = {
   horn: ["M12 2.5 17.5 20a5.5 2 0 0 1-11 0Z", "M8.4 14.4q3.6 1.9 7.4-.6M10.1 9q2.2 1.2 4.3-.4"],
@@ -41,6 +41,14 @@ const ICON_PATHS: Record<IconName, string[]> = {
   signout: ["M14 4.5h4.5a1.5 1.5 0 0 1 1.5 1.5v12a1.5 1.5 0 0 1-1.5 1.5H14", "M10 8l-4 4 4 4", "M6 12h9"],
   alert: ["M12 3.5 21 19.5H3z", "M12 10v4", "M12 16.8h.01"],
   plus: ["M12 5v14M5 12h14"],
+  changes: ["M4 7h12.5", "M13.5 4l3 3-3 3", "M20 17H7.5", "M10.5 14l-3 3 3 3"],
+  brief: ["M4.5 5.5h15v13h-15z", "M4.5 6 12 12l7.5-6"],
+  plan: ["M5 4.5h14v15H5z", "M8.5 9l1.5 1.5 3-3", "M8.5 15h7"],
+  search: ["M10.5 17a6.5 6.5 0 1 0 0-13 6.5 6.5 0 0 0 0 13z", "M15.5 15.5 20 20"],
+  playbook: ["M7 4.5v15l5.5-3.5 5.5 3.5v-15z"],
+  server: ["M4 4.5h16v6H4z", "M4 13.5h16v6H4z", "M7.5 7.5h.01M7.5 16.5h.01"],
+  download: ["M12 4v11", "M7.5 10.5 12 15l4.5-4.5", "M4.5 19.5h15"],
+  chevron: ["M9 6l6 6-6 6"],
 };
 
 export function icon(name: IconName, className = "i"): string {
@@ -198,4 +206,36 @@ export function clientLabel(actor: string | null | undefined, size: "sm" | "md" 
   // Keep the client's own spelling when it named itself something more specific ("Claude Desktop").
   const name = mark.id === "other" || mark.id === "token" || mark.id === "unicorn" || mark.id === "scheduler" || !raw ? mark.name : raw;
   return `<span class="who">${clientTile(actor, size)}<span class="who-name">${escapeHtml(name)}</span></span>`;
+}
+
+// --- change events ----------------------------------------------------------------------------
+
+// The glyphs unicorn's own changes widget draws (and unicorn-site's widget copies), 16-unit grid.
+const EVENT_PATHS: Record<string, string[]> = {
+  "item.added": ["M8 3v10M3 8h10"],
+  "item.archived": ["M2.5 4.5h11v2.5h-11z", "M3.5 7v6h9V7", "M6.5 9.5h3"],
+  "item.restored": ["M3.5 8a4.5 4.5 0 1 0 1.4-3.3", "M3.5 2.5v2.5H6"],
+  "deadline.changed": ["M8 13.5a5 5 0 1 0 0-10 5 5 0 0 0 0 10z", "M8 6v3l2 1.2"],
+  "grade.changed": ["M8 2.5 9.6 6l3.7.4-2.8 2.5.8 3.6L8 10.6l-3.3 1.9.8-3.6L2.7 6.4 6.4 6 8 2.5Z"],
+  "content.changed": ["M11.5 2.5 13 4l-7 7-2.5.5.5-2.5 7-7Z"],
+  "notice.posted": ["M3 8.5v-1A5 5 0 0 1 8 2.5h0a5 5 0 0 1 5 5v1", "M2.5 8.5h11v2a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1v-2Z", "M7 13.5a1 1 0 0 0 2 0"],
+  "state.changed": ["M4 6h6M8 4l2 2-2 2", "M12 10H6M8 8l-2 2 2 2"],
+};
+
+export const EVENT_LABELS: Record<string, string> = {
+  "item.added": "New",
+  "deadline.changed": "Deadline moved",
+  "grade.changed": "Grade",
+  "notice.posted": "Notice",
+  "content.changed": "Edited",
+  "state.changed": "Status",
+  "item.archived": "Removed",
+  "item.restored": "Restored",
+};
+
+export function eventIcon(type: string): string {
+  const paths = EVENT_PATHS[type] ?? EVENT_PATHS["content.changed"];
+  return `<span class="tile-mark sm ev ev-${escapeHtml(type.replace(/\W/g, "-"))}" aria-hidden="true"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">${paths
+    .map((d) => `<path d="${d}"/>`)
+    .join("")}</svg></span>`;
 }

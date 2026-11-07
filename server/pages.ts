@@ -123,6 +123,8 @@ export function renderAccountPage(options: AccountPageOptions): Response {
       <form method="post" action="/logout" style="margin:0"><input type="hidden" name="csrf" value="${escapeHtml(options.csrf)}"><button type="submit" class="secondary">${icon("signout")}Sign out</button></form></div></section>
     <section class="card"><div class="card-head"><div class="card-title">${icon("key")}<h2>Personal access token</h2></div><p class="card-sub">The bearer token on Connect, for clients without OAuth. Rotating it disconnects anything using the old one; OAuth-connected apps are unaffected.</p></div>
       <div class="card-body"><form method="post" action="/account/rotate-token" style="display:flex;justify-content:flex-end;margin:0"><input type="hidden" name="csrf" value="${escapeHtml(options.csrf)}"><button type="submit" class="secondary">${icon("sync")}Rotate token</button></form></div></section>
+    <section class="card"><div class="card-head"><div class="card-title">${icon("download")}<h2>Your data</h2></div><p class="card-sub">Your database is one SQLite file on this server, separate from every other account. Source tokens in it are encrypted with a key derived for your account; the operator can still read synced items, memory and plans. Self-host if that matters to you.</p></div>
+      <div class="card-body"><a class="button secondary" href="/panel/export" download>${icon("download")}Export memory, plans, briefs, activity (JSON)</a></div></section>
     <section class="card danger-zone"><div class="card-head"><div class="card-title">${icon("alert")}<h2>Delete account</h2></div><p class="card-sub">Deletes your database (items, memory, plans, activity, encrypted source tokens), signs out every connected app, and removes your account. This cannot be undone.</p></div>
       <div class="card-body"><form method="post" action="/account/delete">
         <input type="hidden" name="csrf" value="${escapeHtml(options.csrf)}">
@@ -137,7 +139,7 @@ export function renderAccountPage(options: AccountPageOptions): Response {
       button.danger-solid:hover{background:color-mix(in srgb,var(--bad) 85%,#000)}
     </style>`;
   return htmlResponse(
-    renderPage({ title: "unicorn — account", active: "/account", heading: "Account", subtitle: "Sign-in, the bearer token, and deleting your data.", body }),
+    renderPage({ title: "unicorn — account", active: "/account", heading: "Account", subtitle: "Sign-in, the bearer token, where your data lives, and deleting it.", body }),
     options.error ? 400 : 200,
   );
 }

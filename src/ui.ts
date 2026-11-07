@@ -15,12 +15,27 @@ interface NavLink {
   icon?: Parameters<typeof icon>[0];
 }
 
-const NAV: NavLink[] = [
-  { path: "/panel", label: "Overview", icon: "overview" },
-  { path: "/panel/activity", label: "Activity", icon: "activity" },
-  { path: "/panel/memory", label: "Memory", icon: "memory" },
-  { path: "/panel/connect", label: "Connect", icon: "connect" },
-  { path: "/settings", label: "Sources", icon: "sources" },
+const NAV_GROUPS: Array<{ label: string; links: NavLink[] }> = [
+  {
+    label: "Campus",
+    links: [
+      { path: "/panel", label: "Overview", icon: "overview" },
+      { path: "/panel/changes", label: "Changes", icon: "changes" },
+      { path: "/panel/due", label: "Deadlines", icon: "calendar" },
+      { path: "/panel/units", label: "Units", icon: "units" },
+      { path: "/panel/briefs", label: "Briefs", icon: "brief" },
+      { path: "/panel/plans", label: "Plans", icon: "plan" },
+    ],
+  },
+  {
+    label: "Agents",
+    links: [
+      { path: "/panel/activity", label: "Activity", icon: "activity" },
+      { path: "/panel/memory", label: "Memory", icon: "memory" },
+      { path: "/panel/playbooks", label: "Playbooks", icon: "playbook" },
+      { path: "/panel/connect", label: "Connect", icon: "connect" },
+    ],
+  },
 ];
 
 const SITE = "https://unicorn.tuuhub.com";
@@ -28,14 +43,20 @@ const DOCS = `${SITE}/docs/unicorn`;
 
 // The hosted server (ADR-0046) adds its account links once at startup; a self-deployed Worker
 // never calls this. Module-level on purpose: one process serves one deployment mode.
-let extraNav: NavLink[] = [];
+// A self-deployed Worker never calls configureChrome, so the defaults describe it.
+let setupNav: NavLink[] = [
+  { path: "/settings", label: "Sources", icon: "sources" },
+  { path: "/panel/deployment", label: "Deployment", icon: "server" },
+];
 let brandHref = "/panel";
 let instanceLabel = "Self-hosted";
+let footNote = "Runs on your Cloudflare account";
 
-export function configureChrome(options: { extraNav?: NavLink[]; brandHref?: string; instanceLabel?: string }): void {
-  extraNav = (options.extraNav ?? []).map((link) => ({ icon: "account", ...link }));
+export function configureChrome(options: { setupNav?: NavLink[]; brandHref?: string; instanceLabel?: string; footNote?: string }): void {
+  if (options.setupNav) setupNav = options.setupNav;
   brandHref = options.brandHref ?? "/panel";
   instanceLabel = options.instanceLabel ?? "Self-hosted";
+  footNote = options.footNote ?? footNote;
 }
 
 export interface PageOptions {
@@ -82,7 +103,7 @@ p,li{text-wrap:pretty}
 
 /* --- shell --------------------------------------------------------------------------- */
 .shell{display:grid;grid-template-columns:244px minmax(0,1fr);min-height:100vh;min-height:100dvh}
-.side{position:sticky;top:0;height:100vh;height:100dvh;display:flex;flex-direction:column;gap:20px;padding:20px 14px;border-right:1px solid var(--rule)}
+.side{position:sticky;top:0;height:100vh;height:100dvh;display:flex;flex-direction:column;gap:14px;padding:20px 14px;border-right:1px solid var(--rule);overflow-y:auto;scrollbar-width:none}
 .brand{display:inline-flex;align-items:center;gap:9px;padding:4px 8px;font-weight:600;font-size:15.5px;letter-spacing:-.015em}
 .brand .i{width:20px;height:20px}
 .instance{margin-left:auto;font-size:11px;font-weight:500;color:var(--ink-3);border:1px solid var(--rule);border-radius:6px;padding:0 6px;line-height:18px}
@@ -92,7 +113,15 @@ p,li{text-wrap:pretty}
 .nav a:hover{background:var(--sel);color:var(--ink)}
 .nav a[aria-current=page]{background:var(--surface);border-color:var(--rule);color:var(--ink);box-shadow:var(--lift)}
 .nav a[aria-current=page] .i,.nav a:hover .i{color:var(--ink)}
-.nav-sep{height:1px;background:var(--rule);margin:8px 10px}
+.nav-group{margin:14px 10px 4px;font-size:11.5px;font-weight:500;color:var(--ink-3)}
+.nav-group:first-child{margin-top:0}
+.side-search{display:flex;align-items:center;gap:8px;height:34px;padding:0 10px;border:1px solid var(--rule);border-radius:8px;background:var(--surface);transition:border-color .15s ease-out,box-shadow .15s ease-out}
+.side-search:focus-within{border-color:var(--ink-3);box-shadow:0 0 0 3px var(--sel)}
+.side-search .i{width:15px;height:15px;color:var(--ink-3)}
+.side-search input{flex:1;min-width:0;border:0;background:none;font:inherit;font-size:13.5px;color:var(--ink);outline:none;height:100%;padding:0}
+.side-search input::placeholder{color:var(--ink-3)}
+.side-search input::-webkit-search-cancel-button{display:none}
+.search-m{display:none}
 .side-foot{margin-top:auto;display:flex;flex-direction:column;gap:2px;padding-top:14px;border-top:1px solid var(--rule)}
 .side-foot a{display:flex;align-items:center;gap:10px;height:32px;padding:0 10px;border-radius:8px;color:var(--ink-3);font-size:13px}
 .side-foot a:hover{color:var(--ink);background:var(--sel)}
@@ -117,7 +146,9 @@ h1{margin:0;font-size:clamp(26px,3.2vw,32px);line-height:1.1;font-weight:600;let
   .nav::-webkit-scrollbar{display:none}
   .nav a{height:32px;padding:0 10px;font-size:13.5px;white-space:nowrap;gap:7px}
   .nav a .i{width:16px;height:16px}
-  .nav-sep,.side-foot{display:none}
+  .nav-group,.side-foot,.side-search{display:none}
+  .search-m{display:grid;place-items:center;flex:none;width:32px;height:32px;border-radius:8px;color:var(--ink-2)}
+  .search-m .i{width:17px;height:17px}
   .main{padding:28px 16px 56px}
 }
 
@@ -300,7 +331,8 @@ div.notice::before{display:none}
 function renderNav(active: string): string {
   const link = (page: NavLink) =>
     `<a href="${page.path}"${page.path === active ? ' aria-current="page"' : ""}>${page.icon ? icon(page.icon) : ""}<span>${page.label}</span></a>`;
-  return `${NAV.map(link).join("")}${extraNav.length ? `<span class="nav-sep" role="separator"></span>${extraNav.map(link).join("")}` : ""}`;
+  const groups = [...NAV_GROUPS, { label: "Setup", links: setupNav }];
+  return groups.map((group) => `<p class="nav-group">${group.label}</p>${group.links.map(link).join("")}`).join("");
 }
 
 function brand(href: string, withInstance = false): string {
@@ -364,7 +396,9 @@ export function renderPage(options: PageOptions): string {
   <div class="shell">
     <aside class="side">
       ${brand(brandHref, true)}
+      <form class="side-search" method="get" action="/panel/search" role="search">${icon("search")}<input type="search" name="q" placeholder="Search everything" aria-label="Search everything"></form>
       <nav class="nav" aria-label="Dashboard">${renderNav(options.active)}</nav>
+      <a class="search-m" href="/panel/search" aria-label="Search">${icon("search")}</a>
       <div class="side-foot">
         <a href="${DOCS}" target="_blank" rel="noopener">${icon("docs")}Docs${ext}</a>
         <a href="${SITE}" target="_blank" rel="noopener">${icon("horn")}unicorn.tuuhub.com${ext}</a>
@@ -376,7 +410,7 @@ export function renderPage(options: PageOptions): string {
         ${options.actions ? `<div class="page-actions">${options.actions}</div>` : ""}
       </header>
       ${options.body}
-      <footer class="foot"><span>Apache-2.0</span><span><a href="${DOCS}" target="_blank" rel="noopener">Docs</a> · <a href="https://github.com/TuuHub/unicorn" target="_blank" rel="noopener">GitHub</a></span></footer>
+      <footer class="foot"><span>${footNote}</span><span><a href="${DOCS}" target="_blank" rel="noopener">Docs</a> · <a href="https://github.com/TuuHub/unicorn" target="_blank" rel="noopener">GitHub</a></span></footer>
     </div></main>
   </div>
 </body>

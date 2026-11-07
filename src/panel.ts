@@ -22,7 +22,42 @@ import type { DoorRepository } from "./mcp/door-repository";
 import { computeCsrfToken, type LastCycleInfo } from "./settings";
 import { loadTermCourses, type TermCourse } from "./term";
 import { clientLabel, clientMark, clientTile, icon, sourceDot, sourceMark, sourceTile } from "./marks";
+import {
+  capitalize,
+  copyRow,
+  dayKey,
+  empty,
+  formatIn,
+  longDate,
+  MEMORY_PURPOSE,
+  memoryTitle,
+  PANEL_SCRIPT,
+  PANEL_STYLE,
+  relative,
+  safeZone,
+  shortAgo,
+  SOURCE_NAMES,
+  timeTag,
+} from "./panel-kit";
+import {
+  CAMPUS_STYLE,
+  markBriefsRead,
+  recentChanges,
+  renderChangeDays,
+  renderBriefs,
+  renderChanges,
+  renderDeadlines,
+  renderDeadlinesIcs,
+  renderPlans,
+  renderSearch,
+  renderUnit,
+  renderUnits,
+  togglePlanItem,
+} from "./panel-campus";
+import { type DeploymentInfo, renderDeployment, renderExport, renderPlaybooks } from "./panel-setup";
 import { escapeHtml, htmlResponse, renderPage } from "./ui";
+
+export { relative } from "./panel-kit";
 
 export interface PanelRuntime {
   db: D1Database;
@@ -41,15 +76,13 @@ export interface PanelRuntime {
   bearerLabel: string; // "MCP_TOKEN" on a Worker, "personal access token" when hosted
   grants: GrantSummary[];
   hosted: boolean;
+  // Self-deployed Workers only (src/index.ts); the hosted server leaves it unset and has no
+  // Deployment page.
+  deployment?: DeploymentInfo;
   now?: () => Date;
 }
 
-const SOURCE_NAMES: Record<string, string> = {
-  "campus-moodle": "Moodle",
-  "campus-ed": "Ed",
-  "campus-canvas": "Canvas",
-  gmail: "Gmail",
-};
+
 
 export async function handlePanel(request: Request, runtime: PanelRuntime): Promise<Response> {
   const url = new URL(request.url);
@@ -67,6 +100,8 @@ export async function handlePanel(request: Request, runtime: PanelRuntime): Prom
     if (memoryMatch) {
       return saveMemory(runtime, memoryMatch[1] as MemoryTarget, form, url);
     }
+    if (path === "/panel/briefs/read") return markBriefsRead(runtime, form, url);
+    if (path === "/panel/plans/toggle") return togglePlanItem(runtime, form, url);
     return new Response("Not found.", { status: 404 });
   }
 
@@ -82,8 +117,36 @@ export async function handlePanel(request: Request, runtime: PanelRuntime): Prom
       return htmlResponse(await renderMemoryPage(runtime, url));
     case "/panel/connect":
       return htmlResponse(await renderConnect(runtime, url));
-    default:
+    case "/panel/changes":
+      return htmlResponse(await renderChanges(runtime, url));
+    case "/panel/due":
+      return htmlResponse(await renderDeadlines(runtime, url));
+    case "/panel/due.ics":
+      return renderDeadlinesIcs(runtime, url);
+    case "/panel/units":
+      return htmlResponse(await renderUnits(runtime));
+    case "/panel/briefs":
+      return htmlResponse(await renderBriefs(runtime, url));
+    case "/panel/plans":
+      return htmlResponse(await renderPlans(runtime, url));
+    case "/panel/search":
+      return htmlResponse(await renderSearch(runtime, url));
+    case "/panel/playbooks":
+      return htmlResponse(await renderPlaybooks(runtime));
+    case "/panel/export":
+      return renderExport(runtime);
+    case "/panel/deployment": {
+      const page = await renderDeployment(runtime);
+      return page ? htmlResponse(page) : new Response(null, { status: 303, headers: { location: new URL("/account", url).toString() } });
+    }
+    default: {
+      const unit = path.match(/^\/panel\/units\/([A-Za-z0-9._-]{2,24})$/);
+      if (unit) {
+        const page = await renderUnit(runtime, decodeURIComponent(unit[1]));
+        if (page) return htmlResponse(page);
+      }
       return new Response("Not found.", { status: 404 });
+    }
   }
 }
 
@@ -100,12 +163,19 @@ async function renderOverview(runtime: PanelRuntime): Promise<string> {
     readAllMemory(runtime.memory),
     computeCsrfToken(runtime.adminToken),
   ]);
+  const changes = await recentChanges(runtime.db, { limit: 6 }).catch(() => []);
   const zone = safeZone(runtime.timezone);
   const totalItems = Object.values(runtime.itemCounts).reduce((sum, count) => sum + count, 0);
   const user = memory.find((view) => view.target === "user")!;
 
   const checklist = [
-    { done: runtime.configuredSources > 0, title: "Add a source", text: "Ed, Moodle, Canvas or Gmail. Tokens are stored encrypted.", href: "/settings", cta: "Sources" },
+    {
+      done: runtime.configuredSources > 0,
+      title: "Add a source",
+      text: runtime.hosted ? "Ed, Moodle, Canvas or Gmail. Tokens are stored encrypted." : "Paste a token in Sources, or set it with wrangler secret put.",
+      href: "/settings",
+      cta: "Sources",
+    },
     { done: totalItems > 0, title: "First sync", text: "Automatic every hour, or start it now.", href: "/settings", cta: "Sync now" },
     {
       done: runtime.grants.length > 0 || stats.toolCalls24h > 0 || stats.clients7d.length > 0,
@@ -137,23 +207,25 @@ async function renderOverview(runtime: PanelRuntime): Promise<string> {
 
   const lastSync = runtime.lastCycle.at;
   const dueUnits = new Set(upcoming.map((item) => item.course ?? item.source)).size;
-  const stat = (iconName: Parameters<typeof icon>[0], label: string, value: string, hint: string) =>
-    `<div class="stat"><div class="stat-label">${icon(iconName)}${escapeHtml(label)}</div><div class="stat-value">${value}</div><div class="stat-hint">${hint}</div></div>`;
+  const stat = (iconName: Parameters<typeof icon>[0], label: string, value: string, hint: string, href: string) =>
+    `<a class="stat" href="${href}"><div class="stat-label">${icon(iconName)}${escapeHtml(label)}</div><div class="stat-value">${value}</div><div class="stat-hint">${hint}</div></a>`;
   const stats5 = [
-    stat("units", "Units this term", String(courses.length), escapeHtml(courses.find((course) => course.term)?.term ?? (courses.length ? "this term" : "after the first sync"))),
-    stat("calendar", "Due in 7 days", String(upcoming.length), upcoming.length ? `across ${dueUnits} unit${dueUnits === 1 ? "" : "s"}` : "nothing due"),
-    stat("spark", "Unread briefs", String(unread.length), "agents read these first"),
+    stat("units", "Units this term", String(courses.length), escapeHtml(courses.find((course) => course.term)?.term ?? (courses.length ? "this term" : "after the first sync")), "/panel/units"),
+    stat("calendar", "Due in 7 days", String(upcoming.length), upcoming.length ? `across ${dueUnits} unit${dueUnits === 1 ? "" : "s"}` : "nothing due", "/panel/due"),
+    stat("brief", "Unread briefs", String(unread.length), "agents read these first", "/panel/briefs"),
     stat(
       "agents",
       "Agent calls · 24h",
       String(stats.toolCalls24h),
       stats.errors24h ? `<span class="state bad">${stats.errors24h} error${stats.errors24h === 1 ? "" : "s"}</span>` : `<span class="state">no errors</span>`,
+      "/panel/activity",
     ),
     stat(
       "sync",
       "Last sync",
       lastSync ? shortAgo(lastSync, now) : "—",
       runtime.schedulerRunning ? `<span class="state">hourly · running</span>` : `<span class="state bad">scheduler stopped</span>`,
+      "/settings",
     ),
   ].join("");
 
@@ -199,12 +271,24 @@ async function renderOverview(runtime: PanelRuntime): Promise<string> {
           <div class="card-head row"><div class="card-title">${icon("calendar")}<h2 id="due-title">Due this week</h2></div><span class="muted small">${escapeHtml(zone)}</span></div>
           <div class="card-body">${due}</div>
         </section>
+        <section class="card" aria-labelledby="changes-title">
+          <div class="card-head row"><div class="card-title">${icon("changes")}<h2 id="changes-title">Latest changes</h2></div><a class="more" href="/panel/changes">All${icon("arrow")}</a></div>
+          <div class="card-body">${changes.length ? renderChangeDays(changes, zone, now) : empty("changes", "No changes yet.")}</div>
+        </section>
         <section class="card" aria-labelledby="recent-title">
           <div class="card-head row"><div class="card-title">${icon("activity")}<h2 id="recent-title">Recent activity</h2></div><a class="more" href="/panel/activity">Full log${icon("arrow")}</a></div>
           <div class="card-body">${renderFeed(recent, now)}</div>
         </section>
       </div>
       <div class="col">
+        ${
+          unread.length
+            ? `<section class="card" aria-labelledby="briefs-title"><div class="card-head row"><div class="card-title">${icon("brief")}<h2 id="briefs-title">Unread briefs</h2></div><a class="more" href="/panel/briefs">Read${icon("arrow")}</a></div><div class="card-body"><ul class="list">${unread
+                .slice(0, 4)
+                .map((brief) => `<li><a class="grow plain truncate" href="/panel/briefs">${escapeHtml(brief.title)}</a><span class="end">${escapeHtml(shortAgo(brief.createdAt, now))}</span></li>`)
+                .join("")}</ul></div></section>`
+            : ""
+        }
         <section class="card" aria-labelledby="agents-title">
           <div class="card-head row"><div class="card-title">${icon("agents")}<h2 id="agents-title">Your agents</h2></div><span class="muted small tabular">${weekCalls} call${weekCalls === 1 ? "" : "s"} · 7 days</span></div>
           <div class="card-body">${weekCalls ? renderWeekChart(stats.daily7d) : ""}${clients}</div>
@@ -219,7 +303,7 @@ async function renderOverview(runtime: PanelRuntime): Promise<string> {
         </section>
       </div>
     </div>
-    ${PANEL_STYLE}
+    ${PANEL_STYLE}${CAMPUS_STYLE}
     ${PANEL_SCRIPT}`;
 
   const actions = `<form method="post" action="/settings/sync-now" style="margin:0"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><button type="submit" class="secondary">${icon("sync")}Sync now</button></form>`;
@@ -595,6 +679,13 @@ async function renderConnect(runtime: PanelRuntime, url: URL): Promise<string> {
       </div></section>`
         : ""
     }
+    ${
+      runtime.hosted
+        ? ""
+        : `<section class="card" style="margin-top:16px"><div class="card-head"><div class="card-title">${icon("server")}<h2>Admin MCP</h2></div><p class="card-sub">Raw items, relations, plugin manifests and custom tools, for maintaining this Worker. Bearer ADMIN_TOKEN only; never give it to an everyday chat.</p></div><div class="card-body">
+        ${copyRow(`claude mcp add --transport http unicorn-admin ${new URL("/mcp/admin", runtime.doorUrl).toString()} --header "Authorization: Bearer <ADMIN_TOKEN>"`, true)}
+      </div></section>`
+    }
     <section class="card" style="margin-top:16px"><div class="card-head row"><div><div class="card-title">${icon("agents")}<h2>Connected apps</h2></div><p class="card-sub">Revoking signs an app out immediately.</p></div><span class="badge tabular">${runtime.grants.length}</span></div><div class="card-body">${apps}</div></section>
     ${PANEL_STYLE}
     ${PANEL_SCRIPT}`;
@@ -607,175 +698,3 @@ async function renderConnect(runtime: PanelRuntime, url: URL): Promise<string> {
     wide: true,
   });
 }
-
-function copyRow(value: string, shell = false): string {
-  return `<div class="cmd"><code>${shell ? '<span class="prompt">$ </span>' : ""}${escapeHtml(value)}</code><button type="button" data-copy="${escapeHtml(value)}" aria-label="Copy">${icon("copy")}<span>Copy</span></button></div>`;
-}
-
-// --- shared bits --------------------------------------------------------------
-
-function empty(iconName: Parameters<typeof icon>[0], text: string): string {
-  return `<div class="empty">${icon(iconName)}<p>${text}</p></div>`;
-}
-
-// The memory specs' purposes are written for the agent ("the user …"); these are for the person.
-const MEMORY_PURPOSE: Record<string, string> = {
-  user: "Who you are: university, degree, year, goals, how you like to work.",
-  notes: "Follow-ups, decisions and per-unit conventions your agents track.",
-  corrections: "Rules you stated, kept word for word.",
-  term: "This term's units, rebuilt from your sources each sync.",
-};
-
-function memoryTitle(value: string): string {
-  const known: Record<string, string> = { "USER PROFILE": "User profile", NOTES: "Notes", TERM: "Term", user: "User profile", notes: "Notes", corrections: "Corrections", term: "Term" };
-  return known[value] ?? capitalize(value.toLowerCase());
-}
-
-function capitalize(value: string): string {
-  return value ? value[0].toUpperCase() + value.slice(1) : value;
-}
-
-function timeTag(iso: string): string {
-  return `<time datetime="${escapeHtml(iso)}">${escapeHtml(iso.slice(0, 16).replace("T", " "))} UTC</time>`;
-}
-
-function safeZone(zone: string): string {
-  try {
-    new Intl.DateTimeFormat("en-AU", { timeZone: zone });
-    return zone;
-  } catch {
-    return "UTC";
-  }
-}
-
-function formatIn(iso: string, zone: string, options: Intl.DateTimeFormatOptions): string {
-  return new Intl.DateTimeFormat("en-AU", { ...options, timeZone: zone }).format(new Date(iso));
-}
-
-function dayKey(iso: string, zone: string): string {
-  return new Intl.DateTimeFormat("en-CA", { year: "numeric", month: "2-digit", day: "2-digit", timeZone: zone }).format(new Date(iso));
-}
-
-function longDate(now: Date, zone: string): string {
-  return formatIn(now.toISOString(), zone, { weekday: "long", day: "numeric", month: "long" });
-}
-
-/** "12m", "3h", "2d": for stat values and table cells where a sentence won't fit. */
-function shortAgo(iso: string, now: Date): string {
-  const then = Date.parse(iso);
-  if (!Number.isFinite(then)) return iso;
-  const seconds = Math.max(0, Math.round((now.getTime() - then) / 1000));
-  if (seconds < 60) return "now";
-  if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
-  if (seconds < 86_400) return `${Math.round(seconds / 3600)}h`;
-  return `${Math.round(seconds / 86_400)}d`;
-}
-
-export function relative(iso: string, now: Date): string {
-  const then = Date.parse(iso);
-  if (!Number.isFinite(then)) return iso;
-  const seconds = Math.round((then - now.getTime()) / 1000);
-  const abs = Math.abs(seconds);
-  const units: Array<[number, string]> = [
-    [86_400, "day"],
-    [3_600, "hour"],
-    [60, "minute"],
-  ];
-  for (const [size, name] of units) {
-    if (abs >= size) {
-      const value = Math.round(abs / size);
-      const label = `${value} ${name}${value === 1 ? "" : "s"}`;
-      return seconds < 0 ? `${label} ago` : `in ${label}`;
-    }
-  }
-  return "just now";
-}
-
-// Page-level layout the shared shell doesn't need: the agenda, the week chart, the feed, the
-// setup strip and the client cards.
-const PANEL_STYLE = `<style>
-.small{font-size:12.5px}
-.setup .card-head{align-items:center}
-.progress{width:140px;height:6px;border-radius:999px;background:var(--paper-2);border:1px solid var(--rule-2);overflow:hidden;flex:none}
-.progress>span{display:block;height:100%;background:var(--ink);border-radius:999px}
-.setup-steps{list-style:none;margin:0;padding:16px 20px 20px;display:grid;grid-template-columns:repeat(auto-fit,minmax(min(200px,100%),1fr));gap:12px}
-.setup-steps li{display:flex;gap:12px;padding:14px;border:1px solid var(--rule-2);border-radius:12px;background:var(--paper)}
-.setup-steps h3{font-size:14px}
-.setup-steps p{margin:3px 0 8px;color:var(--ink-2);font-size:13px}
-.setup-steps li.done{opacity:.62}
-.setup-steps li.done p{margin-bottom:0}
-.setup-num{flex:none;display:grid;place-items:center;width:26px;height:26px;border-radius:50%;border:1px solid var(--rule);background:var(--chip);font-size:12.5px;font-weight:600;font-variant-numeric:tabular-nums;color:var(--ink-2)}
-.setup-num .i{width:14px;height:14px}
-.done .setup-num{background:var(--ink);border-color:var(--ink);color:var(--paper)}
-.agenda{display:flex;flex-direction:column}
-.day{display:grid;grid-template-columns:64px minmax(0,1fr);gap:12px;padding:12px 0;border-top:1px solid var(--rule-2)}
-.day:first-child{border-top:0;padding-top:2px}
-.day-label{display:flex;flex-direction:column;line-height:1.15;padding-top:2px}
-.dow{font-size:12px;font-weight:500;color:var(--ink-2)}
-.dom{font-size:22px;font-weight:600;letter-spacing:-.03em}
-.mon{font-size:11.5px;color:var(--ink-3)}
-.day.today .dow{color:var(--ink);font-weight:600}
-.day .list>li{padding:7px 0}
-.day .list>li:first-child{padding-top:2px}
-.due-row,.unit-row{display:flex;align-items:center;gap:8px;min-width:0}
-.due-row a:hover{text-decoration:underline;text-decoration-color:var(--ink-3);text-underline-offset:3px}
-.src-list{display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap}
-.src-chip{display:inline-flex;align-items:center;gap:5px;color:var(--ink-2)}
-.week{display:grid;grid-template-columns:repeat(7,1fr);gap:8px;height:96px;margin:4px 0 14px}
-.bar-col{display:flex;flex-direction:column;align-items:center;gap:6px;min-width:0}
-.bar-track{flex:1;width:100%;display:flex;align-items:flex-end;border-bottom:1px solid var(--rule)}
-.bar-fill{position:relative;display:flex;flex-direction:column;justify-content:flex-start;width:100%;max-width:28px;margin:0 auto;background:color-mix(in srgb,var(--ink) 22%,var(--surface));border-radius:5px 5px 0 0;overflow:hidden}
-.bar-col.today .bar-fill{background:var(--ink)}
-.bar-err{display:block;width:100%;background:var(--bad)}
-.bar-label{font-size:11px;color:var(--ink-3)}
-.bar-col.today .bar-label{color:var(--ink);font-weight:600}
-.clients .bar{margin-left:38px}
-.bar{display:block;height:3px;margin-top:7px;border-radius:999px;background:var(--paper-2);overflow:hidden;max-width:220px}
-.bar>span{display:block;height:100%;background:var(--ink-3);border-radius:999px}
-.clients>li{align-items:center}
-.clients .grow{display:flex;flex-direction:column;align-items:stretch}
-.clients .end{line-height:1.45}
-.clients .end strong{color:var(--ink);font-weight:600}
-.tools .grow{display:flex;flex-direction:column}
-.quotes{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
-.quotes li{position:relative;padding:2px 0 2px 14px;font-size:14px;color:var(--ink)}
-.quotes li::before{content:"";position:absolute;left:0;top:5px;bottom:5px;width:2px;border-radius:2px;background:var(--rule)}
-.feed-row{display:flex;align-items:center;gap:10px;min-width:0}
-.feed-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px}
-.feed-text strong{font-weight:600}
-.feed .muted{color:var(--ink-3)}
-.client-stack{gap:0}
-.client-stack .tile-mark{margin-right:-4px;box-shadow:0 0 0 2px var(--surface)}
-.mem-meta{display:flex;justify-content:space-between;gap:12px;color:var(--ink-3);font-size:12px;margin-bottom:6px;white-space:nowrap}
-.wide-cards{grid-template-columns:repeat(auto-fit,minmax(min(420px,100%),1fr))}
-.mem-actions{display:flex;justify-content:space-between;align-items:center;margin-top:10px}
-.address .card-body{padding-top:8px}
-.address .cmd{padding:8px 8px 8px 16px}
-.address .cmd code{font-size:14px}
-.works{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:14px}
-.works-row{display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap}
-.client-card{display:flex;flex-direction:column}
-.client-head{display:flex;align-items:center;gap:14px;padding-bottom:4px}
-.tile-cluster{display:inline-flex;flex:none}
-.tile-cluster .tile-mark{margin-right:-8px;box-shadow:0 0 0 2px var(--surface)}
-.tile-cluster .tile-mark:last-child{margin-right:0}
-.apps .grow{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-.since{white-space:nowrap}
-</style>`;
-
-const PANEL_SCRIPT = `
-<script>
-(function () {
-  document.querySelectorAll("time[datetime]").forEach(function (node) {
-    try { node.textContent = new Date(node.getAttribute("datetime")).toLocaleString(undefined, { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }); } catch (_) {}
-  });
-  document.querySelectorAll("[data-copy]").forEach(function (button) {
-    button.addEventListener("click", function () {
-      var value = button.getAttribute("data-copy") || "";
-      var label = button.querySelector("span") || button;
-      var original = label.textContent;
-      navigator.clipboard.writeText(value).then(function () { label.textContent = "Copied"; setTimeout(function () { label.textContent = original; }, 1500); });
-    });
-  });
-})();
-</script>`;

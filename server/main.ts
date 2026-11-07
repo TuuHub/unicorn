@@ -19,7 +19,6 @@
 import { createServer } from "node:http";
 import { mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { configureChrome } from "../src/ui";
 import { createHostedApp } from "./app";
 import { ControlStore } from "./control";
 import { clientIp, sendResponse, toRequest } from "./http";
@@ -58,13 +57,14 @@ async function main(): Promise<void> {
   );
 
   const signup = env.UNICORN_SIGNUP ?? "open";
-  configureChrome({ extraNav: [{ path: "/account", label: "Account" }], brandHref: "/panel", instanceLabel: "Hosted" });
+  const operator = env.UNICORN_OPERATOR ?? "the operator of this instance";
+
   const app = createHostedApp({
     control,
     tenants,
     config: {
       publicUrl,
-      operator: env.UNICORN_OPERATOR ?? "the operator of this instance",
+      operator,
       repoUrl: env.UNICORN_REPO_URL ?? "https://github.com/TuuHub/unicorn",
       signupOpen: signup !== "closed",
       signupCode: signup === "invite" ? env.UNICORN_SIGNUP_CODE : undefined,

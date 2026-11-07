@@ -18,6 +18,7 @@ import type { Env } from "../src/runtime/cycle";
 import { computeCsrfToken } from "../src/settings";
 import { D1SourceCredentialStore } from "../src/sources";
 import { AccountError, type Account, type ControlStore } from "./control";
+import { configureChrome, escapeHtml } from "../src/ui";
 import { renderAccountPage, renderAuthForm, renderLanding } from "./pages";
 import type { TenantManager } from "./tenants";
 
@@ -61,6 +62,18 @@ export function createHostedApp(deps: HostedDeps): { fetch(request: Request, ip?
     MCP_TOKEN: "",
     OAUTH_KV: control.kv(),
   };
+
+  // Every page after sign-in is the shared panel; on this server its Setup group ends in Account,
+  // not a self-deployed Worker's Deployment page.
+  configureChrome({
+    setupNav: [
+      { path: "/settings", label: "Sources", icon: "sources" },
+      { path: "/account", label: "Account", icon: "account" },
+    ],
+    brandHref: "/panel",
+    instanceLabel: "Hosted",
+    footNote: `Hosted by ${escapeHtml(config.operator)}. Your data sits on their server; source tokens are encrypted.`,
+  });
 
   const doorHandler = async (request: Request, _env: HostEnv, ctx: ExecutionContext): Promise<Response> => {
     const props = (ctx as unknown as { props?: DoorProps }).props;
