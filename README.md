@@ -16,6 +16,12 @@ It is a remote MCP server on your own free Cloudflare account. It has no model o
 
 ## Set up
 
+Three ways in, the same code underneath:
+
+- **Use a hosted instance**: sign up, paste your Ed and Canvas tokens, then paste the instance's `/mcp` address into Claude or ChatGPT and sign in in the pop-up. No terminal.
+- **Host it for your friends or class**: run the Node server on your own machine with Docker. See [docs/HOSTED.md](docs/HOSTED.md).
+- **Self-deploy on your free Cloudflare account**, so nobody else holds your tokens:
+
 Ask your coding agent (Claude Code, Codex, or anything with a terminal) from a clone of this repository:
 
 ```text
@@ -48,6 +54,8 @@ Setup deploys the Worker to your Cloudflare account, then walks you through each
 | “Brief me on the forum.” | The `forum-brief` playbook |
 
 In Claude and ChatGPT, answers can come back as cards instead of text. unicorn never writes to your sources.
+
+Your agent also keeps a small memory in unicorn: who you are, what you are following up, and this term's units, which unicorn detects itself. Every new chat, on any device, starts by reading it. The dashboard (`/panel`) shows that memory, lets you edit it, and logs every call your agents made and every sync unicorn ran.
 
 ## Learn more
 

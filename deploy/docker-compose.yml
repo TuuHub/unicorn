@@ -1,0 +1,30 @@
+# Hosted unicorn behind Caddy (automatic HTTPS). Copy deploy/ to your server, put the values in
+# a .env file next to this one (see docs/HOSTED.md), then: docker compose up -d
+services:
+  unicorn:
+    build: ..
+    restart: unless-stopped
+    environment:
+      UNICORN_PUBLIC_URL: https://${UNICORN_DOMAIN}
+      UNICORN_SECRET: ${UNICORN_SECRET}
+      UNICORN_OPERATOR: ${UNICORN_OPERATOR:-the operator of this instance}
+      UNICORN_SIGNUP: ${UNICORN_SIGNUP:-open}
+      UNICORN_SIGNUP_CODE: ${UNICORN_SIGNUP_CODE:-}
+      UNICORN_TRUST_PROXY: "1"
+      MOODLE_BASE_URL: ${MOODLE_BASE_URL:-https://learning.monash.edu}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+    volumes:
+      - unicorn-data:/data
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      UNICORN_DOMAIN: ${UNICORN_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+volumes:
+  unicorn-data:
+  caddy-data:

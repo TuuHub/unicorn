@@ -43,6 +43,8 @@ export interface SourcePreset {
   // One sentence: how to get a credential, plus the official page to get it from.
   instructions: string;
   instructionsUrl: string;
+  // Shown instead of `instructions` on the hosted server (ADR-0046), where there is no wrangler.
+  hostedInstructions?: string;
 }
 
 export const SOURCE_PRESETS: SourcePreset[] = [
@@ -64,6 +66,8 @@ export const SOURCE_PRESETS: SourcePreset[] = [
       { key: "session", label: "Session cookie (advanced)", type: "password" },
     ],
     instructions: "Run `npm run moodle:push` from your machine to push a fresh session; paste one below only if you can't run that locally.",
+    hostedInstructions:
+      "After `okta login`, run `npm run moodle:push -- --hosted <this site> --token <your token from Connect>` from a clone of unicorn — or paste your MoodleSession cookie below.",
     instructionsUrl: "https://unicorn.tuuhub.com/docs/unicorn/sources#moodle",
   },
   {
@@ -81,6 +85,7 @@ export const SOURCE_PRESETS: SourcePreset[] = [
     label: "Gmail",
     fields: [], // Google OAuth Connect flow (src/oauth.ts) — nothing pasted here.
     instructions: "Set the Google OAuth client secrets with wrangler, then use Connect Gmail below.",
+    hostedInstructions: "Use Connect Gmail below if this instance's operator has enabled Google sign-in.",
     instructionsUrl: "https://console.cloud.google.com/apis/credentials",
   },
 ];

@@ -901,3 +901,64 @@ Unchanged from the original policy and still enforced: `SELECT`/`WITH` only as t
 **Consequences.**
 - The admin surface stays small, and the course resolver never guesses. Where a fuzzy match might have helped, the item is left unlabelled, and triage makes it visible.
 - A new clock-dependent feature must take both `now` (ADR-0044) and the timezone.
+
+---
+
+## ADR-0046 — A hosted, multi-tenant unicorn alongside self-deploy
+
+**Status:** Accepted (2026-11-06; amends ADR-0001, which stays the default for anyone who wants it)
+
+**Context.** ADR-0001 chose a single-user self-deploy template so that no one but the student ever holds their tokens. The cost has shown up where it matters most: setup. A student has to clone the repository, run `npm run setup`, own a Cloudflare account and paste secrets through wrangler before they can see what unicorn does at all. Deployment friction is the first thing that stops people, and there is no way to try it. Meanwhile everything a hosted instance needs already exists in the code: the Worker's handlers are plain `fetch(request, env, ctx)` functions, every store sits behind a D1 interface, the test suite already runs that interface on `node:sqlite`, and the OAuth provider runs under Node.
+
+**Decision.** Ship a second deployment mode: a Node server (`server/`, bundled to `dist/server.mjs`, Docker image) that an operator runs on their own machine and that serves many students.
+
+- **Same code, different shell.** The server does not fork the Worker. It builds a per-tenant `Env` and calls the Worker's own `handleDoor` and `defaultFetch` (`src/index.ts`) and `runCycle` (`src/runtime/cycle.ts`). Every feature lands in both modes at once.
+- **One SQLite file per tenant**, migrated from the same `migrations/`. Isolation is structural rather than a `tenant_id` column, because ADR-0035's user-defined SQL tools run arbitrary SELECTs over the `v_*` views. A row filter that one query forgets would leak another student's data; a separate file cannot.
+- **Accounts are email and password** (scrypt), with sessions in a control database (`control.sqlite`). Sign-up is `open`, `invite` (code) or `closed`. The tenant id is also the OAuth grant user id.
+- **One OAuth authorization server for the instance.** A connector's pop-up lands on `/authorize`; the user signs in there, approves, and the grant is issued to their tenant. That is the whole connect flow: paste the URL in Claude, sign in once. A personal access token (`uni_<tenant>_<mac>`, derived from `UNICORN_SECRET`, rotatable) covers clients without OAuth. CIMD is off, because Node has no `global_fetch_strictly_public` (ADR-0043), so clients use DCR.
+- **Per-tenant secrets are derived, never stored.** Each tenant's "admin token" is `HMAC(UNICORN_SECRET, tenant)`, so ADR-0039's encrypted source credentials work unchanged, with a key unique to each student.
+- **Scheduler**: one in-process loop runs each tenant's cycle hourly, a few at a time.
+- **Moodle**: `npm run moodle:push -- --hosted <url> --token <pat>` posts a fresh session after a local Okta login. Pasting the cookie also works.
+- **Honesty over legalese.** The landing page states plainly who runs the instance, that it comes as is, that unicorn is read-only on sources, and that self-hosting is the alternative. Students who don't want a third party to hold their tokens self-deploy; that path is unchanged.
+
+**Consequences.**
+- The admin MCP (`/mcp/admin`) is not offered on the hosted server: it has no per-tenant bearer yet and is an operator surface.
+- The operator holds encrypted credentials for many students. Rotating `UNICORN_SECRET` makes every stored source credential undecryptable (ADR-0039) and changes every personal access token. `docs/HOSTED.md` says so.
+- `docs/ARCHITECTURE.md` §12's "no hosted multi-tenant service" now reads as "not the only mode".
+
+---
+
+## ADR-0047 — Memory v2: a Hermes-style bounded memory and a written soul
+
+**Status:** Accepted (2026-11-06; extends ADR-0024 and ADR-0034's corrections-only memory)
+
+**Context.** The door had one memory tool, `remember`, which appended verbatim corrections that only `run_playbook` ever read back. The agent could not see what it had saved, could not keep a profile of the student, and started each session as a stranger. The server `instructions` were five lines. Hermes Agent shows the shape that works for a client-side agent: a few small, bounded stores (`MEMORY.md`, `USER.md`) frozen into the system prompt at session start, edited through one tool by substring (`add` / `patch` / `remove`), with a persona file (`SOUL.md`) that says how to behave.
+
+**Decision.**
+- **Four stores** on the existing `agent_notes` table (`src/agent-memory.ts`): `user` (who the student is; 1,400 chars), `notes` (the agent's working notes and follow-ups; 2,200), `term` (this term's units; 1,000; written only by unicorn) and `corrections` (verbatim rules from `remember`; 1,400). The limits add up to ADR-0024's 4k-token cap even for CJK text, so a full read always fits.
+- **Door tools**: `get_memory` (live view with usage) and `memory({target, operations[]})`. Operations apply atomically in order and retry on the store's optimistic-concurrency check. An over-limit batch is rejected with consolidation guidance, never silently trimmed. Entries that read like instructions, or that carry invisible or bidi Unicode, are refused, because memory goes back into the prompt and forum posts are untrusted.
+- **Instructions = `prompts/SOUL.md` + a frozen memory snapshot.** SOUL.md, compiled to `src/soul.generated.ts` by `npm run playbooks:build`, is the system prompt. Its structure follows Claude Code's: identity and tone, a session-start protocol, a memory protocol (when to save, what never to save), a tool-selection table, live sources vs memory, and hard rules (read-only, untrusted item bodies, academic integrity). The door is built per request, so the snapshot is current whenever a client initializes.
+- **Nudges, not nagging.** Every successful door result carries one `Memory:` line just above its `Next:` line. It asks for onboarding when the profile is empty, consolidation above 80%, and otherwise a save if the turn taught something durable.
+- **The kernel writes TERM.** Each cycle derives the current units from course-identity facets (`src/term.ts`). When the set changes, it rewrites TERM and files a `term` brief. The first time is the cold start, and that brief tells the agent to run `onboard`.
+- **Playbooks**: `onboard` (cold start: summarise the term, ask at most four questions, save), `catch-up` (after time away) and `exam-prep` (one unit's exam facts and a revision plan), joining the existing four.
+
+**Consequences.** Memory is still fully auditable and editable; the panel's Memory page edits it directly. `remember` is unchanged for existing clients. The door has 16 fixed tools.
+
+---
+
+## ADR-0048 — The panel and a transparent activity log
+
+**Status:** Accepted (2026-11-06; amends ARCHITECTURE §12's "no dashboard")
+
+**Context.** "No dashboard" (ADR-0026) was a rule against rebuilding, in a web page, what the agent reads. It never meant the student should be unable to see what unicorn does. With agents calling unicorn from several apps, and a hosted mode where a third party runs the server, students need to see who asked what, when, and what unicorn fetched in return.
+
+**Decision.**
+- **`activity_log`** (migration 0017) stores one row per door tool call: tool, client name from the OAuth grant (or User-Agent), auth path, arguments, result count, duration, and error code. It also stores one row per source sync and memory events such as a newly detected term. Long free text is stored only as its length, credentials never reach the table, and rows are pruned after 30 days. User-defined SQL tools cannot see it. The door records calls by wrapping `registerTool` on the server instance, so no tool, including user-defined ones, can skip it.
+- **The panel** (`src/panel.ts`), next to `/settings`, has four pages:
+  - **Overview:** a setup checklist, units this term, what is due this week, agent calls, the profile, and recent activity.
+  - **Activity:** filterable, paginated, with every argument expandable.
+  - **Memory:** edit each store, with conflict detection against agent writes.
+  - **Connect:** per-client steps, the token fallback, and revoking connected apps.
+  It is server-rendered like `/settings`, behind Basic auth on a Worker and a session when hosted. The Worker's `/` now lands on `/panel`.
+
+**Consequences.** The panel reads data; it does not reason or write to sources. The weekend test still applies: anything that interprets data belongs to the agent.

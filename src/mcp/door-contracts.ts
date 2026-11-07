@@ -170,7 +170,24 @@ export interface StatusView {
 
 // --- run_playbook -------------------------------------------------------------
 
-export type PlaybookName = "weekly-plan" | "decompose-assignment" | "forum-brief" | "triage";
+export type PlaybookName =
+  | "weekly-plan"
+  | "decompose-assignment"
+  | "forum-brief"
+  | "triage"
+  | "onboard"
+  | "catch-up"
+  | "exam-prep";
+
+export const PLAYBOOK_NAMES: readonly PlaybookName[] = [
+  "weekly-plan",
+  "decompose-assignment",
+  "forum-brief",
+  "triage",
+  "onboard",
+  "catch-up",
+  "exam-prep",
+];
 
 export interface PlaybookRun {
   name: PlaybookName;

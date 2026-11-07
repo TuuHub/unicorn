@@ -96,7 +96,7 @@ function textOf(result: Awaited<ReturnType<Client["callTool"]>>): string {
 }
 
 describe("unicorn door MCP server", () => {
-  it("exposes exactly the fourteen door v2 tools", async () => {
+  it("exposes exactly the sixteen door tools", async () => {
     const client = await connectClient(fakeDeps());
 
     const { tools } = await client.listTools();
@@ -107,9 +107,11 @@ describe("unicorn door MCP server", () => {
         "changes_since",
         "course",
         "get_briefs",
+        "get_memory",
         "get_plan",
         "label_items",
         "life",
+        "memory",
         "remember",
         "run_playbook",
         "save_plan",
@@ -153,12 +155,20 @@ describe("unicorn door MCP server", () => {
     expect(resources.map((resource) => resource.uri).sort()).toEqual(Object.values(WIDGET_URIS).sort());
   });
 
-  it("lists the four playbooks as prompts, with their door-contracts arguments", async () => {
+  it("lists the seven playbooks as prompts, with their door-contracts arguments", async () => {
     const client = await connectClient(fakeDeps());
 
     const { prompts } = await client.listPrompts();
 
-    expect(prompts.map((prompt) => prompt.name).sort()).toEqual(["decompose-assignment", "forum-brief", "triage", "weekly-plan"]);
+    expect(prompts.map((prompt) => prompt.name).sort()).toEqual([
+      "catch-up",
+      "decompose-assignment",
+      "exam-prep",
+      "forum-brief",
+      "onboard",
+      "triage",
+      "weekly-plan",
+    ]);
     const decompose = prompts.find((prompt) => prompt.name === "decompose-assignment")!;
     expect(decompose.arguments).toEqual([{ name: "assignment", description: expect.any(String), required: false }]);
   });
@@ -167,7 +177,8 @@ describe("unicorn door MCP server", () => {
     const client = await connectClient(fakeDeps());
 
     for (const playbook of PLAYBOOKS) {
-      const result = await client.getPrompt({ name: playbook.id, arguments: {} });
+      const args = Object.fromEntries(playbook.arguments.filter((arg) => arg.required).map((arg) => [arg.name, "FIT2004"]));
+      const result = await client.getPrompt({ name: playbook.id, arguments: args });
       expect(result.messages).toEqual([{ role: "user", content: { type: "text", text: playbook.procedure } }]);
     }
   });

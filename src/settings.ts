@@ -449,9 +449,9 @@ async function renderSettingsPage(settings: AppSettings, runtime: SettingsRuntim
     ${PAGE_SCRIPT}`;
 
   return renderPage({
-    title: "unicorn settings",
+    title: "unicorn — sources",
     active: "/settings",
-    heading: "Settings",
+    heading: "Sources & settings",
     subtitle: "Non-secret behavior for this Worker. Changes apply from the next cycle.",
     body,
     wide: true,
@@ -526,7 +526,8 @@ async function renderSourceCard(status: SourceStatus, runtime: SettingsRuntime, 
   const preset = presetFor(status.id);
   const lookup = await runtime.credentials.get(status.id);
   const prefill = nonSecretPrefill(status.id, runtime.sourceEnv, lookup);
-  return renderCredentialSourceCard(status, preset, prefill, csrf);
+  const hosted = Boolean((runtime.sourceEnv as { HOSTED?: string }).HOSTED);
+  return renderCredentialSourceCard(status, preset, prefill, csrf, hosted);
 }
 
 function renderCredentialSourceCard(
@@ -534,7 +535,9 @@ function renderCredentialSourceCard(
   preset: ReturnType<typeof presetFor>,
   prefill: Record<string, string>,
   csrf: string,
+  hosted = false,
 ): string {
+  const instructions = hosted && preset.hostedInstructions ? preset.hostedInstructions : preset.instructions;
   const fieldsHtml = preset.fields
     .map((field) => {
       if (field.type === "select") {
@@ -569,7 +572,7 @@ function renderCredentialSourceCard(
           <span class="dot ${status.configured ? "is-live" : "is-off"}" aria-hidden="true"></span>
           <h3 id="source-${status.id}-title">${escapeHtml(status.label)}</h3>
         </div>
-        <p class="card-sub">${renderInlineCode(preset.instructions)} <a class="get-one" href="${escapeHtml(preset.instructionsUrl)}" target="_blank" rel="noopener">Get one</a></p>
+        <p class="card-sub">${renderInlineCode(instructions)} <a class="get-one" href="${escapeHtml(preset.instructionsUrl)}" target="_blank" rel="noopener">Get one</a></p>
         ${status.needsReentry ? `<p class="notice error" role="alert">Saved credential no longer decrypts (ADMIN_TOKEN may have rotated) — re-enter it below.</p>` : ""}
       </div>
       <div class="card-body">

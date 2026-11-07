@@ -2,6 +2,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { PLAYBOOKS } from "../src/playbooks";
+import { SOUL } from "../src/soul.generated";
 
 // src/playbooks.ts and claude-plugin/skills/*/SKILL.md are both generated
 // (npm run playbooks:build) from the markdown files in playbooks/*.md — see
@@ -34,6 +35,8 @@ const DOOR_V2_TOOLS = [
   "run_playbook",
   "label_items",
   "status",
+  "get_memory",
+  "memory",
 ];
 
 function parseArguments(lines: string[], start: number) {
@@ -115,10 +118,15 @@ function calledTools(procedure: string): string[] {
 }
 
 describe("playbooks.ts sync with playbooks/*.md", () => {
-  it("has exactly the four door v2 playbooks", () => {
+  it("has exactly the seven door playbooks", () => {
     expect(PLAYBOOKS.map((playbook) => playbook.id).sort()).toEqual(
-      ["decompose-assignment", "forum-brief", "triage", "weekly-plan"],
+      ["catch-up", "decompose-assignment", "exam-prep", "forum-brief", "onboard", "triage", "weekly-plan"],
     );
+  });
+
+  it("src/soul.generated.ts matches prompts/SOUL.md", () => {
+    const soul = readFileSync(path.resolve(__dirname, "../prompts/SOUL.md"), "utf8").trim();
+    expect(SOUL).toEqual(soul);
   });
 
   it.each(FILES)("matches the generated entry for %s", (file) => {

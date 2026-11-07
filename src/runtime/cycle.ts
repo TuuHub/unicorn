@@ -12,6 +12,9 @@ import { buildSourcePlugins, D1SourceCredentialStore } from "../sources";
 import { D1SettingsRepository, type AppSettings } from "../settings";
 import { getAccessToken } from "../oauth";
 import { MoodleProbeError } from "../moodle-probe";
+import { ACTIVITY_RETENTION_DAYS, D1ActivityLog } from "../activity";
+import { D1MemoryStore } from "../memory";
+import { refreshTermMemory } from "../term";
 
 // ADR-0034: no model runtime, no notifier — this is the whole Env now.
 export interface Env {
@@ -28,6 +31,10 @@ export interface Env {
   PLUGIN_SECRET_GOOGLE_CLIENT_SECRET?: string;
   // The OAuth authorization server's token/grant/client store (ADR-0035, src/oauth-server.ts).
   OAUTH_KV: KVNamespace;
+  // Set only by the hosted server (ADR-0046): the tenant id grants are issued to, and a marker
+  // that changes a few user-facing labels. A self-deployed Worker leaves both unset.
+  DOOR_USER_ID?: string;
+  HOSTED?: string;
 }
 
 export interface SourceCycleResult {
@@ -109,10 +116,37 @@ export async function runCycle(env: Env, forceSync: boolean, now: () => Date = (
   const skipped = !forceSync && !settings.syncEnabled;
   const sources = skipped ? [] : await syncSources(env, settings);
 
+  const activity = new D1ActivityLog(env.DB, now);
+  // ADR-0048: one activity row per source sync, so the panel shows what unicorn fetched and when.
+  for (const source of sources) {
+    await activity
+      .record({
+        kind: "sync",
+        name: source.plugin,
+        status: source.lastError ? "error" : "ok",
+        errorCode: source.lastError,
+        via: forceSync ? "manual" : "scheduler",
+        detail: { pulled: source.pulled, created: source.created, updated: source.updated, events: source.events },
+      })
+      .catch(() => undefined);
+  }
+
   const { labeled } = await labelStructure(env.DB).catch((error): { labeled: number } => {
     console.error(JSON.stringify({ event: "label_structure_failed", message: errorMessage(error) }));
     return { labeled: 0 };
   });
+
+  // ADR-0047: keep the TERM memory store in step with the units the user is enrolled in now.
+  if (sources.length > 0) {
+    try {
+      const term = await refreshTermMemory(env.DB, new D1MemoryStore(env.DB, now), new D1BriefStore(env.DB), now());
+      if (term.status === "initialized" || term.status === "changed") {
+        await activity.record({ kind: "memory", name: "term", status: "ok", via: "scheduler", detail: { status: term.status, added: term.added, removed: term.removed } });
+      }
+    } catch (error) {
+      console.error(JSON.stringify({ event: "term_refresh_failed", message: errorMessage(error) }));
+    }
+  }
 
   const digest = await runDailyDigest(env.DB, new D1BriefStore(env.DB), settings.timezone, now()).catch(
     (error): DigestOutcome => {
@@ -123,6 +157,7 @@ export async function runCycle(env: Env, forceSync: boolean, now: () => Date = (
 
   const archived = await runRetention(new D1RetentionRepository(env.DB), settings.retentionDays, now());
   await new D1BriefStore(env.DB).prune(settings.retentionDays);
+  await activity.prune(ACTIVITY_RETENTION_DAYS).catch(() => 0);
 
   const cycle: CycleResult = { at: now().toISOString(), skipped, sources, labeled, digest, archived };
   await recordCycle(env.DB, cycle);

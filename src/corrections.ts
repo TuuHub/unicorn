@@ -1,3 +1,4 @@
+import { MEMORY_TARGETS } from "./agent-memory";
 import { MemoryCapExceededError, MemoryConflictError, type MemoryStore } from "./memory";
 
 // The corrections inbox: raw, dated, verbatim user feedback ("quiz 不算分",
@@ -46,6 +47,12 @@ export async function recordCorrection(
 // raw inbox forgets FIFO.
 async function saveWithTrim(store: MemoryStore, lines: string[], expectedUpdatedAt?: string): Promise<void> {
   const pending = [...lines];
+  // Memory v2 (ADR-0047) gives corrections its own share of the 4k-token budget, so a long
+  // inbox can no longer crowd out the user profile and notes: oldest lines go first.
+  const limit = MEMORY_TARGETS.corrections.limit;
+  while (pending.length > 1 && pending.join("\n").length > limit) {
+    pending.shift();
+  }
   while (true) {
     try {
       await store.save(CORRECTIONS_DOMAIN, pending.join("\n"), expectedUpdatedAt);

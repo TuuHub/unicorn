@@ -21,11 +21,15 @@
     "playbooks:build": "node scripts/build-playbooks.mjs",
     "setup": "node scripts/setup.mjs",
     "upgrade": "wrangler d1 migrations apply unicorn --remote && wrangler deploy",
-    "widgets:build": "node scripts/build-widgets.mjs"
+    "widgets:build": "node scripts/build-widgets.mjs",
+    "server:build": "node scripts/build-server.mjs",
+    "server:start": "node dist/server.mjs",
+    "server:dev": "npm run server:build && UNICORN_PUBLIC_URL=http://localhost:8787 UNICORN_SECRET=dev-secret-dev-secret-dev-secret-0000 node dist/server.mjs"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20261021.1",
     "@types/node": "^24.0.0",
+    "esbuild": "^0.28.2",
     "typescript": "^5.8.3",
     "vitest": "^5.0.5",
     "wrangler": "^4.151.3"

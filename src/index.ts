@@ -8,7 +8,9 @@ import { D1DoorRepository } from "./mcp/door-repository";
 import { createAdminMcpServer } from "./mcp/server";
 import { MoodleProbeError, probeMoodle } from "./moodle-probe";
 import { D1OAuthTokenStore, handleCallback, OAuthError, startAuthorization, type OAuthEnv } from "./oauth";
-import { createOAuthProvider, handleAuthorize, handleRevokeApp, listConnectedApps } from "./oauth-server";
+import { createOAuthProvider, DOOR_USER_ID, type DoorProps, handleAuthorize, handleRevokeApp, listConnectedApps } from "./oauth-server";
+import { actorFromUserAgent, D1ActivityLog } from "./activity";
+import { handlePanel, type PanelRuntime } from "./panel";
 import { D1ManifestStore } from "./plugins/declarative/store";
 import gmailPreset from "./plugins/presets/gmail.json";
 import { runCycle, Scheduler, type CycleResult, type Env } from "./runtime/cycle";
@@ -81,7 +83,7 @@ function requireBasicAuth(request: Request, adminToken: string): Response | null
 // function ever runs, so it never re-checks a bearer itself. Extracted to a named function
 // (rather than inlined where /mcp used to be routed) so the door agent's own edits to this
 // handler's body stay isolated from the OAuth wiring around it.
-async function handleDoor(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
+export async function handleDoor(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   if (request.method !== "POST") {
     return new Response(JSON.stringify({ error: "method_not_allowed" }), {
       status: 405,
@@ -110,9 +112,57 @@ async function handleDoor(request: Request, env: Env, _ctx: ExecutionContext): P
       });
     },
     db: env.DB,
+    // ADR-0048: who is calling, for the activity log. The provider puts the grant's props on
+    // ctx.props; older grants (before clientName was recorded) fall back to the User-Agent.
+    activity: new D1ActivityLog(env.DB),
+    caller: callerOf(request, ctx),
   });
   await server.connect(transport);
   return transport.handleRequest(request);
+}
+
+function callerOf(request: Request, ctx: ExecutionContext) {
+  const props = (ctx as unknown as { props?: Partial<DoorProps> }).props ?? {};
+  const userAgent = request.headers.get("user-agent");
+  return {
+    actor: props.clientName ?? actorFromUserAgent(userAgent),
+    via: props.via ?? null,
+    userAgent: userAgent?.slice(0, 80) ?? null,
+  };
+}
+
+function doorUserId(env: Env): string {
+  return env.DOOR_USER_ID ?? DOOR_USER_ID;
+}
+
+export async function buildPanelRuntime(env: Env, oauthHelpers: OAuthHelpers | undefined, origin: string): Promise<PanelRuntime> {
+  const settings = await new D1SettingsRepository(env.DB).get();
+  const [plugins, gmailConnected, grants, lastCycle, itemCounts, status] = await Promise.all([
+    buildSourcePlugins(env, new D1SourceCredentialStore(env.DB, env.ADMIN_TOKEN)).catch(() => []),
+    new D1OAuthTokenStore(env.DB).has("gmail").catch(() => false),
+    oauthHelpers ? listConnectedApps(oauthHelpers, doorUserId(env)).catch(() => []) : Promise.resolve([]),
+    loadLastCycle(env.DB),
+    itemCountsByPlugin(env.DB),
+    operationalStatus(env),
+  ]);
+  return {
+    db: env.DB,
+    adminToken: env.ADMIN_TOKEN,
+    memory: new D1MemoryStore(env.DB),
+    activity: new D1ActivityLog(env.DB),
+    briefs: new D1BriefStore(env.DB),
+    repo: new D1DoorRepository(env.DB),
+    timezone: settings.timezone,
+    lastCycle,
+    itemCounts,
+    configuredSources: plugins.length + (gmailConnected ? 1 : 0),
+    schedulerRunning: status.schedulerRunning,
+    doorUrl: new URL("/mcp", origin).toString(),
+    bearerToken: env.MCP_TOKEN || null,
+    bearerLabel: env.HOSTED ? "personal access token" : "MCP_TOKEN",
+    grants,
+    hosted: Boolean(env.HOSTED),
+  };
 }
 
 // Everything that is not the door's API route. The OAuthProvider (oauth-server.ts) calls this
@@ -122,14 +172,21 @@ async function handleDoor(request: Request, env: Env, _ctx: ExecutionContext): P
 // provider for the lifetime of this call. Crucially, `/mcp/admin` is never the door's API route,
 // so an OAuth access token is never checked against it — it stays bearer-ADMIN_TOKEN-only by
 // construction, not by a check here that could be forgotten.
-async function defaultFetch(request: Request, env: Env, context: ExecutionContext): Promise<Response> {
+export async function defaultFetch(request: Request, env: Env, context: ExecutionContext): Promise<Response> {
   const url = new URL(request.url);
   const oauthHelpers = (env as unknown as { OAUTH_PROVIDER: OAuthHelpers }).OAUTH_PROVIDER;
 
   if (request.method === "GET" && url.pathname === "/") {
     // A fresh deployer opening the bare workers.dev URL should land somewhere
-    // useful, not on a JSON 404. /settings is the human surface.
-    return Response.redirect(new URL("/settings", url).toString(), 302);
+    // useful, not on a JSON 404. The panel (ADR-0048) is the human surface.
+    return Response.redirect(new URL("/panel", url).toString(), 302);
+  }
+
+  // The panel (ADR-0048): overview, activity log, memory, connect. Same Basic auth as /settings.
+  if (url.pathname === "/panel" || url.pathname.startsWith("/panel/")) {
+    const authError = requireBasicAuth(request, env.ADMIN_TOKEN);
+    if (authError) return authError;
+    return handlePanel(request, await buildPanelRuntime(env, oauthHelpers, url.origin));
   }
 
   if (request.method === "GET" && url.pathname === "/health") {
@@ -202,7 +259,7 @@ async function defaultFetch(request: Request, env: Env, context: ExecutionContex
   if (url.pathname === "/authorize" && (request.method === "GET" || request.method === "POST")) {
     const authError = requireBasicAuth(request, env.ADMIN_TOKEN);
     if (authError) return authError;
-    return handleAuthorize(request, oauthHelpers);
+    return handleAuthorize(request, oauthHelpers, doorUserId(env));
   }
 
   if (request.method === "POST" && url.pathname === "/settings/oauth/apps/revoke") {
@@ -211,7 +268,7 @@ async function defaultFetch(request: Request, env: Env, context: ExecutionContex
     if (request.headers.get("origin") !== url.origin) {
       return new Response("Invalid request origin.", { status: 403 });
     }
-    return handleRevokeApp(request, oauthHelpers);
+    return handleRevokeApp(request, oauthHelpers, doorUserId(env));
   }
   // --- Door OAuth connectors (ADR-0035): end ---
 
@@ -230,7 +287,7 @@ async function defaultFetch(request: Request, env: Env, context: ExecutionContex
         gmailConnected: await new D1OAuthTokenStore(env.DB).has("gmail"),
       },
       status: await operationalStatus(env),
-      oauth: { grants: await listConnectedApps(oauthHelpers) },
+      oauth: { grants: await listConnectedApps(oauthHelpers, doorUserId(env)) },
       runSync: async () => {
         const cycle = await runCycle(env, true);
         const failed = cycle.sources.find((source) => source.lastError);

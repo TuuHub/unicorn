@@ -1,14 +1,32 @@
-// Shared shell for the two rendered report pages (/settings, /digest).
+// Shared shell for every rendered page: the panel (ADR-0048) and /settings.
 // Plain HTML+CSS strings by design (ADR-0026): zero framework, zero client state.
 
-const NAV = [
-  { path: "/settings", label: "Settings" },
-  { path: "/digest", label: "Digest" },
-] as const;
+interface NavLink {
+  path: string;
+  label: string;
+}
+
+const NAV: NavLink[] = [
+  { path: "/panel", label: "Overview" },
+  { path: "/panel/activity", label: "Activity" },
+  { path: "/panel/memory", label: "Memory" },
+  { path: "/panel/connect", label: "Connect" },
+  { path: "/settings", label: "Sources" },
+];
+
+// The hosted server (ADR-0046) adds its account links once at startup; a self-deployed Worker
+// never calls this. Module-level on purpose: one process serves one deployment mode.
+let extraNav: NavLink[] = [];
+let brandHref = "/panel";
+
+export function configureChrome(options: { extraNav?: NavLink[]; brandHref?: string }): void {
+  extraNav = options.extraNav ?? [];
+  brandHref = options.brandHref ?? "/panel";
+}
 
 export interface PageOptions {
   title: string;
-  active: "/settings" | "/digest";
+  active: string;
   heading: string;
   subtitle: string;
   body: string;
@@ -50,13 +68,55 @@ button:active{transform:scale(.97)}
 footer{margin-top:24px;color:var(--muted);font-size:12.5px;text-align:center}
 code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--card);border:1px solid var(--border);border-radius:5px;padding:1px 5px}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+nav{flex-wrap:wrap}
+.brand a{display:inline-flex;align-items:center;gap:6px}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:16px}
+.tile{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px 16px}
+.tile .label{color:var(--muted);font-size:12.5px}
+.tile .value{font-size:24px;font-weight:650;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.tile .hint{color:var(--muted);font-size:12px}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px}
+.grid2>.card{margin-bottom:0}
+.list{list-style:none;margin:0;padding:0}
+.list li{display:flex;justify-content:space-between;gap:12px;padding:9px 0;border-top:1px solid var(--border);font-size:14px}
+.list li:first-child{border-top:0}
+.list .muted,.muted{color:var(--muted)}
+.badge{display:inline-block;font-size:11.5px;font-weight:600;padding:1px 8px;border-radius:999px;border:1px solid var(--border);color:var(--muted);white-space:nowrap}
+.badge.ok{color:var(--ok);border-color:currentColor}
+.badge.error{color:#ef4444;border-color:currentColor}
+.badge.tool{color:var(--accent);border-color:currentColor}
+.table-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:13.5px}
+th{text-align:left;font-weight:550;color:var(--muted);font-size:12px;padding:8px 10px;border-bottom:1px solid var(--border);white-space:nowrap}
+td{padding:9px 10px;border-bottom:1px solid var(--border);vertical-align:top}
+td.num{font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+details summary{cursor:pointer;color:var(--muted);font-size:12.5px}
+pre{font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px;overflow-x:auto;white-space:pre-wrap;word-break:break-word;margin:6px 0 0}
+textarea{width:100%;min-height:140px;font:13px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--bg);color:var(--ink);border:1px solid var(--border);border-radius:8px;padding:10px}
+input[type=text],input[type=email],input[type=password]{width:100%;font:inherit;background:var(--bg);color:var(--ink);border:1px solid var(--border);border-radius:8px;padding:9px 12px}
+label.field{display:block;font-size:13px;font-weight:550;margin:12px 0 6px}
+.meter{height:6px;background:var(--track);border-radius:999px;overflow:hidden;margin:8px 0 2px}
+.meter>span{display:block;height:100%;background:var(--accent)}
+.meter.warn>span{background:#f59e0b}
+.filters{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
+.filters a{font-size:13px;padding:4px 12px;border:1px solid var(--border);border-radius:999px;color:var(--muted)}
+.filters a[aria-current=true]{background:var(--btn-bg);color:var(--btn-ink);border-color:var(--btn-bg)}
+.steps{counter-reset:step;list-style:none;margin:0;padding:0}
+.steps li{counter-increment:step;position:relative;padding:8px 0 8px 34px;font-size:14px}
+.steps li::before{content:counter(step);position:absolute;left:0;top:8px;width:22px;height:22px;border-radius:999px;border:1px solid var(--border);display:grid;place-items:center;font-size:12px;color:var(--muted)}
+.steps li.done::before{content:"✓";background:var(--ok);border-color:var(--ok);color:#fff}
+.copy-row{display:flex;gap:8px;align-items:center;margin:8px 0}
+.copy-row code{flex:1;padding:8px 10px;overflow-x:auto;white-space:nowrap}
+.button,a.button{display:inline-block;border:0;border-radius:8px;background:var(--btn-bg);color:var(--btn-ink);padding:8px 16px;font-size:14px;font-weight:550}
+.button.secondary,button.secondary{background:transparent;color:var(--ink);border:1px solid var(--border)}
+.pager{display:flex;justify-content:flex-end;margin-top:12px}
+.card-body a:not(.button),.card-sub a,.steps a,.notice a{color:var(--accent);text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:2px}
 `;
 
 export function renderPage(options: PageOptions): string {
-  const nav = NAV.map(
-    (page) =>
-      `<a href="${page.path}"${page.path === options.active ? ' aria-current="page"' : ""}>${page.label}</a>`,
-  ).join("");
+  const nav = [...NAV, ...extraNav]
+    .map((page) => `<a href="${page.path}"${page.path === options.active ? ' aria-current="page"' : ""}>${page.label}</a>`)
+    .join("");
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -69,7 +129,7 @@ export function renderPage(options: PageOptions): string {
 </head>
 <body>
   <main${options.wide ? ' class="wide"' : ""}>
-    <header><span class="brand" translate="no">unicorn</span><nav>${nav}</nav></header>
+    <header><span class="brand" translate="no"><a href="${brandHref}">🦄 unicorn</a></span><nav>${nav}</nav></header>
     <h1>${options.heading}</h1>
     <p class="sub">${options.subtitle}</p>
     ${options.body}
