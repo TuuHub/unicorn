@@ -1,4 +1,5 @@
 import { renderConnectedApps } from "./oauth-server";
+import { icon, sourceTile } from "./marks";
 import { escapeHtml, htmlResponse, renderPage } from "./ui";
 import {
   buildSourceStatuses,
@@ -452,7 +453,7 @@ async function renderSettingsPage(settings: AppSettings, runtime: SettingsRuntim
     title: "unicorn — sources",
     active: "/settings",
     heading: "Sources & settings",
-    subtitle: "Non-secret behavior for this Worker. Changes apply from the next cycle.",
+    subtitle: "Source credentials, timezone, Gmail scope and sync. Changes apply from the next hourly cycle.",
     body,
     wide: true,
   });
@@ -475,12 +476,12 @@ function renderHealthCard(status: SettingsRuntime["status"], lastCycle: LastCycl
       <div class="card-body">
         <ul class="rail rows">
           <li class="source">
-            <span class="dot ${status.schedulerRunning ? "is-live" : "is-off"}" aria-hidden="true"></span>
+            <span class="tile-mark sm mono">${icon("clock", "")}</span>
             <span class="source-name">Hourly scheduler</span>
-            <span class="source-state">${status.schedulerRunning ? "Running" : "Stopped"}</span>
+            <span class="source-state"><span class="state${status.schedulerRunning ? "" : " bad"}">${status.schedulerRunning ? "Running" : "Stopped"}</span></span>
           </li>
           <li class="source">
-            <span class="dot ${lastCycle.at ? "is-live" : "is-off"}" aria-hidden="true"></span>
+            <span class="tile-mark sm mono">${icon("sync", "")}</span>
             <span class="source-name">Last cycle</span>
             <span class="source-state">${lastCycle.at ? renderTime(lastCycle.at) : "Never run"}</span>
           </li>
@@ -569,8 +570,8 @@ function renderCredentialSourceCard(
     <article class="card source-card" id="source-${status.id}" aria-labelledby="source-${status.id}-title">
       <div class="card-head">
         <div class="card-head-row">
-          <span class="dot ${status.configured ? "is-live" : "is-off"}" aria-hidden="true"></span>
-          <h3 id="source-${status.id}-title">${escapeHtml(status.label)}</h3>
+          ${sourceTile(status.id, "lg")}
+          <div><h3 id="source-${status.id}-title">${escapeHtml(status.label)}</h3><span class="state${status.configured ? "" : " off"}">${status.configured ? "Connected" : "Not set up"}</span></div>
         </div>
         <p class="card-sub">${renderInlineCode(instructions)} <a class="get-one" href="${escapeHtml(preset.instructionsUrl)}" target="_blank" rel="noopener">Get one</a></p>
         ${status.needsReentry ? `<p class="notice error" role="alert">Saved credential no longer decrypts (ADMIN_TOKEN may have rotated) — re-enter it below.</p>` : ""}
@@ -603,8 +604,8 @@ function renderGmailSourceCard(status: SourceStatus, runtime: SettingsRuntime): 
     <article class="card source-card" id="source-gmail" aria-labelledby="source-gmail-title">
       <div class="card-head">
         <div class="card-head-row">
-          <span class="dot ${connected ? "is-live" : "is-off"}" aria-hidden="true"></span>
-          <h3 id="source-gmail-title">Gmail</h3>
+          ${sourceTile("gmail", "lg")}
+          <div><h3 id="source-gmail-title">Gmail</h3><span class="state${connected ? "" : " off"}">${connected ? "Connected" : "Not connected"}</span></div>
         </div>
         <p class="card-sub">Ingests recent threads through Google's Gmail MCP server.</p>
       </div>
@@ -686,7 +687,7 @@ function renderCopyRow(label: string, value: string): string {
   return `
     <div class="field copy-row">
       <div class="field-text"><label>${escapeHtml(label)}</label><code class="copy-value">${escapeHtml(value)}</code></div>
-      <button type="button" class="button ghost" data-copy="${escapeHtml(value)}">Copy</button>
+      <button type="button" class="button ghost sm" data-copy="${escapeHtml(value)}">${icon("copy")}<span>Copy</span></button>
     </div>`;
 }
 
@@ -724,56 +725,48 @@ const PAGE_STYLE = `
       .notice p:last-child{margin-bottom:0}
       .notice .actions{padding:4px 0 8px;justify-content:flex-start}
       .rail{list-style:none;margin:0;padding:0}
-      .source{display:flex;align-items:center;gap:10px;padding:12px 0}
-      .dot{width:8px;height:8px;border-radius:50%;flex:none}
-      .dot.is-live{background:var(--ok)}
-      .dot.is-off{background:var(--track)}
+      .source{display:flex;align-items:center;gap:12px;padding:12px 0}
       .source-name{font-weight:500}
-      .source-state{margin-left:auto;color:var(--muted);font-size:13px;font-variant-numeric:tabular-nums;text-align:right}
-      .section-head{margin:32px 0 12px}
+      .source-state{margin-left:auto;color:var(--ink-2);font-size:13px;font-variant-numeric:tabular-nums;text-align:right}
+      .section-head{margin:36px 0 14px}
       .section-head h2{font-size:16px}
       /* min(400px,100%) — not a bare 400px — so a single mobile-width column
          shrinks to the container instead of forcing horizontal page scroll. */
-      .source-cards{display:grid;gap:20px;grid-template-columns:repeat(auto-fit,minmax(min(400px,100%),1fr));align-items:start;margin-bottom:32px}
+      .source-cards{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(min(400px,100%),1fr));align-items:start;margin-bottom:36px}
       .source-card{margin-bottom:0}
-      .card-head-row{display:flex;align-items:center;gap:8px}
-      .card-head-row h3{margin:0;font-size:15px;font-weight:600;letter-spacing:-.01em}
-      .card-sub .get-one{color:var(--accent);text-decoration:underline;text-underline-offset:2px;white-space:nowrap}
-      .meta{margin:0 0 14px;color:var(--muted);font-size:13px}
-      .meta-error{margin:-8px 0 14px;color:#ef4444;font-size:13px}
-      .card-actions{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+      .source-card .card-head{padding-top:20px}
+      .card-head-row{display:flex;align-items:center;gap:12px;margin-bottom:10px}
+      .card-head-row h3{margin:0 0 1px;font-size:15.5px;font-weight:600;letter-spacing:-.015em}
+      .card-sub .get-one{white-space:nowrap}
+      .meta{margin:0 0 6px;color:var(--ink-3);font-size:12.5px}
+      .meta-error{margin:0 0 6px;color:var(--bad);font-size:12.5px}
+      .card-actions{display:flex;gap:8px;margin-top:14px;padding-top:14px;border-top:1px solid var(--rule-2);flex-wrap:wrap}
       .card-actions form{margin:0}
       .field{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:14px 0}
       .field-stack{flex-direction:column;align-items:stretch;gap:6px}
       .field-text{min-width:0}
-      label{font-weight:500;cursor:pointer}
-      .hint{margin:1px 0 0;color:var(--muted);font-size:13px}
+      label{font-weight:500;cursor:pointer;font-size:14px}
+      .hint{margin:2px 0 0;color:var(--ink-3);font-size:12.5px}
       .field-input{display:flex;align-items:center;gap:8px;flex:none}
-      input[type=number]{width:84px;border:1px solid var(--border);background:var(--bg);color:var(--ink);padding:7px 10px;border-radius:8px;font:inherit;font-size:14px;font-variant-numeric:tabular-nums;text-align:right}
-      input[type=text],input[type=password],select{width:220px;max-width:100%;border:1px solid var(--border);background:var(--bg);color:var(--ink);padding:7px 10px;border-radius:8px;font:inherit;font-size:14px}
-      textarea{width:100%;border:1px solid var(--border);background:var(--bg);color:var(--ink);padding:8px 10px;border-radius:8px;font:12.5px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;resize:vertical}
-      .unit{color:var(--muted);font-size:13px}
-      .switch{appearance:none;flex:none;width:38px;height:22px;margin:0;border-radius:999px;background:var(--track);cursor:pointer;position:relative;transition:background .15s ease-out}
-      .switch::after{content:"";position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.25);transition:translate .15s ease-out}
-      .switch:checked{background:var(--ok)}
+      input[type=number]{width:88px;text-align:right;font-variant-numeric:tabular-nums}
+      .field-input input[type=text],.field-input input[type=password],.field-input select{width:240px;max-width:100%}
+      textarea{min-height:0}
+      .unit{color:var(--ink-3);font-size:13px}
+      .switch{appearance:none;flex:none;width:40px;height:24px;border:0;box-shadow:none;margin:0;border-radius:999px;background:var(--track);cursor:pointer;position:relative;transition:background-color .15s ease-out}
+      .switch::after{content:"";position:absolute;top:2px;left:2px;width:20px;height:20px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.25);transition:translate .2s cubic-bezier(.23,1,.32,1)}
+      .switch:checked{background:var(--accent)}
       .switch:checked::after{translate:16px 0}
-      .actions{padding-top:16px;display:flex;justify-content:flex-end}
-      .sync-now{margin-top:16px;padding-top:16px;border-top:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:16px}
+      .actions{padding-top:14px;display:flex;justify-content:flex-end;gap:8px}
+      .sync-now{margin-top:16px;padding-top:16px;border-top:1px solid var(--rule-2);display:flex;align-items:center;justify-content:space-between;gap:16px}
       .sync-now .hint{margin:0}
-      .button{display:inline-block;border:0;border-radius:8px;background:var(--btn-bg);color:var(--btn-ink);padding:8px 16px;font:inherit;font-size:14px;font-weight:550;text-decoration:none;cursor:pointer;transition:background .15s ease-out}
-      .button:hover{background:var(--btn-hover)}
-      .button.ghost{background:transparent;color:var(--ink);border:1px solid var(--border)}
-      .button.ghost:hover{background:var(--card)}
-      .button.ghost.danger{color:#ef4444;border-color:rgba(239,68,68,.35)}
       .copy-row{align-items:center}
       .copy-row .field-text{flex:1;min-width:0}
-      .copy-value{display:block;width:100%;overflow-x:auto;white-space:pre;padding:2px 0}
+      .copy-value{display:block;width:100%;overflow-x:auto;white-space:pre;margin-top:6px;padding:7px 10px;scrollbar-width:none}
       @media (max-width:640px){
         .field{flex-direction:column;align-items:stretch;gap:8px}
         .field-input{width:100%}
-        input[type=text],input[type=password],select{width:100%}
+        .field-input input[type=text],.field-input input[type=password],.field-input select{width:100%}
       }
-      @media (prefers-reduced-motion:reduce){.switch,.switch::after{transition:none}}
     </style>`;
 
 // Progressive enhancement only (ADR-0026): the page is fully usable with this
@@ -791,10 +784,11 @@ const PAGE_SCRIPT = `
         document.querySelectorAll("[data-copy]").forEach(function (button) {
           button.addEventListener("click", function () {
             const value = button.getAttribute("data-copy") || "";
-            const original = button.textContent;
+            const label = button.querySelector("span") || button;
+            const original = label.textContent;
             navigator.clipboard.writeText(value).then(
-              function () { button.textContent = "Copied"; setTimeout(function () { button.textContent = original; }, 1500); },
-              function () { button.textContent = "Copy failed"; setTimeout(function () { button.textContent = original; }, 1500); },
+              function () { label.textContent = "Copied"; setTimeout(function () { label.textContent = original; }, 1500); },
+              function () { label.textContent = "Copy failed"; setTimeout(function () { label.textContent = original; }, 1500); },
             );
           });
         });

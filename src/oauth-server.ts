@@ -20,6 +20,7 @@ import OAuthProvider, {
   type OAuthHelpers,
   type OAuthProviderOptions,
 } from "@cloudflare/workers-oauth-provider";
+import { clientTile, icon } from "./marks";
 import { escapeHtml, htmlResponse, renderPage } from "./ui";
 
 // The library's own `describeConsent` (and `ConsentDescription` type) ship on its main branch
@@ -211,14 +212,20 @@ function renderConsentPage(consent: ConsentDescription, handle: string): string 
     : "";
   const body = `
     ${loopbackWarning}
-    <section class="card" aria-labelledby="consent-title">
+    <section class="card consent" aria-labelledby="consent-title">
+      <div class="consent-pair" aria-hidden="true">
+        ${clientTile(consent.clientName, "lg")}
+        <span class="consent-link"></span>
+        <span class="tile-mark lg">${icon("horn", "")}</span>
+      </div>
       <div class="card-head">
         <h2 id="consent-title">${clientName}</h2>
         <p class="card-sub">wants to connect to unicorn. Tokens will be sent to <code>${redirectHost}</code>.</p>
       </div>
       <div class="card-body">
         <ul class="rows">
-          <li class="source"><span class="source-name">Access requested</span><span class="source-state">${escapeHtml(OAUTH_SCOPE_DESCRIPTION)}</span></li>
+          <li class="consent-row">${icon("memory")}<div><span class="consent-label">Access requested</span><span class="consent-scope">${escapeHtml(OAUTH_SCOPE_DESCRIPTION)}</span></div></li>
+          <li class="consent-row">${icon("check")}<div><span class="consent-label">Read-only on your sources</span><span class="consent-scope">unicorn never posts, submits or replies anywhere. Every call is listed under Activity.</span></div></li>
         </ul>
         <form method="post" action="${AUTHORIZE_PATH}">
           <input type="hidden" name="handle" value="${escapeHtml(handle)}">
@@ -229,13 +236,26 @@ function renderConsentPage(consent: ConsentDescription, handle: string): string 
         </form>
       </div>
     </section>
-    <style>.button.secondary{background:transparent;color:var(--ink);border:1px solid var(--border);margin-right:8px}.button.secondary:hover{background:var(--card)}</style>`;
+    <style>
+      .consent-pair{display:flex;align-items:center;justify-content:center;gap:0;padding:28px 20px 8px}
+      .consent-link{width:56px;height:1px;background:repeating-linear-gradient(90deg,var(--ink-3) 0 4px,transparent 4px 8px)}
+      .consent .card-head{text-align:center}
+      .consent h2{font-size:18px}
+      .consent-row{display:flex;gap:12px;align-items:flex-start;padding:12px 0;list-style:none}
+      .consent-row .i{color:var(--ink-3);margin-top:2px}
+      .consent-label{display:block;font-weight:500;font-size:14px}
+      .consent-scope{display:block;color:var(--ink-2);font-size:13px}
+      .rows{margin:4px 0 0;padding:0}
+      .actions{display:flex;justify-content:flex-end;gap:8px;padding-top:16px;border-top:1px solid var(--rule-2);margin-top:4px}
+      .actions button{flex:1}
+    </style>`;
   return renderPage({
     title: "unicorn — connect an app",
     active: "/settings",
     heading: "Connect an app",
     subtitle: `${clientName} is requesting access to your unicorn memory.`,
     body,
+    layout: "bare",
   });
 }
 
@@ -246,6 +266,7 @@ function renderAuthorizeError(message: string): string {
     heading: "Couldn't start this connection",
     subtitle: "Ask the client to start the connection again.",
     body: `<p class="notice error" role="alert">${escapeHtml(message)}</p>`,
+    layout: "bare",
   });
 }
 
@@ -359,11 +380,12 @@ export function renderConnectedApps(grants: GrantSummary[]): string {
             typeof metadata?.clientName === "string" && metadata.clientName.trim() ? metadata.clientName : grant.clientId;
           const created = new Date(grant.createdAt * 1000).toISOString().slice(0, 10);
           return `<li class="source connected-app">
+            ${clientTile(name, "md")}
             <span class="source-name">${escapeHtml(name)}</span>
             <span class="source-state">Connected ${created}</span>
             <form method="post" action="/settings/oauth/apps/revoke">
               <input type="hidden" name="grantId" value="${escapeHtml(grant.id)}">
-              <button type="submit" class="button secondary">Revoke</button>
+              <button type="submit" class="button secondary sm danger">Revoke</button>
             </form>
           </li>`;
         })
@@ -375,9 +397,7 @@ export function renderConnectedApps(grants: GrantSummary[]): string {
       <div class="card-body"><ul class="rail rows">${rows}</ul></div>
     </section>
     <style>
-      .connected-app{display:flex;align-items:center;gap:10px}
+      .connected-app{display:flex;align-items:center;gap:12px}
       .connected-app form{margin:0}
-      .button.secondary{background:transparent;color:var(--ink);border:1px solid var(--border)}
-      .button.secondary:hover{background:var(--bg)}
     </style>`;
 }

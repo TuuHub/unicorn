@@ -54,7 +54,9 @@ describe("hosted multi-tenant server", () => {
   it("serves the landing page publicly and the panel only when signed in", async () => {
     const landing = await ctx.app.fetch(new Request(`${ORIGIN}/`));
     expect(landing.status).toBe(200);
-    expect(await landing.text()).toContain("Give your AI a memory of your campus");
+    const door = await landing.text();
+    expect(door).toContain("data-horn");
+    expect(door).toContain('action="/login"');
     const anonymous = await ctx.app.fetch(new Request(`${ORIGIN}/panel`));
     expect(anonymous.status).toBe(303);
     expect(anonymous.headers.get("location")).toBe("/login?next=%2Fpanel");

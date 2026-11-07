@@ -18,6 +18,7 @@ import type { Env } from "../src/runtime/cycle";
 import { computeCsrfToken } from "../src/settings";
 import { D1SourceCredentialStore } from "../src/sources";
 import { AccountError, type Account, type ControlStore } from "./control";
+import { configureChrome, escapeHtml } from "../src/ui";
 import { renderAccountPage, renderAuthForm, renderLanding } from "./pages";
 import type { TenantManager } from "./tenants";
 
@@ -62,6 +63,18 @@ export function createHostedApp(deps: HostedDeps): { fetch(request: Request, ip?
     OAUTH_KV: control.kv(),
   };
 
+  // Every page after sign-in is the shared panel; on this server its Setup group ends in Account,
+  // not a self-deployed Worker's Deployment page.
+  configureChrome({
+    setupNav: [
+      { path: "/settings", label: "Sources", icon: "sources" },
+      { path: "/account", label: "Account", icon: "account" },
+    ],
+    brandHref: "/panel",
+    instanceLabel: "Hosted",
+    footNote: `Hosted by ${escapeHtml(config.operator)}. Your data sits on their server; source tokens are encrypted.`,
+  });
+
   const doorHandler = async (request: Request, _env: HostEnv, ctx: ExecutionContext): Promise<Response> => {
     const props = (ctx as unknown as { props?: DoorProps }).props;
     const account = props?.subject ? control.get(props.subject) : null;
@@ -77,7 +90,9 @@ export function createHostedApp(deps: HostedDeps): { fetch(request: Request, ip?
     const account = control.sessionAccount(readCookie(request, cookieName));
 
     if (request.method === "GET" && path === "/") {
-      return renderLanding({ signedIn: Boolean(account), operator: config.operator, accounts: control.count(), signupOpen: signupAllowed(), repoUrl: config.repoUrl });
+      // What unicorn is lives on unicorn.tuuhub.com; this instance's front door is its sign-in.
+      if (account) return redirect("/panel");
+      return renderLanding({ ...instanceInfo(), signupOpen: signupAllowed(), needsCode: Boolean(config.signupCode) });
     }
     if (request.method === "GET" && path === "/health") {
       return Response.json({ status: "ready", mode: "hosted", accounts: control.count() });
@@ -126,6 +141,10 @@ export function createHostedApp(deps: HostedDeps): { fetch(request: Request, ip?
     },
   });
 
+  function instanceInfo() {
+    return { operator: config.operator, accounts: control.count(), repoUrl: config.repoUrl };
+  }
+
   function signupAllowed(): boolean {
     return config.signupOpen && (config.maxAccounts === undefined || control.count() < config.maxAccounts);
   }
@@ -133,7 +152,7 @@ export function createHostedApp(deps: HostedDeps): { fetch(request: Request, ip?
   async function handleAuthPage(request: Request, url: URL, mode: "login" | "signup", account: Account | null): Promise<Response> {
     const next = safeNext(url.searchParams.get("next"));
     const popup = next.startsWith("/authorize");
-    const base = { next, signupOpen: signupAllowed(), needsCode: Boolean(config.signupCode), popup };
+    const base = { next, signupOpen: signupAllowed(), needsCode: Boolean(config.signupCode), popup, instance: instanceInfo() };
     if (request.method === "GET") {
       if (account) return redirect(next);
       if (mode === "signup" && !signupAllowed()) return redirect(`/login?next=${encodeURIComponent(next)}`);

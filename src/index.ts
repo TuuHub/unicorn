@@ -162,6 +162,28 @@ export async function buildPanelRuntime(env: Env, oauthHelpers: OAuthHelpers | u
     bearerLabel: env.HOSTED ? "personal access token" : "MCP_TOKEN",
     grants,
     hosted: Boolean(env.HOSTED),
+    deployment: env.HOSTED
+      ? undefined
+      : {
+          origin,
+          database: await env.DB.prepare("SELECT 1")
+            .first()
+            .then(() => true)
+            .catch(() => false),
+          bindings: {
+            ADMIN_TOKEN: Boolean(env.ADMIN_TOKEN),
+            MCP_TOKEN: Boolean(env.MCP_TOKEN),
+            DB: Boolean(env.DB),
+            SCHEDULER: Boolean(env.SCHEDULER),
+            OAUTH_KV: Boolean(env.OAUTH_KV),
+            ED_API_TOKEN: Boolean(env.ED_API_TOKEN),
+            MOODLE_SESSION: Boolean(env.MOODLE_SESSION),
+            PLUGIN_SECRET_CANVAS_TOKEN: Boolean(env.PLUGIN_SECRET_CANVAS_TOKEN),
+            PLUGIN_SECRET_GOOGLE_CLIENT_ID: Boolean(env.PLUGIN_SECRET_GOOGLE_CLIENT_ID && env.PLUGIN_SECRET_GOOGLE_CLIENT_SECRET),
+          },
+          retentionDays: settings.retentionDays,
+          syncEnabled: settings.syncEnabled,
+        },
   };
 }
 
