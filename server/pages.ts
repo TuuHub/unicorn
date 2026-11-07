@@ -67,6 +67,7 @@ export function renderAuthForm(options: AuthFormOptions): Response {
   const instance = options.instance;
   const trust = instance
     ? `<ul class="trust" aria-label="About this instance">
+        <li>${icon("check")}<span><strong>Read-only.</strong> Nothing is ever posted, submitted or sent from your accounts.</span></li>
         <li>${icon("key")}<span><strong>Tokens encrypted per account.</strong> One database each; deleting the account deletes it.</span></li>
         <li>${icon("account")}<span><strong>Run by ${escapeHtml(instance.operator)}, no warranty.</strong> To keep tokens off this server, <a href="${escapeHtml(instance.repoUrl)}" target="_blank" rel="noopener">self-host the same code</a>.</span></li>
         <li>${icon("units")}<span><strong>Check your university's rules</strong> on using your own tokens with a third-party tool.</span></li>
@@ -89,14 +90,14 @@ export function renderAuthForm(options: AuthFormOptions): Response {
     ${options.popup ? "" : trust}
     ${AUTH_STYLE}`;
   const meta = instance
-    ? `<span>Hosted by ${escapeHtml(instance.operator)} · ${instance.accounts} student${instance.accounts === 1 ? "" : "s"}</span><a href="${escapeHtml(instance.repoUrl)}" target="_blank" rel="noopener">Source</a>`
+    ? `Hosted by ${escapeHtml(instance.operator)} · ${instance.accounts} student${instance.accounts === 1 ? "" : "s"}`
     : "";
   return htmlResponse(
     renderPage({
       title: isSignup ? "unicorn — create account" : "unicorn — sign in",
       active: "",
-      heading: isSignup ? "Create your unicorn" : "Sign in",
-      subtitle: isSignup ? "Then add a source token and paste one address into your AI. About five minutes." : "Opens your dashboard: what's due, every agent call, and what your agents remember.",
+      heading: isSignup ? "Create your unicorn" : "Sign in to unicorn",
+      subtitle: isSignup ? "Next: add a source token, then paste one address into Claude, ChatGPT or Claude Code." : "Deadlines across your units, every call your agents made, and what they remember about you.",
       body,
       // the OAuth pop-up is a small window: just the form
       layout: options.popup ? "bare" : "door",

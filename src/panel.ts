@@ -105,8 +105,8 @@ async function renderOverview(runtime: PanelRuntime): Promise<string> {
   const user = memory.find((view) => view.target === "user")!;
 
   const checklist = [
-    { done: runtime.configuredSources > 0, title: "Add a source", text: "Paste an Ed, Moodle, Canvas or Gmail token. Stored encrypted.", href: "/settings", cta: "Sources" },
-    { done: totalItems > 0, title: "First sync", text: "Runs hourly; Sync now starts it immediately.", href: "/settings", cta: "Sync now" },
+    { done: runtime.configuredSources > 0, title: "Add a source", text: "Ed, Moodle, Canvas or Gmail. Tokens are stored encrypted.", href: "/settings", cta: "Sources" },
+    { done: totalItems > 0, title: "First sync", text: "Automatic every hour, or start it now.", href: "/settings", cta: "Sync now" },
     {
       done: runtime.grants.length > 0 || stats.toolCalls24h > 0 || stats.clients7d.length > 0,
       title: "Connect your AI",
@@ -114,7 +114,7 @@ async function renderOverview(runtime: PanelRuntime): Promise<string> {
       href: "/panel/connect",
       cta: "Connect",
     },
-    { done: user.entries.length > 0, title: "Say hi", text: "Ask your agent “get to know me” to fill your profile.", href: "/panel/memory", cta: "Memory" },
+    { done: user.entries.length > 0, title: "Introduce yourself", text: "Ask your agent “get to know me”; it writes your profile.", href: "/panel/memory", cta: "Profile" },
   ];
   const doneCount = checklist.filter((step) => step.done).length;
   const setup =
@@ -136,12 +136,13 @@ async function renderOverview(runtime: PanelRuntime): Promise<string> {
     </section>`;
 
   const lastSync = runtime.lastCycle.at;
+  const dueUnits = new Set(upcoming.map((item) => item.course ?? item.source)).size;
   const stat = (iconName: Parameters<typeof icon>[0], label: string, value: string, hint: string) =>
     `<div class="stat"><div class="stat-label">${icon(iconName)}${escapeHtml(label)}</div><div class="stat-value">${value}</div><div class="stat-hint">${hint}</div></div>`;
   const stats5 = [
     stat("units", "Units this term", String(courses.length), escapeHtml(courses.find((course) => course.term)?.term ?? (courses.length ? "this term" : "after the first sync"))),
-    stat("calendar", "Due in 7 days", String(upcoming.length), upcoming[0]?.dueAt ? `next ${escapeHtml(relative(upcoming[0].dueAt, now))}` : "nothing due"),
-    stat("spark", "Unread briefs", String(unread.length), "read first each session"),
+    stat("calendar", "Due in 7 days", String(upcoming.length), upcoming.length ? `across ${dueUnits} unit${dueUnits === 1 ? "" : "s"}` : "nothing due"),
+    stat("spark", "Unread briefs", String(unread.length), "agents read these first"),
     stat(
       "agents",
       "Agent calls · 24h",
@@ -167,7 +168,7 @@ async function renderOverview(runtime: PanelRuntime): Promise<string> {
           </li>`,
         )
         .join("")}</ul>`
-    : empty("units", "Appear after the first sync, and go into your agent's TERM memory.");
+    : empty("units", "Units appear after the first sync.");
 
   const weekCalls = stats.daily7d.reduce((sum, day) => sum + day.calls, 0);
   const clients = stats.clients7d.length
@@ -180,14 +181,14 @@ async function renderOverview(runtime: PanelRuntime): Promise<string> {
           </li>`;
         })
         .join("")}</ul>`
-    : `${empty("agents", "No agent has called unicorn this week.")}<a class="more" href="/panel/connect">Connect one${icon("arrow")}</a>`;
+    : `${empty("agents", "No calls in the last 7 days.")}<a class="more" href="/panel/connect">Connect one${icon("arrow")}</a>`;
 
   const profile = user.entries.length
     ? `<ul class="quotes">${user.entries
         .slice(0, 5)
         .map((entry) => `<li>${escapeHtml(entry)}</li>`)
         .join("")}</ul>`
-    : empty("memory", "Nothing yet. Ask your agent “get to know me”.");
+    : empty("memory", "Empty. Ask your agent “get to know me”.");
 
   const body = `
     ${setup}
@@ -209,11 +210,11 @@ async function renderOverview(runtime: PanelRuntime): Promise<string> {
           <div class="card-body">${weekCalls ? renderWeekChart(stats.daily7d) : ""}${clients}</div>
         </section>
         <section class="card" aria-labelledby="term-title">
-          <div class="card-head row"><div class="card-title">${icon("units")}<h2 id="term-title">This term</h2></div><span class="muted small">kept in TERM memory</span></div>
+          <div class="card-head row"><div class="card-title">${icon("units")}<h2 id="term-title">This term</h2></div></div>
           <div class="card-body">${units}</div>
         </section>
         <section class="card" aria-labelledby="knows-title">
-          <div class="card-head row"><div class="card-title">${icon("memory")}<h2 id="knows-title">What your agent knows</h2></div><a class="more" href="/panel/memory">Edit${icon("arrow")}</a></div>
+          <div class="card-head row"><div class="card-title">${icon("memory")}<h2 id="knows-title">Your profile</h2></div><a class="more" href="/panel/memory">Edit${icon("arrow")}</a></div>
           <div class="card-body">${profile}</div>
         </section>
       </div>
@@ -221,18 +222,15 @@ async function renderOverview(runtime: PanelRuntime): Promise<string> {
     ${PANEL_STYLE}
     ${PANEL_SCRIPT}`;
 
-  const actions = `<span class="state${!runtime.schedulerRunning ? " bad" : lastSync ? "" : " off"}">${lastSync ? `Synced ${escapeHtml(relative(lastSync, now))}` : "Never synced"}</span>
-    <form method="post" action="/settings/sync-now" style="margin:0"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><button type="submit" class="secondary">${icon("sync")}Sync now</button></form>`;
+  const actions = `<form method="post" action="/settings/sync-now" style="margin:0"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><button type="submit" class="secondary">${icon("sync")}Sync now</button></form>`;
 
   return renderPage({
     title: "unicorn — overview",
     active: "/panel",
-    heading: greeting(now, zone),
-    subtitle: `${escapeHtml(longDate(now, zone))}. ${
-      upcoming[0]?.dueAt
-        ? `Next due: ${upcoming[0].course ? `${escapeHtml(upcoming[0].course)} ` : ""}${escapeHtml(upcoming[0].title)}, ${escapeHtml(relative(upcoming[0].dueAt, now))}.`
-        : "Nothing due in the next 7 days."
-    }`,
+    heading: escapeHtml(longDate(now, zone)),
+    subtitle: upcoming[0]?.dueAt
+      ? `Next due ${escapeHtml(relative(upcoming[0].dueAt, now))}: ${upcoming[0].course ? `${escapeHtml(upcoming[0].course)} ` : ""}${escapeHtml(upcoming[0].title)}.`
+      : "Nothing due in the next 7 days.",
     body,
     wide: true,
     actions,
@@ -291,7 +289,7 @@ function renderWeekChart(days: Array<{ day: string; calls: number; errors: numbe
 
 function renderFeed(entries: ActivityEntry[], now: Date): string {
   if (entries.length === 0) {
-    return empty("activity", "Nothing yet. Each agent call and sync appears here as it happens.");
+    return empty("activity", "No activity yet.");
   }
   return `<ul class="list feed">${entries
     .map((entry) => {
@@ -396,17 +394,14 @@ async function renderActivity(runtime: PanelRuntime, url: URL): Promise<string> 
         ${older}
       </div>
     </section>
-    <div class="grid2 wide-cards">
-      ${top}
-      <section class="card"><div class="card-head"><div class="card-title">${icon("key")}<h2>What is kept</h2></div></div><div class="card-body"><p class="small muted" style="margin:0">Kept for 30 days. Long text (plan bodies, memory entries, SQL) is stored as its length only. Credentials never reach this log.</p></div></section>
-    </div>
+    ${top}
     ${PANEL_STYLE}
     ${PANEL_SCRIPT}`;
   return renderPage({
     title: "unicorn — activity",
     active: "/panel/activity",
     heading: "Activity",
-    subtitle: "Every call your agents made to unicorn and every sync unicorn ran, with arguments and timing.",
+    subtitle: "Every agent call and source sync from the last 30 days, with arguments, timing and errors. Long text is stored as its length; credentials are never logged.",
     body,
     wide: true,
   });
@@ -414,7 +409,7 @@ async function renderActivity(runtime: PanelRuntime, url: URL): Promise<string> 
 
 function renderActivityTable(entries: ActivityEntry[], now: Date): string {
   if (entries.length === 0) {
-    return empty("activity", "Nothing logged yet.");
+    return empty("activity", "Nothing matches.");
   }
   const rows = entries
     .map((entry) => {
@@ -468,10 +463,6 @@ async function renderMemoryPage(runtime: PanelRuntime, url: URL): Promise<string
   const body = `
     ${saved ? `<p class="notice" role="status">Saved ${escapeHtml(memoryTitle(saved))}. Your agents see it from their next session.</p>` : ""}
     ${error ? `<p class="notice error" role="alert">${escapeHtml(error)}</p>` : ""}
-    <div class="explain">
-      <span class="tile-mark lg">${icon("memory", "")}</span>
-      <p>Every agent session, in any app on any device, reads all of this first. Agents keep it current; you can edit any of it. A line containing only <code>§</code> separates entries.</p>
-    </div>
     <div class="grid2 wide-cards">${cards}</div>
     ${PANEL_STYLE}
     ${PANEL_SCRIPT}`;
@@ -479,7 +470,7 @@ async function renderMemoryPage(runtime: PanelRuntime, url: URL): Promise<string
     title: "unicorn — memory",
     active: "/panel/memory",
     heading: "Memory",
-    subtitle: "Size-capped so an agent can read all of it at the start of every session.",
+    subtitle: "Every agent session, in any app, reads all of this first. Agents keep it current; you can correct it here.",
     body,
     wide: true,
   });
@@ -493,11 +484,11 @@ function renderMemoryCard(view: MemoryView, content: string, updatedAt: string, 
         <input type="hidden" name="csrf" value="${escapeHtml(csrf)}">
         <input type="hidden" name="updatedAt" value="${escapeHtml(content ? updatedAt : "")}">
         <textarea name="content" aria-label="${escapeHtml(view.title)}" maxlength="${view.limit + 200}" placeholder="Empty. Your agent fills this in as it learns.">${escapeHtml(content)}</textarea>
-        <div class="mem-actions"><span class="muted small">${view.entries.length} entr${view.entries.length === 1 ? "y" : "ies"}</span><button type="submit">Save</button></div>
+        <div class="mem-actions"><span class="muted small">${view.entries.length} entr${view.entries.length === 1 ? "y" : "ies"} · a line with only <code>§</code> separates them</span><button type="submit">Save</button></div>
       </form>`
-    : `<pre>${escapeHtml(content || "(empty — filled after the first sync)")}</pre><p class="muted small" style="margin:10px 0 0">Maintained by unicorn from your synced sources. Tell your agent if something is wrong; it notes it under Notes.</p>`;
-  const tag = view.writable ? `<span class="badge">agents + you</span>` : `<span class="badge">kept by unicorn</span>`;
-  return `<section class="card"><div class="card-head row"><div><h2>${escapeHtml(memoryTitle(view.title))}</h2><p class="card-sub">${escapeHtml(capitalize(view.purpose))}</p></div>${tag}</div><div class="card-body">${meter}${editor}</div></section>`;
+    : `<pre>${escapeHtml(content || "(empty — filled after the first sync)")}</pre><p class="muted small" style="margin:10px 0 0">If it's wrong, tell your agent; it records the fix in Notes.</p>`;
+  const tag = view.writable ? "" : `<span class="badge">Read-only</span>`;
+  return `<section class="card"><div class="card-head row"><div><h2>${escapeHtml(memoryTitle(view.title))}</h2><p class="card-sub">${escapeHtml(MEMORY_PURPOSE[view.target] ?? capitalize(view.purpose))}</p></div>${tag}</div><div class="card-body">${meter}${editor}</div></section>`;
 }
 
 async function saveMemory(runtime: PanelRuntime, target: MemoryTarget, form: FormData, url: URL): Promise<Response> {
@@ -551,7 +542,7 @@ async function renderConnect(runtime: PanelRuntime, url: URL): Promise<string> {
     ${revoked ? `<p class="notice" role="status">App disconnected.</p>` : ""}
     <section class="card address">
       <div class="card-head row">
-        <div><h2>Your unicorn address</h2><p class="card-sub">Paste it as an MCP connector. The app opens a pop-up to sign in; no token needed.</p></div>
+        <div><h2>Your unicorn address</h2><p class="card-sub">Add it as a custom MCP connector. The app opens a sign-in pop-up; no token needed.</p></div>
       </div>
       <div class="card-body">
         ${copyRow(door)}
@@ -562,7 +553,7 @@ async function renderConnect(runtime: PanelRuntime, url: URL): Promise<string> {
       ${clientCard(
         "Claude",
         "Claude",
-        "claude.ai, desktop and mobile — one connector everywhere.",
+        "One connector covers claude.ai, desktop and mobile.",
         `<ol class="steps">
           <li>Open <a href="https://claude.ai/settings/connectors" target="_blank" rel="noopener">Settings → Connectors</a> and choose <strong>Add custom connector</strong>.</li>
           <li>Name it <code>unicorn</code> and paste your address.</li>
@@ -573,7 +564,7 @@ async function renderConnect(runtime: PanelRuntime, url: URL): Promise<string> {
       ${clientCard(
         "ChatGPT",
         "ChatGPT",
-        "Needs a plan with connectors (developer mode).",
+        "Needs developer mode, on plans with connectors.",
         `<ol class="steps">
           <li>Open <strong>Settings → Apps &amp; Connectors → Advanced</strong> and turn on developer mode.</li>
           <li><strong>Create</strong> a connector with your address and OAuth authentication.</li>
@@ -583,35 +574,35 @@ async function renderConnect(runtime: PanelRuntime, url: URL): Promise<string> {
       ${clientCard(
         "Claude Code",
         "Claude Code",
-        "Run once in a terminal; the first call opens the browser to sign in.",
+        "Run once. The first call opens a browser to sign in.",
         `${copyRow(claudeCode, true)}
-        <p class="muted small" style="margin:14px 0 0">Or install the plugin for slash-command playbooks and a session-start hook:</p>
+        <p class="muted small" style="margin:14px 0 0">Or the plugin, which adds playbook slash commands and a session-start hook:</p>
         ${copyRow("/plugin marketplace add TuuHub/unicorn")}
         ${copyRow("/plugin install unicorn")}`,
       )}
       ${clientCard(
         "",
         "Cursor, Codex, anything else",
-        "Standard remote MCP over streamable HTTP with OAuth.",
+        "Remote MCP over streamable HTTP, OAuth sign-in.",
         `<pre class="night">${escapeHtml(jsonConfig)}</pre>`,
         `<span class="tile-cluster">${["Cursor", "Codex", "VS Code", "Windsurf"].map((name) => clientTile(name, "md")).join("")}</span>`,
       )}
     </div>
     ${
       claudeCodeBearer
-        ? `<section class="card" style="margin-top:16px"><div class="card-head"><div class="card-title">${icon("key")}<h2>No OAuth? Use a token</h2></div><p class="card-sub">For scripts and clients without OAuth support. This is your ${escapeHtml(runtime.bearerLabel)}; treat it like a password.</p></div><div class="card-body">
+        ? `<section class="card" style="margin-top:16px"><div class="card-head"><div class="card-title">${icon("key")}<h2>No OAuth? Use a token</h2></div><p class="card-sub">For scripts and clients without OAuth. This is your ${escapeHtml(runtime.bearerLabel)}: treat it as a password.</p></div><div class="card-body">
         <details><summary><span>Show token commands</span></summary>${copyRow(claudeCodeBearer, true)}${copyRow(`Authorization: Bearer ${runtime.bearerToken}`)}</details>
       </div></section>`
         : ""
     }
-    <section class="card" style="margin-top:16px"><div class="card-head row"><div><div class="card-title">${icon("agents")}<h2>Connected apps</h2></div><p class="card-sub">Apps you approved. Revoking signs them out immediately.</p></div><span class="badge tabular">${runtime.grants.length}</span></div><div class="card-body">${apps}</div></section>
+    <section class="card" style="margin-top:16px"><div class="card-head row"><div><div class="card-title">${icon("agents")}<h2>Connected apps</h2></div><p class="card-sub">Revoking signs an app out immediately.</p></div><span class="badge tabular">${runtime.grants.length}</span></div><div class="card-body">${apps}</div></section>
     ${PANEL_STYLE}
     ${PANEL_SCRIPT}`;
   return renderPage({
     title: "unicorn — connect",
     active: "/panel/connect",
     heading: "Connect your AI",
-    subtitle: "One address for every client. Each app signs in once and can be revoked below.",
+    subtitle: "One address works in every MCP client. Each app signs in once; revoke it at the bottom.",
     body,
     wide: true,
   });
@@ -626,6 +617,14 @@ function copyRow(value: string, shell = false): string {
 function empty(iconName: Parameters<typeof icon>[0], text: string): string {
   return `<div class="empty">${icon(iconName)}<p>${text}</p></div>`;
 }
+
+// The memory specs' purposes are written for the agent ("the user …"); these are for the person.
+const MEMORY_PURPOSE: Record<string, string> = {
+  user: "Who you are: university, degree, year, goals, how you like to work.",
+  notes: "Follow-ups, decisions and per-unit conventions your agents track.",
+  corrections: "Rules you stated, kept word for word.",
+  term: "This term's units, rebuilt from your sources each sync.",
+};
 
 function memoryTitle(value: string): string {
   const known: Record<string, string> = { "USER PROFILE": "User profile", NOTES: "Notes", TERM: "Term", user: "User profile", notes: "Notes", corrections: "Corrections", term: "Term" };
@@ -655,11 +654,6 @@ function formatIn(iso: string, zone: string, options: Intl.DateTimeFormatOptions
 
 function dayKey(iso: string, zone: string): string {
   return new Intl.DateTimeFormat("en-CA", { year: "numeric", month: "2-digit", day: "2-digit", timeZone: zone }).format(new Date(iso));
-}
-
-function greeting(now: Date, zone: string): string {
-  const hour = Number(new Intl.DateTimeFormat("en-AU", { hour: "numeric", hour12: false, timeZone: zone }).format(now)) % 24;
-  return hour < 5 ? "Working late" : hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
 }
 
 function longDate(now: Date, zone: string): string {
@@ -752,8 +746,6 @@ const PANEL_STYLE = `<style>
 .feed .muted{color:var(--ink-3)}
 .client-stack{gap:0}
 .client-stack .tile-mark{margin-right:-4px;box-shadow:0 0 0 2px var(--surface)}
-.explain{display:flex;gap:14px;align-items:flex-start;margin-bottom:16px;padding:16px 18px;border:1px solid var(--rule);border-radius:14px;background:var(--paper-2)}
-.explain p{margin:0;font-size:14px;color:var(--ink-2)}
 .mem-meta{display:flex;justify-content:space-between;gap:12px;color:var(--ink-3);font-size:12px;margin-bottom:6px;white-space:nowrap}
 .wide-cards{grid-template-columns:repeat(auto-fit,minmax(min(420px,100%),1fr))}
 .mem-actions{display:flex;justify-content:space-between;align-items:center;margin-top:10px}

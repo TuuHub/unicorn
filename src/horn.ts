@@ -265,12 +265,11 @@ export const HORN_SCRIPT = `<script>var FRAG = ${JSON.stringify(FRAG)};\n(functi
     var aspect = w / h;
     gl.uniform2f(u("uRes"), w, h);
     // the horn stands in the free space above the copy, sized to it (screen units: height = 1)
-    var copy = panel.querySelector(".door-copy");
+    var foot = panel.querySelector(".door-foot");
     var H = canvas.clientHeight || 1;
-    var covered = copy ? Math.max(0, copy.offsetHeight - parseFloat(getComputedStyle(copy).paddingTop) * 0.5) : 0;
-    var free = Math.max(0.3, (H - covered) / H);
-    gl.uniform2f(u("uCenter"), -0.03 * Math.min(1, aspect), 0.5 - free / 2);
-    gl.uniform1f(u("uZoom"), Math.min(1.3, free * 1.2, aspect * 1.6));
+    var free = Math.max(0.3, (H - (foot ? foot.offsetHeight : 0)) / H);
+    gl.uniform2f(u("uCenter"), 0.035 * Math.min(1, aspect), 0.5 - free / 2);
+    gl.uniform1f(u("uZoom"), Math.min(1.25, free * 1.15, aspect * 1.5));
   }
   gl.uniform3f(u("uPaper"), 0.008, 0.008, 0.012);
   gl.uniform1f(u("uLine"), 0);

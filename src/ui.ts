@@ -7,7 +7,7 @@
 // The dark scheme is the landing page's night. Token names match unicorn-site's globals.css.
 
 import { HORN_FALLBACK, HORN_SCRIPT } from "./horn";
-import { clientTile, icon } from "./marks";
+import { icon } from "./marks";
 
 interface NavLink {
   path: string;
@@ -131,29 +131,23 @@ h1{margin:0;font-size:clamp(26px,3.2vw,32px);line-height:1.1;font-weight:600;let
 .door-night canvas{position:absolute;inset:0;width:100%;height:100%;opacity:0;transition:opacity 1.4s cubic-bezier(.32,.72,0,1);cursor:grab;touch-action:pan-y;z-index:-2}
 .door-night canvas:active{cursor:grabbing}
 .door-night.is-live canvas{opacity:1}
-.horn-fallback{position:absolute;inset:0 0 28% 0;display:grid;place-items:center;transition:opacity .9s ease-out;z-index:-1;pointer-events:none}
+.horn-fallback{position:absolute;inset:0 0 60px 0;display:grid;place-items:center;transition:opacity .9s ease-out;z-index:-1;pointer-events:none}
 .door-night.is-live .horn-fallback{opacity:0}
 .horn-mark{width:min(52%,300px);height:auto;overflow:visible}
 .horn-mark .draw{stroke-dasharray:1;stroke-dashoffset:1;animation:horn-draw 2.4s cubic-bezier(.23,1,.32,1) .15s forwards}
 @keyframes horn-draw{to{stroke-dashoffset:0}}
-.door-copy{padding:120px clamp(24px,5vw,64px) 32px;background:linear-gradient(to top,#030304 0%,rgb(3 3 4/.88) 45%,transparent);pointer-events:none}
-.door-copy a,.door-copy .facts{pointer-events:auto}
-.door-name{margin:0;font-size:clamp(30px,3.4vw,44px);line-height:1;font-weight:600;letter-spacing:-.04em}
-.facts{display:grid;grid-template-columns:auto minmax(0,1fr);gap:9px 20px;margin:22px 0 0;font-size:14px;max-width:34rem}
-.facts dt{color:rgb(255 255 255/.45)}
-.facts dd{margin:0;color:rgb(255 255 255/.86);display:flex;align-items:center;gap:6px;flex-wrap:wrap}
-.facts .tile-mark{background:rgb(255 255 255/.92);border-color:transparent}
-.door-meta{margin-top:26px;padding-top:16px;border-top:1px solid rgb(255 255 255/.1);color:rgb(255 255 255/.45);font-size:12.5px;display:flex;gap:6px 18px;flex-wrap:wrap}
-.door-meta a{color:rgb(255 255 255/.75);display:inline-flex;align-items:center;gap:3px}
-.door-meta a:hover{color:#fff}
-.door-meta .i{width:13px;height:13px}
+.door-foot{display:flex;justify-content:space-between;align-items:center;gap:8px 20px;flex-wrap:wrap;padding:18px clamp(24px,4vw,40px) 22px;color:rgb(255 255 255/.42);font-size:12.5px}
+.door-foot a{color:rgb(255 255 255/.62);display:inline-flex;align-items:center;gap:3px;transition:color .15s ease-out}
+.door-foot a:hover{color:#fff}
+.door-foot .i{width:13px;height:13px}
+.door-links{display:inline-flex;gap:16px}
 .door-form{display:flex;flex-direction:column;justify-content:center;padding:48px clamp(20px,5vw,72px)}
 .door-form>.inner{width:100%;max-width:400px;margin:0 auto}
 .door-form h1{font-size:28px}
 .door-form .sub{margin-bottom:24px}
 .text-spectrum{background-image:linear-gradient(100deg,#ff7a70 0%,#ffc35c 18%,#8be39a 36%,#6dbbff 54%,#b896ff 72%,#ff7a70 90%);background-size:220% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:spectrum-slide 14s linear infinite}
 @keyframes spectrum-slide{to{background-position:-220% 0}}
-@media (max-width:900px){.door{display:block}.door-night{min-height:min(78vh,640px)}.horn-fallback{inset:0 0 40% 0}.door-copy{padding-top:80px}}
+@media (max-width:900px){.door{display:block}.door-night{min-height:min(52vh,460px)}}
 
 /* --- buttons ------------------------------------------------------------------------- */
 button,.button{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:34px;padding:0 14px;border:0;border-radius:8px;background:var(--btn-bg);color:var(--btn-ink);box-shadow:var(--btn-shadow);font:inherit;font-size:13.5px;font-weight:500;white-space:nowrap;cursor:pointer;user-select:none;touch-action:manipulation;transition:background-color .15s ease-out,border-color .15s ease-out,color .15s ease-out,scale .15s ease-out}
@@ -350,14 +344,9 @@ export function renderPage(options: PageOptions): string {
     <section class="door-night" data-horn aria-label="About unicorn">
       <canvas aria-hidden="true"></canvas>
       <div class="horn-fallback">${HORN_FALLBACK}</div>
-      <div class="door-copy">
-        <p class="door-name" translate="no">unicorn</p>
-        <dl class="facts">
-          <dt>Reads</dt><dd>Ed, Moodle, Canvas and Gmail, every hour. Read-only.</dd>
-          <dt>Answers</dt><dd>${["Claude", "ChatGPT", "Claude Code"].map((name) => clientTile(name, "sm")).join("")}Claude, ChatGPT, Claude Code, any MCP client</dd>
-          <dt>Knows</dt><dd>What changed, what's due, each unit across systems, your profile.</dd>
-        </dl>
-        <div class="door-meta">${options.actions ?? ""}<a href="${SITE}" target="_blank" rel="noopener">How it works${icon("external")}</a><a href="${DOCS}" target="_blank" rel="noopener">Docs${icon("external")}</a></div>
+      <div class="door-foot">
+        <span>${options.actions ?? ""}</span>
+        <span class="door-links"><a href="${SITE}" target="_blank" rel="noopener">How it works${icon("external")}</a><a href="${DOCS}" target="_blank" rel="noopener">Docs${icon("external")}</a></span>
       </div>
     </section>
     <main class="door-form"><div class="inner">
@@ -387,7 +376,7 @@ export function renderPage(options: PageOptions): string {
         ${options.actions ? `<div class="page-actions">${options.actions}</div>` : ""}
       </header>
       ${options.body}
-      <footer class="foot"><span>unicorn · open source under Apache 2.0</span><span><a href="${DOCS}" target="_blank" rel="noopener">Docs</a> · <a href="https://github.com/TuuHub/unicorn" target="_blank" rel="noopener">GitHub</a></span></footer>
+      <footer class="foot"><span>Apache-2.0</span><span><a href="${DOCS}" target="_blank" rel="noopener">Docs</a> · <a href="https://github.com/TuuHub/unicorn" target="_blank" rel="noopener">GitHub</a></span></footer>
     </div></main>
   </div>
 </body>

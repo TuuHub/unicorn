@@ -453,7 +453,7 @@ async function renderSettingsPage(settings: AppSettings, runtime: SettingsRuntim
     title: "unicorn — sources",
     active: "/settings",
     heading: "Sources & settings",
-    subtitle: "Non-secret behavior for this Worker. Changes apply from the next cycle.",
+    subtitle: "Source credentials, timezone, Gmail scope and sync. Changes apply from the next hourly cycle.",
     body,
     wide: true,
   });
