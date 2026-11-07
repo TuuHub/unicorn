@@ -116,27 +116,36 @@ export interface AccountPageOptions {
 }
 
 export function renderAccountPage(options: AccountPageOptions): Response {
+  const csrf = `<input type="hidden" name="csrf" value="${escapeHtml(options.csrf)}">`;
   const body = `
     ${options.notice ? `<p class="notice" role="status">${escapeHtml(options.notice)}</p>` : ""}
     ${options.error ? `<p class="notice error" role="alert">${escapeHtml(options.error)}</p>` : ""}
-    <section class="card"><div class="card-head row" style="padding-bottom:18px;align-items:center"><div class="card-title"><span class="tile-mark md mono">${escapeHtml((options.email[0] ?? "?").toUpperCase())}</span><div><h2>${escapeHtml(options.email)}</h2><p class="card-sub" style="margin:0">Member since ${escapeHtml(options.createdAt.slice(0, 10))}</p></div></div>
-      <form method="post" action="/logout" style="margin:0"><input type="hidden" name="csrf" value="${escapeHtml(options.csrf)}"><button type="submit" class="secondary">${icon("signout")}Sign out</button></form></div></section>
-    <section class="card"><div class="card-head"><div class="card-title">${icon("key")}<h2>Personal access token</h2></div><p class="card-sub">The bearer token on Connect, for clients without OAuth. Rotating it disconnects anything using the old one; OAuth-connected apps are unaffected.</p></div>
-      <div class="card-body"><form method="post" action="/account/rotate-token" style="display:flex;justify-content:flex-end;margin:0"><input type="hidden" name="csrf" value="${escapeHtml(options.csrf)}"><button type="submit" class="secondary">${icon("sync")}Rotate token</button></form></div></section>
-    <section class="card"><div class="card-head"><div class="card-title">${icon("download")}<h2>Your data</h2></div><p class="card-sub">Your database is one SQLite file on this server, separate from every other account. Source tokens in it are encrypted with a key derived for your account; the operator can still read synced items, memory and plans. Self-host if that matters to you.</p></div>
-      <div class="card-body"><a class="button secondary" href="/panel/export" download>${icon("download")}Export memory, plans, briefs, activity (JSON)</a></div></section>
-    <section class="card danger-zone"><div class="card-head"><div class="card-title">${icon("alert")}<h2>Delete account</h2></div><p class="card-sub">Deletes your database (items, memory, plans, activity, encrypted source tokens), signs out every connected app, and removes your account. This cannot be undone.</p></div>
-      <div class="card-body"><form method="post" action="/account/delete">
-        <input type="hidden" name="csrf" value="${escapeHtml(options.csrf)}">
-        <label class="field" for="confirm">Type your email to confirm</label>
-        <input id="confirm" name="confirm" type="email" autocomplete="off" required>
-        <div style="margin-top:14px;display:flex;justify-content:flex-end"><button type="submit" class="danger-solid">Delete everything</button></div>
-      </form></div></section>
+    <div class="settings">
+      <div class="setting">
+        <div class="setting-text"><h3>Signed in as</h3><p>Member since ${escapeHtml(options.createdAt.slice(0, 10))}.</p></div>
+        <div class="setting-control"><div class="identity"><span class="tile-mark md mono">${escapeHtml((options.email[0] ?? "?").toUpperCase())}</span><span class="truncate">${escapeHtml(options.email)}</span><form method="post" action="/logout" style="margin:0 0 0 auto">${csrf}<button type="submit" class="secondary sm">${icon("signout")}Sign out</button></form></div></div>
+      </div>
+      <div class="setting">
+        <div class="setting-text"><h3>Personal access token</h3><p>The bearer token on Connect, for clients without OAuth. Rotating it disconnects anything using the old one; OAuth-connected apps stay connected.</p></div>
+        <div class="setting-control"><form method="post" action="/account/rotate-token" style="margin:0">${csrf}<button type="submit" class="secondary">${icon("sync")}Rotate token</button></form></div>
+      </div>
+      <div class="setting">
+        <div class="setting-text"><h3>Your data</h3><p>One SQLite file on this server, separate from every other account. Source tokens in it are encrypted with a key derived for your account; the operator can still read synced items, memory and plans. Self-host if that matters to you.</p></div>
+        <div class="setting-control"><a class="button secondary" href="/panel/export" download>${icon("download")}Export as JSON</a><p class="hint">Memory, plans, briefs and recent activity.</p></div>
+      </div>
+      <div class="setting">
+        <div class="setting-text"><h3 class="danger-title">Delete account</h3><p>Deletes your database (items, memory, plans, activity, encrypted source tokens), signs out every connected app, and removes your account. This cannot be undone.</p></div>
+        <div class="setting-control"><form method="post" action="/account/delete" style="margin:0">${csrf}
+          <input id="confirm" name="confirm" type="email" autocomplete="off" required placeholder="Type your email to confirm" aria-label="Type your email to confirm">
+          <div class="setting-actions"><button type="submit" class="danger-solid">Delete everything</button></div>
+        </form></div>
+      </div>
+    </div>
     <style>
-      .danger-zone{border-color:color-mix(in srgb,var(--bad) 30%,var(--rule))}
-      .danger-zone .card-title .i{color:var(--bad)}
-      button.danger-solid{background:var(--bad);color:#fff;box-shadow:inset 0 1px 0 rgb(255 255 255/.14),0 1px 2px rgb(18 18 18/.2)}
-      button.danger-solid:hover{background:color-mix(in srgb,var(--bad) 85%,#000)}
+      .identity{display:flex;align-items:center;gap:12px;width:100%;padding:8px 8px 8px 10px;border-radius:14px;background:var(--surface);box-shadow:var(--shadow)}
+      .danger-title{color:var(--danger-text)}
+      button.danger-solid{background:var(--danger);color:#fff}
+      button.danger-solid:hover{background:color-mix(in oklab,var(--danger) 88%,#000)}
     </style>`;
   return htmlResponse(
     renderPage({ title: "unicorn — account", active: "/account", heading: "Account", subtitle: "Sign-in, the bearer token, where your data lives, and deleting it.", body }),

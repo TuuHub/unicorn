@@ -752,10 +752,10 @@ const PAGE_STYLE = `
       .field-input input[type=text],.field-input input[type=password],.field-input select{width:240px;max-width:100%}
       textarea{min-height:0}
       .unit{color:var(--ink-3);font-size:13px}
-      .switch{appearance:none;flex:none;width:38px;height:22px;margin:0;border-radius:999px;background:var(--track);cursor:pointer;position:relative;transition:background-color .15s ease-out}
-      .switch::after{content:"";position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.25);transition:translate .2s cubic-bezier(.23,1,.32,1)}
-      .switch:checked{background:var(--ink)}
-      .switch:checked::after{translate:16px 0;background:var(--paper)}
+      .switch{appearance:none;flex:none;width:40px;height:24px;border:0;box-shadow:none;margin:0;border-radius:999px;background:var(--track);cursor:pointer;position:relative;transition:background-color .15s ease-out}
+      .switch::after{content:"";position:absolute;top:2px;left:2px;width:20px;height:20px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.25);transition:translate .2s cubic-bezier(.23,1,.32,1)}
+      .switch:checked{background:var(--accent)}
+      .switch:checked::after{translate:16px 0}
       .actions{padding-top:14px;display:flex;justify-content:flex-end;gap:8px}
       .sync-now{margin-top:16px;padding-top:16px;border-top:1px solid var(--rule-2);display:flex;align-items:center;justify-content:space-between;gap:16px}
       .sync-now .hint{margin:0}

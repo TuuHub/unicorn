@@ -207,8 +207,11 @@ async function renderOverview(runtime: PanelRuntime): Promise<string> {
 
   const lastSync = runtime.lastCycle.at;
   const dueUnits = new Set(upcoming.map((item) => item.course ?? item.source)).size;
-  const stat = (iconName: Parameters<typeof icon>[0], label: string, value: string, hint: string, href: string) =>
-    `<a class="stat" href="${href}"><div class="stat-label">${icon(iconName)}${escapeHtml(label)}</div><div class="stat-value">${value}</div><div class="stat-hint">${hint}</div></a>`;
+  const stat = (iconName: Parameters<typeof icon>[0], label: string, value: string, hint: string, href: string, trend = "") =>
+    `<a class="stat" href="${href}"><div class="stat-label">${icon(iconName)}${escapeHtml(label)}</div><div class="stat-value"><span>${value}</span>${trend}</div><div class="stat-hint">${hint}</div></a>`;
+  const today = stats.daily7d.at(-1)?.calls ?? 0;
+  const yesterday = stats.daily7d.at(-2)?.calls ?? 0;
+  const callTrend = trendChip(today, yesterday);
   const stats5 = [
     stat("units", "Units this term", String(courses.length), escapeHtml(courses.find((course) => course.term)?.term ?? (courses.length ? "this term" : "after the first sync")), "/panel/units"),
     stat("calendar", "Due in 7 days", String(upcoming.length), upcoming.length ? `across ${dueUnits} unit${dueUnits === 1 ? "" : "s"}` : "nothing due", "/panel/due"),
@@ -219,6 +222,7 @@ async function renderOverview(runtime: PanelRuntime): Promise<string> {
       String(stats.toolCalls24h),
       stats.errors24h ? `<span class="state bad">${stats.errors24h} error${stats.errors24h === 1 ? "" : "s"}</span>` : `<span class="state">no errors</span>`,
       "/panel/activity",
+      callTrend,
     ),
     stat(
       "sync",
@@ -248,61 +252,70 @@ async function renderOverview(runtime: PanelRuntime): Promise<string> {
         .map((client) => {
           const share = stats.clients7d[0].calls ? Math.max(4, Math.round((client.calls / stats.clients7d[0].calls) * 100)) : 0;
           return `<li>
-            <span class="grow">${clientLabel(client.actor, "md")}<span class="bar" aria-hidden="true"><span style="width:${share}%"></span></span></span>
-            <span class="end"><strong class="tabular">${client.calls}</strong> call${client.calls === 1 ? "" : "s"}<br>${escapeHtml(relative(client.lastAt, now))}</span>
+            <span class="grow client-row">${clientTile(client.actor, "md")}<span class="client-info"><span class="client-top"><span class="truncate">${escapeHtml(clientName(client.actor))}</span><strong class="tabular">${client.calls}</strong></span><span class="bar" aria-hidden="true"><span style="width:${share}%"></span></span><span class="client-sub">last call ${escapeHtml(relative(client.lastAt, now))}</span></span></span>
           </li>`;
         })
         .join("")}</ul>`
     : `${empty("agents", "No calls in the last 7 days.")}<a class="more" href="/panel/connect">Connect one${icon("arrow")}</a>`;
 
   const profile = user.entries.length
-    ? `<ul class="quotes">${user.entries
-        .slice(0, 5)
-        .map((entry) => `<li>${escapeHtml(entry)}</li>`)
+    ? `<ul class="list profile">${user.entries
+        .slice(0, 6)
+        .map((entry) => `<li><span class="grow">${escapeHtml(entry)}</span></li>`)
         .join("")}</ul>`
     : empty("memory", "Empty. Ask your agent “get to know me”.");
 
+  const briefsCard = unread.length
+    ? `<section class="card" aria-labelledby="briefs-title"><div class="card-head row"><div class="card-title"><h2 id="briefs-title">Unread briefs</h2><span class="badge tabular">${unread.length}</span></div><a class="more" href="/panel/briefs">Read${icon("arrow")}</a></div><div class="card-body"><ul class="list">${unread
+        .slice(0, 4)
+        .map((brief) => `<li><a class="grow plain brief-line" href="/panel/briefs"><span class="tile-mark sm ev ev-notice-posted">${icon("brief", "")}</span><span class="truncate">${escapeHtml(brief.title)}</span></a><span class="end">${escapeHtml(shortAgo(brief.createdAt, now))}</span></li>`)
+        .join("")}</ul></div></section>`
+    : "";
   const body = `
     ${setup}
     <div class="stats">${stats5}</div>
     <div class="split">
+      <section class="card" aria-labelledby="due-title">
+        <div class="card-head row"><div class="card-title"><h2 id="due-title">Due this week</h2><span class="badge tabular">${upcoming.length}</span></div><a class="more" href="/panel/due">All deadlines${icon("arrow")}</a></div>
+        <div class="card-body">${due}</div>
+      </section>
       <div class="col">
-        <section class="card" aria-labelledby="due-title">
-          <div class="card-head row"><div class="card-title">${icon("calendar")}<h2 id="due-title">Due this week</h2></div><span class="muted small">${escapeHtml(zone)}</span></div>
-          <div class="card-body">${due}</div>
-        </section>
-        <section class="card" aria-labelledby="changes-title">
-          <div class="card-head row"><div class="card-title">${icon("changes")}<h2 id="changes-title">Latest changes</h2></div><a class="more" href="/panel/changes">All${icon("arrow")}</a></div>
-          <div class="card-body">${changes.length ? renderChangeDays(changes, zone, now) : empty("changes", "No changes yet.")}</div>
-        </section>
-        <section class="card" aria-labelledby="recent-title">
-          <div class="card-head row"><div class="card-title">${icon("activity")}<h2 id="recent-title">Recent activity</h2></div><a class="more" href="/panel/activity">Full log${icon("arrow")}</a></div>
-          <div class="card-body">${renderFeed(recent, now)}</div>
-        </section>
-      </div>
-      <div class="col">
-        ${
-          unread.length
-            ? `<section class="card" aria-labelledby="briefs-title"><div class="card-head row"><div class="card-title">${icon("brief")}<h2 id="briefs-title">Unread briefs</h2></div><a class="more" href="/panel/briefs">Read${icon("arrow")}</a></div><div class="card-body"><ul class="list">${unread
-                .slice(0, 4)
-                .map((brief) => `<li><a class="grow plain truncate" href="/panel/briefs">${escapeHtml(brief.title)}</a><span class="end">${escapeHtml(shortAgo(brief.createdAt, now))}</span></li>`)
-                .join("")}</ul></div></section>`
-            : ""
-        }
-        <section class="card" aria-labelledby="agents-title">
-          <div class="card-head row"><div class="card-title">${icon("agents")}<h2 id="agents-title">Your agents</h2></div><span class="muted small tabular">${weekCalls} call${weekCalls === 1 ? "" : "s"} · 7 days</span></div>
-          <div class="card-body">${weekCalls ? renderWeekChart(stats.daily7d) : ""}${clients}</div>
-        </section>
+        ${briefsCard}
         <section class="card" aria-labelledby="term-title">
-          <div class="card-head row"><div class="card-title">${icon("units")}<h2 id="term-title">This term</h2></div></div>
+          <div class="card-head row"><div class="card-title"><h2 id="term-title">This term</h2></div><a class="more" href="/panel/units">Units${icon("arrow")}</a></div>
           <div class="card-body">${units}</div>
-        </section>
-        <section class="card" aria-labelledby="knows-title">
-          <div class="card-head row"><div class="card-title">${icon("memory")}<h2 id="knows-title">Your profile</h2></div><a class="more" href="/panel/memory">Edit${icon("arrow")}</a></div>
-          <div class="card-body">${profile}</div>
         </section>
       </div>
     </div>
+    <div class="split even">
+      <section class="card" aria-labelledby="calls-title">
+        <div class="card-head row"><div class="card-title"><h2 id="calls-title">Agent calls</h2></div><span class="legend"><span><i class="dot accent"></i>Calls</span><span><i class="dot danger"></i>Failed</span></span></div>
+        <div class="card-body">
+          <div class="chart-stats">
+            <div><strong class="tabular">${weekCalls}</strong><span>Last 7 days</span></div>
+            <div><strong class="tabular">${today}</strong>${callTrend}<span>Today</span></div>
+            <div><strong class="tabular">${stats.errors24h}</strong><span>Failed · 24h</span></div>
+          </div>
+          ${weekCalls ? renderWeekChart(stats.daily7d) : empty("activity", "No agent calls in the last 7 days. Connect an app and ask it something.")}
+        </div>
+      </section>
+      <section class="card" aria-labelledby="agents-title">
+        <div class="card-head row"><div class="card-title"><h2 id="agents-title">Your agents</h2></div><a class="more" href="/panel/connect">Connect${icon("arrow")}</a></div>
+        <div class="card-body">${clients}</div>
+      </section>
+    </div>
+    <div class="split even">
+      <section class="card" aria-labelledby="changes-title">
+        <div class="card-head row"><div class="card-title"><h2 id="changes-title">Latest changes</h2></div><a class="more" href="/panel/changes">All changes${icon("arrow")}</a></div>
+        <div class="card-body">${changes.length ? renderChangeDays(changes, zone, now) : empty("changes", "No changes yet.")}</div>
+      </section>
+      <section class="card" aria-labelledby="knows-title">
+        <div class="card-head row"><div class="card-title"><h2 id="knows-title">Your profile</h2></div><a class="more" href="/panel/memory">Edit${icon("arrow")}</a></div>
+        <div class="card-body">${profile}</div>
+      </section>
+    </div>
+    <div class="section-label"><h2>Recent activity<span class="count tabular">${recent.length}</span></h2><a class="more" href="/panel/activity">Full log${icon("arrow")}</a></div>
+    ${recent.length ? renderRecentTable(recent, now) : `<section class="card">${empty("activity", "No activity yet.")}</section>`}
     ${PANEL_STYLE}${CAMPUS_STYLE}
     ${PANEL_SCRIPT}`;
 
@@ -335,7 +348,7 @@ function renderAgenda(items: ItemSummary[], zone: string, now: Date): string {
   return `<div class="agenda">${[...groups.entries()]
     .map(([key, group]) => {
       const first = group[0].dueAt ?? now.toISOString();
-      const label = key === today ? "Today" : key === tomorrow ? "Tomorrow" : formatIn(first, zone, { weekday: "short" });
+      const label = key === today ? "Today" : formatIn(first, zone, { weekday: "short" });
       return `<div class="day${key === today ? " today" : ""}">
         <div class="day-label"><span class="dow">${escapeHtml(label)}</span><span class="dom tabular">${escapeHtml(formatIn(first, zone, { day: "numeric" }))}</span><span class="mon">${escapeHtml(formatIn(first, zone, { month: "short" }))}</span></div>
         <ul class="list">${group
@@ -353,22 +366,59 @@ function renderAgenda(items: ItemSummary[], zone: string, now: Date): string {
     .join("")}</div>`;
 }
 
+function trendChip(current: number, previous: number): string {
+  if (!previous && !current) return "";
+  if (!previous) return `<span class="trend up" title="none the day before">new</span>`;
+  const change = Math.round(((current - previous) / previous) * 100);
+  const dir = change > 0 ? "up" : change < 0 ? "down" : "flat";
+  return `<span class="trend ${dir}" title="vs the day before">${change > 0 ? "↑" : change < 0 ? "↓" : ""} ${Math.abs(change)}%</span>`;
+}
+
 function renderWeekChart(days: Array<{ day: string; calls: number; errors: number }>): string {
-  const max = Math.max(1, ...days.map((day) => day.calls));
+  const peak = Math.max(...days.map((day) => day.calls), 1);
+  const step = niceStep(peak);
+  const top = Math.max(step * 4, step * Math.ceil(peak / step));
+  const ticks = Array.from({ length: Math.round(top / step) + 1 }, (_, index) => top - index * step);
   const bars = days
     .map((day, index) => {
       const date = new Date(`${day.day}T12:00:00Z`);
-      const label = date.toLocaleDateString("en-AU", { weekday: "narrow", timeZone: "UTC" });
-      const full = date.toLocaleDateString("en-AU", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" });
-      const height = day.calls ? Math.max(6, Math.round((day.calls / max) * 100)) : 0;
-      const errorShare = day.calls ? Math.round((day.errors / day.calls) * 100) : 0;
+      const label = date.toLocaleDateString("en-AU", { weekday: "short", timeZone: "UTC" });
+      const full = date.toLocaleDateString("en-AU", { weekday: "long", day: "numeric", month: "short", timeZone: "UTC" });
+      const ok = day.calls - day.errors;
       return `<div class="bar-col${index === days.length - 1 ? " today" : ""}" title="${escapeHtml(full)}: ${day.calls} call${day.calls === 1 ? "" : "s"}${day.errors ? `, ${day.errors} failed` : ""}">
-        <div class="bar-track"><span class="bar-fill" style="height:${height}%">${errorShare ? `<span class="bar-err" style="height:${errorShare}%"></span>` : ""}</span></div>
+        <div class="bar-stack">${day.errors ? `<span class="bar-err" style="height:${(day.errors / top) * 100}%"></span>` : ""}<span class="bar-ok" style="height:${(ok / top) * 100}%"></span></div>
         <span class="bar-label">${escapeHtml(label)}</span>
       </div>`;
     })
     .join("");
-  return `<div class="week" role="img" aria-label="Agent calls per day, last 7 days: ${days.map((day) => day.calls).join(", ")}">${bars}</div>`;
+  return `<div class="chart" role="img" aria-label="Agent calls per day, last 7 days: ${days.map((day) => day.calls).join(", ")}">
+    <div class="chart-y">${ticks.map((tick) => `<span>${tick}</span>`).join("")}</div>
+    <div class="chart-plot"><div class="chart-grid">${ticks.map(() => "<i></i>").join("")}</div><div class="chart-bars">${bars}</div></div>
+  </div>`;
+}
+
+function niceStep(peak: number): number {
+  const raw = peak / 4;
+  const power = 10 ** Math.floor(Math.log10(Math.max(raw, 1)));
+  const unit = raw / power;
+  return Math.max(1, (unit <= 1 ? 1 : unit <= 2 ? 2 : unit <= 5 ? 5 : 10) * power);
+}
+
+function renderRecentTable(entries: ActivityEntry[], now: Date): string {
+  const rows = entries
+    .map((entry) => {
+      const who = entry.kind === "sync" || entry.kind === "system" ? `<span class="who">${clientTile("scheduler", "md")}<span class="who-name">Hourly sync</span></span>` : `<span class="who">${clientTile(entryActor(entry), "md")}<span class="who-name">${escapeHtml(clientName(entryActor(entry)))}</span></span>`;
+      const what =
+        entry.kind === "tool"
+          ? `<span class="tool">${escapeHtml(entry.name)}</span>`
+          : entry.kind === "sync"
+            ? `<span class="what">${sourceTile(entry.name, "sm")}${escapeHtml(SOURCE_NAMES[entry.name] ?? entry.name)}</span>`
+            : `<span class="what">${escapeHtml(memoryTitle(entry.name))}</span>`;
+      const result = entry.status === "ok" ? '<span class="state">ok</span>' : `<span class="state bad">${escapeHtml(entry.errorCode ?? "error")}</span>`;
+      return `<tr><td>${who}</td><td>${what}</td><td class="muted truncate-cell">${escapeHtml(summarize(entry))}</td><td>${result}</td><td class="num">${escapeHtml(shortAgo(entry.at, now))}</td></tr>`;
+    })
+    .join("");
+  return `<div class="table-wrap"><table><thead><tr><th>Who</th><th>What</th><th>Details</th><th>Result</th><th class="num">When</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
 function renderFeed(entries: ActivityEntry[], now: Date): string {
@@ -471,13 +521,10 @@ async function renderActivity(runtime: PanelRuntime, url: URL): Promise<string> 
 
   const body = `
     ${statStrip}
-    <section class="card">
-      <div class="card-body" style="padding-top:16px">
-        <div class="toolbar"><div class="filters">${filters}</div>${errorsToggle}</div>
-        ${renderActivityTable(entries, now)}
-        ${older}
-      </div>
-    </section>
+    <div class="toolbar"><div class="filters">${filters}</div>${errorsToggle}</div>
+    ${entries.length ? renderActivityTable(entries, now) : `<section class="card">${empty("activity", "Nothing matches.")}</section>`}
+    ${older}
+    <div style="height:16px"></div>
     ${top}
     ${PANEL_STYLE}
     ${PANEL_SCRIPT}`;
@@ -502,7 +549,10 @@ function renderActivityTable(entries: ActivityEntry[], now: Date): string {
         entry.kind === "tool"
           ? `<span class="tool">${escapeHtml(name)}</span>`
           : `<span class="what">${entry.kind === "sync" ? sourceTile(entry.name, "sm") : `<span class="tile-mark sm mono">${icon(entry.kind === "memory" ? "memory" : "spark", "")}</span>`}${escapeHtml(name)}</span>`;
-      const who = entry.kind === "sync" || entry.kind === "system" ? `<span class="who muted">${icon("sync")}${escapeHtml(entry.via ?? "scheduler")}</span>` : clientLabel(entryActor(entry));
+      const who =
+        entry.kind === "sync" || entry.kind === "system"
+          ? `<span class="who">${clientTile("scheduler", "md")}<span class="who-name">${entry.via === "manual" || entry.via === "sync-now" ? "Sync now" : "Hourly sync"}</span></span>`
+          : `<span class="who">${clientTile(entryActor(entry), "md")}<span class="who-name">${escapeHtml(clientName(entryActor(entry)))}</span></span>`;
       const summary = summarize(entry);
       return `<tr>
         <td class="when" title="${escapeHtml(entry.at)}">${escapeHtml(shortAgo(entry.at, now))}</td>
