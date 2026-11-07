@@ -58,7 +58,7 @@ async function main(): Promise<void> {
   );
 
   const signup = env.UNICORN_SIGNUP ?? "open";
-  configureChrome({ extraNav: [{ path: "/account", label: "Account" }], brandHref: "/" });
+  configureChrome({ extraNav: [{ path: "/account", label: "Account" }], brandHref: "/panel", instanceLabel: "Hosted" });
   const app = createHostedApp({
     control,
     tenants,

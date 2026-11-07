@@ -52,6 +52,8 @@ export interface ActivityStats {
   syncs24h: number;
   topTools7d: Array<{ name: string; calls: number }>;
   clients7d: Array<{ actor: string; calls: number; lastAt: string }>;
+  // Agent calls per UTC day for the last seven days, oldest first, zero-filled.
+  daily7d: Array<{ day: string; calls: number; errors: number }>;
 }
 
 export interface ActivityLog {
@@ -161,7 +163,7 @@ export class D1ActivityLog implements ActivityLog {
   async stats(now: Date = this.now()): Promise<ActivityStats> {
     const day = new Date(now.getTime() - 86_400_000).toISOString();
     const week = new Date(now.getTime() - 7 * 86_400_000).toISOString();
-    const [counts, tools, clients] = await Promise.all([
+    const [counts, tools, clients, daily] = await Promise.all([
       this.db
         .prepare(
           `SELECT
@@ -183,13 +185,27 @@ export class D1ActivityLog implements ActivityLog {
         )
         .bind(week)
         .all<{ actor: string; calls: number; last_at: string }>(),
+      this.db
+        .prepare(
+          `SELECT substr(at, 1, 10) AS day, COUNT(*) AS calls, SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) AS errors
+           FROM activity_log WHERE kind = 'tool' AND at >= ? GROUP BY 1`,
+        )
+        .bind(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 6)).toISOString())
+        .all<{ day: string; calls: number; errors: number | null }>(),
     ]);
+    const byDay = new Map(daily.results.map((row) => [row.day, row]));
+    const daily7d = Array.from({ length: 7 }, (_, index) => {
+      const day = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 6 + index)).toISOString().slice(0, 10);
+      const row = byDay.get(day);
+      return { day, calls: Number(row?.calls ?? 0), errors: Number(row?.errors ?? 0) };
+    });
     return {
       toolCalls24h: Number(counts?.tool_calls ?? 0),
       errors24h: Number(counts?.errors ?? 0),
       syncs24h: Number(counts?.syncs ?? 0),
       topTools7d: tools.results.map((row) => ({ name: row.name, calls: Number(row.calls) })),
       clients7d: clients.results.map((row) => ({ actor: row.actor, calls: Number(row.calls), lastAt: row.last_at })),
+      daily7d,
     };
   }
 
