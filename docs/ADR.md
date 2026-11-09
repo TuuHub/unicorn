@@ -906,7 +906,7 @@ Unchanged from the original policy and still enforced: `SELECT`/`WITH` only as t
 
 ## ADR-0046 — Campus credentials: a local broker mints them, the Worker only receives
 
-**Status:** Accepted (2026-10-27; withdraws ADR-0003's opt-in full-auto layer and settles its open push question; amends ADR-0039)
+**Status:** Accepted (2026-10-27; withdraws ADR-0003's opt-in full-auto layer and settles its open push question; amends ADR-0039), then **superseded by ADR-0047** before any seam was built. The Worker signs in itself; the broker, `okta login --stop-at` and `PUT /credentials/:source` are not built. Kept for history: its OnTrack analysis still holds.
 
 **Context.** OnTrack is the source no keep-alive can save. Doubtfire's refresh token is a server-side record with a fixed expiry, one week by upstream default and at Monash. `POST /api/auth/access-token` mints access tokens from it but never rotates or extends it ([doubtfire-api `c91418e`](https://github.com/doubtfire-lms/doubtfire-api/blob/c91418e128e97df1fb61d0f774715475b757d8f4/app/api/authentication_api.rb)). Anything that holds only the access and refresh tokens therefore dies seven days after the sign-in that issued them, however often it uses them, and only a fresh Okta sign-in with MFA issues another. There is nothing to measure here: the refresh cookie's `Expires` is copied from that server record. This is why OnTrack has no unicorn plugin and no hosted MCP; ADR-0034 counts it among the remote MCP servers, but it was deferred on exactly this problem. Moodle is easier because its session is idle-based and the hourly cycle keeps it warm (ADR-0003). Its re-push is still manual, though, and `npm run moodle:push` writes `MOODLE_SESSION` with `wrangler secret put`, which deploys a new Worker version per push and, as an env secret, shadows anything stored later (ADR-0039).
 
@@ -956,3 +956,62 @@ ADR-0034 removed the notifier, so the remote side of failure is pull-only: `/set
 - ADR-0003's full-auto layer is withdrawn, not deferred. Its open question of where the push lives is answered: the schedule and transport live in this repo, and app logic lives in each CLI.
 
 **Reversal condition.** Cloud-side login is reconsidered only if Monash issues a credential that Okta does not gate: a longer `DF_REFRESH_TOKEN_EXPIRY_SECONDS`, rotating refresh tokens, or a Moodle mobile-app token that unicorn can use the way moodle-cli's Worker does. Each of these would delete broker work rather than move secrets.
+
+---
+
+## ADR-0047 — Sign-in runs in the Worker: identity providers behind one seam, Okta first
+
+**Status:** Accepted (2026-11-09; supersedes ADR-0046; reinstates and replaces ADR-0003's full-auto layer)
+
+**Context.** ADR-0046 kept the Okta password and TOTP secret on the laptop and had a local broker push app credentials. Its cost is the laptop itself: closed for about five days, OnTrack lapses, and every Okta school needs a machine of the user's awake on a schedule. That contradicts what unicorn is (ADR-0001, ADR-0025): one Worker on a free account that keeps working while the user does not. ADR-0046 rejected cloud sign-in for four reasons. Two are gone:
+
+- *`okta-auth` is Python Playwright.* `okta-auth` is now a TypeScript library that signs in to Okta Identity Engine with plain HTTP and runs unchanged in Workers (fetch and WebCrypto only, no dependencies).
+- *Browser Run's ten free minutes a day.* No browser is involved.
+
+Two remain and are accepted, not refuted:
+
+- *Both factors in one store.* True, and equally true of the laptop keyring ADR-0046 relied on. What changes is which account guards both factors: the Cloudflare account instead of the laptop login. With a passkey or hardware key on the Cloudflare account, that login is the second factor in practice. Without one, the Monash identity is single-factor. The user owns this choice; setup states it.
+- *Datacenter sign-ins and Okta risk policy.* Unmeasured. Mitigated by keeping Okta's device token (`DT`) across sign-ins, so Okta sees one recurring device rather than a new one per sign-in. Settled by one manual sign-in from a deployed Worker before onboarding defaults to it; tests never touch a real Okta org.
+
+The third ADR-0046 worry, a headless sign-in breaking with nobody watching, is a reporting problem, handled below.
+
+Many Monash services sit behind the same Okta account (Moodle and OnTrack today), and other schools put Duo, Shibboleth or Entra ID in front instead. Sign-in therefore cannot live inside the Moodle plugin, and a Plugin (ADR-0018: ingestion only) is the wrong kind of thing to own it.
+
+**Decision.** A new seam beside plugins, in `src/auth/`, with three parts.
+
+1. **Identity provider.** One school login, independent of any app:
+
+   ```ts
+   interface IdentityProvider {
+     readonly id: string; // "okta"
+     signIn(entryUrl: string): Promise<SignedIn>; // cookies for the app host + where the SAML post landed
+   }
+   ```
+
+   Every provider maps its failures to three kinds, and the rest of the Worker sees only these: `rejected` (credentials or one-time code refused; `credentials_rejected`, `passcode_rejected`), `unsupported` (a factor or step it cannot answer; `mfa_unsupported`, `unexpected_step`), `transient` (`network`, `http_5xx`, `handoff_failed`). Okta is the only provider built. Duo, Shibboleth and Entra ID are each one more file when a real user needs one; push-only MFA cannot be automated by any of them.
+
+2. **App sign-in.** Per source, how a `SignedIn` becomes that source's stored credential fields, the same fields `/settings` and `moodle:push` write today (ADR-0039):
+   - **Moodle:** entry `<baseUrl>/login/index.php`; fields `{ session }` from the `MoodleSession` cookie. The keep-alive (ADR-0003) is unchanged; sign-in only runs when `/my/` no longer answers signed in.
+   - **OnTrack:** entry from `GET /api/auth/method` (`redirect_to`, an IdP-initiated Okta app URL); the landing URL carries `authToken` and `username`, exchanged with `POST /api/auth {remember: true}` for a refresh token; fields `{ username, refresh_token }` with `expires_at`. Re-signed when under 48 hours from expiry (ADR-0046's analysis of the fixed seven-day token).
+   - A school preset names its provider and apps: `monash = { identity: "okta", apps: ["moodle", "ontrack"] }`.
+
+3. **Sign-in policy**, owned by the cycle, not by plugins:
+   - **When:** a source's credential is missing, signed out, or near expiry, and identity credentials are configured. Env secrets keep precedence (ADR-0039): a set `MOODLE_SESSION` shadows anything the Worker mints, and `/settings` says so.
+   - **Own invocation:** sign-in runs in its own alarm step ahead of the sync that needs it, so its 10–15 subrequests never compete with ingestion for the per-invocation budget (ADR-0025).
+   - **One Okta session per step:** apps signed in in the same step reuse the Okta session instead of answering MFA again. A second TOTP sign-in inside the same 30-second window would reuse the code and be refused as `passcode_rejected`.
+   - **Never retry `rejected` or `unsupported`.** The identity is blocked under a fingerprint, `SHA-256(username, password, totpSecret)`; changing any of the three in Secrets or `/settings` changes the fingerprint and lifts the block. No retry can lock the account, and no unblock button exists.
+   - **`transient`** retries on the next hourly cycle only. A daily cap of six sign-ins per identity stops a loop where a fresh session is immediately signed out again.
+   - **Reporting is pull-only** (ADR-0032, ADR-0034): `/settings` and `get_sync_status` show last sign-in, next expiry and any block; a block also writes one brief (`signin:<identity>:<fingerprint prefix>`) so the user's harness surfaces it once.
+
+Identity credentials are `OKTA_USERNAME`, `OKTA_PASSWORD` and `OKTA_TOTP_SECRET`: env secrets from `npm run setup`, or encrypted in D1 from `/settings` under ADR-0039, env first. The TOTP authenticator must be Google Authenticator (or any standard TOTP app) with the base32 secret saved at enrollment; Okta Verify push cannot be answered. The device token and the block state live in a new `identity_state` table, the device token encrypted like a source credential.
+
+`okta-auth` gains what OnTrack needs, each with a scripted case in its fake Okta: starting at an Okta app URL (IdP-initiated SAML), returning the URL the SAML post landed on, and accepting and returning the Okta session so a step can sign in to several apps with one MFA answer.
+
+**Consequences.**
+- No machine of the user's is involved after setup. OnTrack becomes buildable as a Worker plugin; Moodle stops needing re-pushes.
+- The Monash identity is as safe as the Cloudflare account. Setup tells the user to put a passkey or hardware key on it before storing Okta credentials, and says plainly what storing them means.
+- `ADMIN_TOKEN` rotation (ADR-0039) also makes D1-stored Okta credentials undecryptable; the identity then reports as needing re-entry like any source.
+- `moodle:push` and the `/settings` session paste remain for users who will not store Okta credentials in Cloudflare. ADR-0046's broker, `okta login --stop-at` and `PUT /credentials/:source` are not built. ontrack-cli's `auth login --okta` stays useful to CLI users on its own.
+- Work lands in order: the `okta-auth` additions; `src/auth/` with Okta and the policy; Moodle on it; the OnTrack plugin.
+
+**Reversal condition.** Return to pushed credentials if Okta at Monash challenges or blocks Worker sign-ins, if Monash makes push the only allowed factor, or if a Cloudflare account compromise becomes a real rather than theoretical threat for the deployment. Each of these leaves the seam in place: the provider changes, the apps and the policy do not.

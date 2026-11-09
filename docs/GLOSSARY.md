@@ -23,8 +23,10 @@ Terms as we use them in this project. When code and this file disagree, fix one 
 - **Relation** — A confirmed link between two Items across sources (`same-course`), written by `link_items`. The first rung of the resolver. (ADR-0005, ADR-0036)
 - **Ingestion / cycle** — The hourly scheduler-driven pull: fetch, normalize, diff, events, structural labels, daily digest, retention. LLM-free end to end. (ADR-0021, ADR-0034)
 - **keep-alive** — A cycle step that loads Moodle `/my/` to keep the Okta session warm and derive a fresh `sesskey`. (ADR-0003)
-- **Credential broker** — The local scheduled job (`scripts/sync-credentials.mjs`, a launchd agent) that keeps app credentials fresh on the user's machine, signs in through `okta-auth` when one is under 48 hours from expiry, and pushes each to `PUT /credentials/:source`. The Okta password and TOTP secret never leave that machine. (ADR-0046)
-- **Credential envelope** — The JSON a CLI prints from `auth export --json` and unicorn accepts verbatim at `PUT /credentials/:source`: `source`, `base_url`, `account`, `expires_at`, `fields`. (ADR-0046)
+- **Identity provider** — A school login, independent of any app, in `src/auth/`: `signIn(entryUrl)` returns the app's cookies and where the SAML post landed, and every failure is one of `rejected`, `unsupported` or `transient`. Okta (through `okta-auth`) is the only one built. Not a Plugin: plugins ingest, identity providers sign in. (ADR-0047)
+- **App sign-in** — Per source, how a signed-in identity becomes that source's stored credential fields: Moodle's `MoodleSession`, OnTrack's refresh token. (ADR-0047)
+- **School preset** — Names a school's identity provider and the apps behind it, e.g. `monash = { identity: "okta", apps: ["moodle", "ontrack"] }`. (ADR-0047)
+- **Sign-in policy** — The cycle's rules for when the Worker signs in: missing, signed-out or expiring credentials only, in its own alarm step, one MFA answer per step, never retrying `rejected` or `unsupported` (blocked by credential fingerprint), at most six sign-ins a day. (ADR-0047)
 - **Event / change type** — A row (the `changes` table) recording one change in student terms, typed by what a student would ask about rather than by which column changed: `item.added`, `item.archived`, `item.restored`, `deadline.changed`, `state.changed`, `grade.changed`, `content.changed`, `notice.posted`. Monotonic `seq` = the client cursor. Never pruned. Legacy v1 rows keep their old type names (`item.created`, `item.updated`, `capability.changed`) rather than being retyped. (ADR-0036)
 - **Cursor** — The event id a client passes to `changes_since` to get everything after it. Held by the client; the server keeps no per-client state. (ADR-0035)
 - **Bucket** — A two-level path on an Item: `course/<code>/<assignment>`, `course/<code>/general`, `life/events`, `life/admin`, `life/other`. The unit students think in. (ADR-0036)
@@ -55,6 +57,7 @@ Terms as we use them in this project. When code and this file disagree, fix one 
 - **Resident agent / Pi loop / `ask`** — *Retired (ADR-0034).* The in-Worker agent of ADR-0028/0029. Removed; reasoning moved to the harness.
 - **BYOK, Workers AI runtime, subscription token, AI SDK interface, degradation chain, job registry, hard cap** — *Retired (ADR-0034).* The server-side LLM layer of ADR-0004/0007/0008. The Worker calls no model.
 - **notifier / outbox** — *Retired (ADR-0034).* Push channels of ADR-0010/0032. The client pulls.
+- **Credential broker / credential envelope** — *Superseded (ADR-0047), never built.* ADR-0046's laptop job that would sign in locally and push app credentials to `PUT /credentials/:source`. The Worker signs in itself instead.
 - **Judgment notes memory** — *Retired (ADR-0034).* The capped-notes half of ADR-0024; buckets and labels replace it. The `corrections` domain behind `remember` stays.
 - **Runner (local)** — *Rejected* earlier: a local process pulling LLM tasks. Never built.
 - **Source adapter** — Historical name for a Tier-2 plugin. (ADR-0012)
