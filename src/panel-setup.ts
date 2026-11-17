@@ -162,20 +162,20 @@ export async function renderDeployment(runtime: PanelRuntime): Promise<string | 
     </section>`;
 
   const endpoints = [
-    ["Panel", "/panel", "Sign in with ADMIN_TOKEN"],
-    ["Door", "/mcp", "For your agent: OAuth, or Bearer MCP_TOKEN"],
-    ["Admin MCP", "/mcp/admin", "Bearer ADMIN_TOKEN: raw items, relations and manifests"],
-    ["Health", "/health", "Public JSON for uptime checks"],
+    ["Panel", "/panel", "ADMIN_TOKEN"],
+    ["Door", "/mcp", "OAuth or MCP_TOKEN"],
+    ["Admin MCP", "/mcp/admin", "ADMIN_TOKEN"],
+    ["Health", "/health", "Public"],
   ]
     .map(([name, path, auth]) => {
       const url = `${info.origin}${path}`;
-      return `<li><span class="grow"><strong>${name}</strong><span class="purpose">${auth}</span></span><span class="end-url"><code>${escapeHtml(host)}${path}</code><button type="button" class="ghost xs" data-copy="${escapeHtml(url)}" aria-label="Copy the ${name} URL">${icon("copy")}<span>Copy</span></button></span></li>`;
+      return `<li><span class="grow"><strong>${name}</strong><span class="purpose">${auth}</span></span><code class="end-url">${escapeHtml(host)}${path}</code><button type="button" class="end-copy" data-copy="${escapeHtml(url)}" aria-label="Copy the ${name} URL" title="Copy">${icon("copy")}</button></li>`;
     })
     .join("");
   const endpointCard = `
     <section class="card">
-      <div class="card-head"><h2>Endpoints</h2><p class="card-sub">Everything this Worker answers on.</p></div>
-      <div class="card-body"><ul class="list binds">${endpoints}</ul></div>
+      <div class="card-head"><h2>Endpoints</h2></div>
+      <div class="card-body"><ul class="list binds ends">${endpoints}</ul></div>
     </section>`;
 
   const body = `
@@ -184,13 +184,13 @@ export async function renderDeployment(runtime: PanelRuntime): Promise<string | 
       <div class="col">${secrets}</div>
       <div class="col">
       ${endpointCard}
-      <section class="card"><div class="card-head"><h2>Upgrade</h2><p class="card-sub">From your clone. Data and secrets carry over.</p></div><div class="card-body">
+      <section class="card"><div class="card-head"><h2>Upgrade</h2><p class="card-sub">Run from your clone. Data and secrets stay. <a href="https://unicorn.tuuhub.com/docs/unicorn/upgrade" target="_blank" rel="noopener">Notes</a></p></div><div class="card-body">
         ${copyRow("git pull && npm ci && npm run upgrade", true)}
-        <p class="muted small" style="margin:0"><a href="https://unicorn.tuuhub.com/docs/unicorn/upgrade" target="_blank" rel="noopener">Upgrade notes</a> list anything a release needs by hand.</p>
       </div></section>
-      <section class="card"><div class="card-head"><h2>Your data</h2><p class="card-sub">It all lives in this Worker's D1 database. Items outside your units move to the archive after ${info.retentionDays} days.</p></div><div class="card-body">
-        <div><a class="button ghost" href="/panel/export" download>${icon("download")}<span>Export memory, plans and briefs</span></a></div>
-        <p class="muted small" style="margin:0">For a full backup with synced items: <code>wrangler d1 export unicorn --remote --output backup.sql</code></p>
+      <section class="card"><div class="card-head"><h2>Your data</h2><p class="card-sub">Kept in your D1 database. Old items outside your units archive after ${info.retentionDays} days.</p></div><div class="card-body">
+        <a class="button ghost data-export" href="/panel/export" download>${icon("download")}<span>Export memory, plans and briefs</span></a>
+        <p class="group data-group">Full backup</p>
+        ${copyRow("wrangler d1 export unicorn --remote --output backup.sql", true)}
       </div></section>
       </div>
     </div>
@@ -222,10 +222,18 @@ export async function renderDeployment(runtime: PanelRuntime): Promise<string | 
       .bind-state{display:inline-flex;align-items:center;gap:7px;flex:none;font-size:13px}
       .bind-state.idle{color:var(--muted)}
       .bind-state.bad{color:var(--danger-text)}
-      .end-url{display:inline-flex;align-items:center;gap:8px;flex:none;min-width:0}
-      .end-url code{font-size:12px}
-      .end-url button{height:28px;padding:0 10px;font-size:12.5px}
-      .end-url button .i{width:14px;height:14px}
+      /* Endpoints share one grid so every URL starts on the same line; the copy glyph, not
+         its hit area, sits on the card's right edge. */
+      .ends{display:grid;grid-template-columns:minmax(0,1fr) max-content max-content;column-gap:16px}
+      .ends>li{display:grid;grid-column:1/-1;grid-template-columns:subgrid;align-items:center}
+      .ends code.end-url{align-self:center;background:none;padding:0;font-size:12.5px;color:var(--muted)}
+      .end-copy{display:grid;place-items:center;width:32px;height:32px;margin:-4px -8px -4px -8px;padding:0;border:0;border-radius:10px;background:none;color:var(--muted);cursor:pointer}
+      .end-copy:hover{background:var(--default);color:var(--fg)}
+      .end-copy .i{width:16px;height:16px}
+      .binds code{background:none;padding:0}
+      .data-export{align-self:flex-start}
+      .group.data-group{margin:4px 0 -4px}
+      .card-body .cmd{margin:0}
       .card-body{gap:12px}
       @media (max-width:760px){
         .facts{grid-template-columns:repeat(2,minmax(0,1fr))}
@@ -233,7 +241,11 @@ export async function renderDeployment(runtime: PanelRuntime): Promise<string | 
         .fact:nth-child(n+3){border-top:1px solid var(--separator)}
         .health-head{flex-wrap:wrap}
       }
-      @media (max-width:640px){.binds>li:has(.end-url){flex-direction:column;align-items:flex-start}}
+      @media (max-width:640px){
+        .ends{grid-template-columns:minmax(0,1fr) max-content}
+        .ends .grow{grid-column:1/-1}
+        .ends code.end-url{overflow-wrap:anywhere}
+      }
     </style>
     ${PANEL_STYLE}${PANEL_SCRIPT}`;
   return renderPage({

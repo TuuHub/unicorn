@@ -17,6 +17,16 @@ export function copyRow(value: string, shell = false, hero = false): string {
 
 // --- shared bits --------------------------------------------------------------
 
+// A line to say to the user's agent. unicorn has no brain of its own, so the chip copies the
+// line for the user to paste into Claude, ChatGPT or whichever client they connected.
+export function askChip(line: string): string {
+  return `<button type="button" class="ask" data-copy="${escapeHtml(line)}" title="Copy, then paste it to your agent">${icon("spark")}<span>${escapeHtml(line)}</span></button>`;
+}
+
+export function emptyAsk(iconName: Parameters<typeof icon>[0], text: string, line: string): string {
+  return `<div class="empty">${icon(iconName)}<p>${text}</p>${askChip(line)}</div>`;
+}
+
 export function empty(iconName: Parameters<typeof icon>[0], text: string): string {
   return `<div class="empty">${icon(iconName)}<p>${text}</p></div>`;
 }
@@ -103,6 +113,11 @@ export function relative(iso: string, now: Date): string {
 // Page-level layout the shared shell doesn't need: the agenda, the week chart, the feed, the
 // setup strip and the client cards.
 export const PANEL_STYLE = `<style>
+.ask{display:inline-flex;align-items:center;gap:7px;min-width:0;max-width:100%;height:32px;padding:0 13px 0 11px;border:0;border-radius:999px;background:var(--surface);box-shadow:var(--shadow);color:var(--fg);font:inherit;font-size:13px;cursor:pointer}
+.ask span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ask .i{flex:none;width:14px;height:14px;color:var(--muted)}
+.ask:hover{background:var(--default)}
+.empty .ask{margin-top:4px}
 .setup .card-head{align-items:center}
 .setup .progress{width:160px;flex:none}
 .setup-steps{list-style:none;margin:0;padding:12px 16px 16px;display:grid;grid-template-columns:repeat(auto-fit,minmax(min(220px,100%),1fr));gap:12px}
@@ -199,9 +214,12 @@ export const PANEL_SCRIPT = `
   document.querySelectorAll("[data-copy]").forEach(function (button) {
     button.addEventListener("click", function () {
       var value = button.getAttribute("data-copy") || "";
-      var label = button.querySelector("span") || button;
-      var original = label.textContent;
-      navigator.clipboard.writeText(value).then(function () { label.textContent = "Copied"; setTimeout(function () { label.textContent = original; }, 1500); });
+      var label = button.querySelector("span");
+      var original = button.innerHTML;
+      navigator.clipboard.writeText(value).then(function () {
+        if (label) label.textContent = "Copied"; else button.innerHTML = '${icon("check")}';
+        setTimeout(function () { button.innerHTML = original; }, 1500);
+      });
     });
   });
 })();
