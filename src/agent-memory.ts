@@ -370,11 +370,16 @@ export async function trackMemoryWrite<T>(
   return result;
 }
 
-/** The operations that put back what a logged change did: drop what it added, restore what it removed. */
+/**
+ * The operations that put back what a logged change did. An edit (added and removed side by
+ * side) is patched back in place, so the entry keeps its position; the rest is removed or re-added.
+ */
 export function undoOperations(change: { added: string[]; removed: string[] }): MemoryOperation[] {
+  const pairs = Math.min(change.added.length, change.removed.length);
   return [
-    ...change.added.map((entry): MemoryOperation => ({ action: "remove", old_text: entry })),
-    ...change.removed.map((entry): MemoryOperation => ({ action: "add", content: entry })),
+    ...change.added.slice(0, pairs).map((entry, index): MemoryOperation => ({ action: "patch", old_text: entry, content: change.removed[index] })),
+    ...change.added.slice(pairs).map((entry): MemoryOperation => ({ action: "remove", old_text: entry })),
+    ...change.removed.slice(pairs).map((entry): MemoryOperation => ({ action: "add", content: entry })),
   ];
 }
 

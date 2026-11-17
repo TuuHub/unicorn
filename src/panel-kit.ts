@@ -216,9 +216,7 @@ details.ask[open]>.ask-menu{animation:menu-in .16s var(--ease-out)}
 .feed-text strong{font-weight:600}
 .client-stack{gap:0}
 .client-stack .tile-mark{margin-right:-6px;box-shadow:0 0 0 2px var(--surface)}
-.mem-meta{display:flex;justify-content:space-between;gap:12px;color:var(--muted);font-size:12px;margin-bottom:6px;white-space:nowrap}
 .wide-cards{grid-template-columns:repeat(auto-fit,minmax(min(420px,100%),1fr))}
-.mem-actions{display:flex;justify-content:space-between;align-items:center;margin-top:10px;gap:12px}
 .address .card-body{padding-top:8px}
 .works{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:14px}
 .works-row{display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap}

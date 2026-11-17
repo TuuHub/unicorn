@@ -962,3 +962,20 @@ Unchanged from the original policy and still enforced: `SELECT`/`WITH` only as t
   It is server-rendered like `/settings`, behind Basic auth on a Worker and a session when hosted. The Worker's `/` now lands on `/panel`.
 
 **Consequences.** The panel reads data; it does not reason or write to sources. The weekend test still applies: anything that interprets data belongs to the agent.
+
+---
+
+## ADR-0049 — Memory changes are logged, reviewable and undoable
+
+**Status:** Accepted (2026-11-18; amends ADR-0047 and ADR-0048)
+
+**Context.** Agents wrote memory, but nothing showed the student what changed or who changed it. The panel's Memory page was one raw textarea per store, with a character meter that told nobody anything useful. Memory is what makes every session in every app know the student, so a wrong entry is costly and has to be easy to spot and reverse.
+
+**Decision.**
+- Every write to `user`, `notes` or `corrections` (the `memory` and `remember` tools, and the panel) logs one `memory` row in `activity_log` with the actor and the entries it added and removed. These two lists are kept whole, not reduced to their length, because the panel replays them.
+- The Memory page lists entries one by one. Clicking an entry edits it in place; each store has an add field. A Changes feed beside it shows each logged change as a diff, with Undo. Undoing an edit patches the entry back where it was.
+- A NOTES entry that opens with a date over 21 days old is flagged in the session snapshot, in the tool-result nudge and on the page, so stale follow-ups get checked or removed.
+- `get_memory` tells the agent to call it at the start of every conversation unless the snapshot is already in its instructions. Some clients drop MCP `instructions`.
+- The character meter is gone. The limits still apply and still come back to the agent in tool results.
+
+**Consequences.** Memory text now sits in `activity_log` for up to 30 days. That's the same text the panel already shows, and it's pruned with the rest of the log. Undo is only as good as the log: a change older than 30 days can't be undone from the feed, though its entries can still be edited directly.

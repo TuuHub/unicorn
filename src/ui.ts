@@ -377,9 +377,8 @@ label.field{display:block;font-size:14px;font-weight:500;margin:14px 0 6px}
 .notice.error::after{content:none}
 @media (max-width:640px){.notice{left:16px;right:16px;bottom:16px;max-width:none}}
 div.notice{display:block;font-weight:400}
-.meter,.progress{height:6px;background:var(--default);border-radius:999px;overflow:hidden}
-.meter>span,.progress>span{display:block;height:100%;background:var(--fg);border-radius:999px}
-.meter.warn>span{background:var(--warning)}
+.progress{height:6px;background:var(--default);border-radius:999px;overflow:hidden}
+.progress>span{display:block;height:100%;background:var(--fg);border-radius:999px}
 
 /* --- settings: label left, control right, separators between (HeroUI's settings page) --- */
 .settings{display:flex;flex-direction:column}

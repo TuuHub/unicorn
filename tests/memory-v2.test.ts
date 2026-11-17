@@ -53,9 +53,11 @@ describe("memory v2 operations (pure)", () => {
   });
 
   it("diffs entries and inverts a change", () => {
-    const change = diffEntries(["a", "b"], ["a", "c"]);
-    expect(change).toEqual({ added: ["c"], removed: ["b"] });
-    expect(applyOperations(spec, ["a", "c"], undoOperations(change), "x")).toEqual(["a", "b"]);
+    const edit = diffEntries(["b", "a"], ["c", "a"]);
+    expect(edit).toEqual({ added: ["c"], removed: ["b"] });
+    expect(applyOperations(spec, ["c", "a"], undoOperations(edit), "x")).toEqual(["b", "a"]);
+    const removal = diffEntries(["a", "b"], ["a"]);
+    expect(applyOperations(spec, ["a"], undoOperations(removal), "x")).toEqual(["a", "b"]);
   });
 
   it("flags dated NOTES entries older than three weeks in the snapshot and nudge", async () => {

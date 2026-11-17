@@ -60,6 +60,7 @@ Use sentence case everywhere. Don't use all-caps labels.
 - **Ask chip.** A line to say to the user's agent, with a spark icon. Clicking opens a menu: open it as a new chat in Claude or ChatGPT, or copy it. unicorn has no agent of its own, so empty states that the agent fills (plans, profile) offer the line that fills them instead of explaining how.
 - **Optical alignment.** Columns of values share one grid so they start on the same line. An icon-only button at a card's edge takes a negative margin so its glyph, not its hit area, lines up with the content.
 - **Errors sit where they happened.** A form that fails puts its message inside its own card and scrolls there, not only at the top of the page.
+- **Inline edit.** A list the user can correct (memory entries) shows plain rows. Clicking a row swaps it for a textarea in place, with Delete, Cancel and Save. ⌘↩ saves and Escape cancels. Delete doesn't confirm, because the change lands in a feed with Undo.
 - **Confirmations are toasts.** "Saved", "Removed Ed" and the like float in at the bottom right, show for four seconds and leave. The flag that triggered one is dropped from the address so a reload doesn't repeat it.
 
 ## Motion

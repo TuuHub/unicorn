@@ -41,7 +41,9 @@ export async function renderMemoryPage(runtime: PanelRuntime, url: URL): Promise
   const done = DONE[url.searchParams.get("saved") ?? ""];
   const error = url.searchParams.get("error");
   const errorTarget = url.searchParams.get("target");
-  const cards = views.map((view) => renderStore(view, csrf, now, errorTarget === view.target ? error : null)).join("");
+  // Stores the user can edit first; the read-only term list last.
+  const ordered = [...views].sort((a, b) => Number(!WRITABLE.has(a.target)) - Number(!WRITABLE.has(b.target)));
+  const cards = ordered.map((view) => renderStore(view, csrf, now, errorTarget === view.target ? error : null)).join("");
   const body = `
     ${done ? `<p class="notice" role="status">${done}</p>` : ""}
     ${error && !errorTarget ? `<p class="notice error" role="alert">${escapeHtml(error)}</p>` : ""}
@@ -76,10 +78,12 @@ function renderStore(view: MemoryView, csrf: string, now: Date, error: string | 
     ? `<form method="post" action="/panel/memory/${view.target}" class="mem-add">
         <input type="hidden" name="csrf" value="${escapeHtml(csrf)}">
         <input type="hidden" name="op" value="add">
-        <input name="content" required maxlength="1000" autocomplete="off" aria-label="New ${escapeHtml(memoryTitle(view.target).toLowerCase())} entry" placeholder="${view.target === "corrections" ? "Add a rule" : "Add an entry"}">
+        <input type="text" name="content" required maxlength="1000" autocomplete="off" aria-label="New ${escapeHtml(memoryTitle(view.target).toLowerCase())} entry" placeholder="${view.target === "corrections" ? "Add a rule" : "Add an entry"}">
         <button type="submit" class="secondary sm">Add</button>
       </form>`
-    : `<p class="muted small mem-foot">Rebuilt from your sources on every sync. If it's wrong, tell your agent.</p>`;
+    : view.entries.length
+      ? `<p class="muted small mem-foot">Wrong? Tell your agent. It records the fix in Notes.</p>`
+      : "";
   const alert = error ? `<p class="notice error" role="alert">${escapeHtml(error)}</p>` : "";
   return `<section class="card mem-card" id="mem-${view.target}">
     <div class="card-head row"><div><h2>${escapeHtml(memoryTitle(view.title))}</h2><p class="card-sub">${escapeHtml(MEMORY_PURPOSE[view.target] ?? view.purpose)}</p></div>${updated}</div>
@@ -167,7 +171,7 @@ export async function saveMemoryEntry(runtime: PanelRuntime, target: MemoryTarge
     // The textarea shows a correction without its date; keep the date it was stated on.
     const prefix = target === "corrections" ? old.match(CORRECTION_PREFIX)?.[0] : undefined;
     if (prefix && !CORRECTION_PREFIX.test(content)) content = `${prefix}${content}`;
-    if (content === old) return back(url, "saved=edited", target);
+    if (content === old) return back(url, "", target);
     operations = [{ action: "patch", old_text: old, content }];
     done = "edited";
   } else {
@@ -259,11 +263,11 @@ const MEMORY_STYLE = `<style>
 .mem-card .card-body>.notice.error{margin:0 0 12px}
 .mem-list{list-style:none;margin:0 -12px;padding:0}
 .mem-entry+.mem-entry{border-top:1px solid var(--separator)}
-.mem-entry details>summary{list-style:none}
-.mem-entry details>summary::-webkit-details-marker{display:none}
+.mem-entry summary.mem-row{max-width:none;color:var(--fg);font-size:14px;gap:12px;align-items:flex-start}
+.mem-entry summary.mem-row::before{content:none}
 .mem-row{display:flex;align-items:flex-start;gap:12px;padding:10px 12px;border-radius:12px}
 summary.mem-row{cursor:pointer;transition:background-color .15s ease}
-summary.mem-row:hover,.mem-entry details[open] summary.mem-row{background:var(--surface-2)}
+summary.mem-row:hover{background:var(--surface-2)}
 .mem-text{flex:1;min-width:0;white-space:pre-wrap;overflow-wrap:anywhere;line-height:21px}
 .mem-meta{display:inline-flex;align-items:center;gap:4px;color:var(--muted);font-size:12.5px;line-height:21px;white-space:nowrap;font-variant-numeric:tabular-nums}
 .mem-meta .i{width:13px;height:13px}
@@ -271,8 +275,8 @@ summary.mem-row:hover,.mem-entry details[open] summary.mem-row{background:var(--
 .mem-pen .i{width:15px;height:15px}
 summary.mem-row:hover .mem-pen,summary.mem-row:focus-visible .mem-pen{opacity:1}
 @media (hover:none){.mem-pen{opacity:1}}
-.mem-entry details[open] .mem-pen{opacity:0}
-.mem-edit{padding:4px 12px 12px}
+.mem-entry details[open]>summary{display:none}
+.mem-edit{padding:4px 0 10px}
 .mem-edit textarea{width:100%;min-height:0;resize:vertical;font:inherit;line-height:21px}
 .mem-edit-bar{display:flex;align-items:center;gap:8px;margin-top:8px}
 .mem-edit-bar .grow{flex:1}
@@ -295,5 +299,6 @@ summary.mem-row:hover .mem-pen,summary.mem-row:focus-visible .mem-pen{opacity:1}
 .mem-diff .sign{flex:none;width:10px;color:var(--faint);font-variant-numeric:tabular-nums}
 .mem-diff .del>span:last-child{color:var(--muted);text-decoration:line-through;text-decoration-color:var(--faint)}
 .mem-undo,.mem-undone{margin:0 0 0 34px}
-.mem-undo button{margin-left:-12px}
+.mem-undo button{margin-left:-10px;height:28px;padding:0 10px;background:none;color:var(--muted);font-size:13px}
+.mem-undo button:hover{background:var(--default);color:var(--fg)}
 </style>`;
