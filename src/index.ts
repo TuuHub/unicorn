@@ -15,6 +15,7 @@ import { handlePanel, type PanelRuntime } from "./panel";
 import { D1ManifestStore } from "./plugins/declarative/store";
 import gmailPreset from "./plugins/presets/gmail.json";
 import { runCycle, Scheduler, type CycleResult, type Env } from "./runtime/cycle";
+import { createBrowserRunLogin } from "./moodle-browser";
 import { constantTimeEqual, D1SettingsRepository, handleSettings, type LastCycleInfo } from "./settings";
 import { buildSourcePlugins, D1SourceCredentialStore, itemCountsByPlugin, PLUGIN_ID, SOURCE_PRESETS } from "./sources";
 
@@ -171,6 +172,7 @@ export async function buildPanelRuntime(env: Env, oauthHelpers: OAuthHelpers | u
             MOODLE_SESSION: Boolean(env.MOODLE_SESSION),
             PLUGIN_SECRET_CANVAS_TOKEN: Boolean(env.PLUGIN_SECRET_CANVAS_TOKEN),
             PLUGIN_SECRET_GOOGLE_CLIENT_ID: Boolean(env.PLUGIN_SECRET_GOOGLE_CLIENT_ID && env.PLUGIN_SECRET_GOOGLE_CLIENT_SECRET),
+            BROWSER: Boolean(env.BROWSER),
           },
           retentionDays: settings.retentionDays,
           syncEnabled: settings.syncEnabled,
@@ -311,6 +313,8 @@ export async function defaultFetch(request: Request, env: Env, context: Executio
       },
       status: await operationalStatus(env),
       oauth: { grants: await listConnectedApps(oauthHelpers, doorUserId(env)) },
+      db: env.DB,
+      browser: env.BROWSER ? createBrowserRunLogin(env.BROWSER) : undefined,
       runSync: async () => {
         const cycle = await runCycle(env, true);
         const failed = cycle.sources.find((source) => source.lastError);

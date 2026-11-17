@@ -62,6 +62,10 @@ export class D1OAuthTokenStore {
     return (await this.get(pluginId)) !== null;
   }
 
+  async delete(pluginId: string): Promise<void> {
+    await this.db.prepare("DELETE FROM oauth_tokens WHERE plugin_id = ?").bind(pluginId).run();
+  }
+
   async save(
     pluginId: string,
     provider: string,
