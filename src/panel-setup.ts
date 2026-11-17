@@ -95,6 +95,21 @@ export async function renderPlaybooks(runtime: PanelRuntime): Promise<string> {
   });
 }
 
+// What each secret or binding is for. Required ones break the Worker when missing; optional
+// ones are a second way to connect a source, or a feature that is off without them.
+const BINDINGS: Array<{ name: string; purpose: string; required: boolean }> = [
+  { name: "ADMIN_TOKEN", purpose: "Signs you in to this panel", required: true },
+  { name: "MCP_TOKEN", purpose: "Lets your agent through the door", required: true },
+  { name: "DB", purpose: "D1 database", required: true },
+  { name: "SCHEDULER", purpose: "Runs the hourly sync", required: true },
+  { name: "OAUTH_KV", purpose: "Keeps connector sign-ins", required: true },
+  { name: "BROWSER", purpose: "Sign in to Moodle from Sources", required: false },
+  { name: "PLUGIN_SECRET_GOOGLE_CLIENT_ID", purpose: "Gmail, with its client secret", required: false },
+  { name: "ED_API_TOKEN", purpose: "Ed, instead of Sources", required: false },
+  { name: "MOODLE_SESSION", purpose: "Moodle, instead of Sources", required: false },
+  { name: "PLUGIN_SECRET_CANVAS_TOKEN", purpose: "Canvas, instead of Sources", required: false },
+];
+
 export async function renderDeployment(runtime: PanelRuntime): Promise<string | null> {
   const info = runtime.deployment;
   if (!info) return null;
@@ -102,52 +117,130 @@ export async function renderDeployment(runtime: PanelRuntime): Promise<string | 
   const zone = safeZone(runtime.timezone);
   const csrf = await computeCsrfToken(runtime.adminToken);
   const host = new URL(info.origin).host;
-  const row = (ok: boolean, label: string, value: string, extra = "") =>
-    `<li><span class="grow">${label}</span><span class="end">${extra}<span class="state${ok ? "" : " bad"}">${value}</span></span></li>`;
-  const health = `<ul class="list">
-    ${row(info.database, "D1 database", info.database ? "Answering" : "Not answering")}
-    ${row(runtime.schedulerRunning, "Hourly scheduler", runtime.schedulerRunning ? "Running" : "Stopped", runtime.schedulerRunning ? "" : `<form method="post" action="/settings/start-scheduler" style="margin:0 10px 0 0;display:inline"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><button type="submit" class="sm">Start</button></form>`)}
-    ${row(Boolean(runtime.lastCycle.at), "Last cycle", runtime.lastCycle.at ? `${escapeHtml(relative(runtime.lastCycle.at, now))}` : "Never run")}
-    ${row(info.syncEnabled, "Source sync", info.syncEnabled ? "On" : "Off in Sources")}
-  </ul>`;
+
+  const missing = BINDINGS.filter((binding) => binding.required && info.bindings[binding.name] === false);
+  const problem = !info.database
+    ? "The database is not answering"
+    : missing.length
+      ? `${missing.map((binding) => binding.name).join(", ")} ${missing.length === 1 ? "is" : "are"} missing`
+      : !runtime.schedulerRunning
+        ? "Hourly sync is stopped"
+        : null;
+  const start = runtime.schedulerRunning
+    ? ""
+    : `<form method="post" action="/settings/start-scheduler"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><button type="submit" class="button sm">Start hourly sync</button></form>`;
+  const fact = (label: string, value: string, tone: "ok" | "bad" | "idle" = "ok") =>
+    `<div class="fact"><dt>${label}</dt><dd><span class="dot ${tone}" aria-hidden="true"></span>${value}</dd></div>`;
+  const health = `
+    <section class="card health">
+      <div class="health-head">
+        <div><h2>${problem ? escapeHtml(problem) : "Everything is running"}</h2><p class="card-sub">Checked at ${escapeHtml(formatIn(now.toISOString(), zone, { hour: "2-digit", minute: "2-digit", hour12: false }))}.</p></div>
+        ${start}
+      </div>
+      <dl class="facts">
+        ${fact("Database", info.database ? "Answering" : "Not answering", info.database ? "ok" : "bad")}
+        ${fact("Hourly sync", runtime.schedulerRunning ? "Running" : "Stopped", runtime.schedulerRunning ? "ok" : "bad")}
+        ${fact("Last sync", runtime.lastCycle.at ? escapeHtml(relative(runtime.lastCycle.at, now)) : "Never", runtime.lastCycle.at ? "ok" : "idle")}
+        ${fact("Pulling sources", info.syncEnabled ? "On" : `Off <a href="/settings#maintenance-title">change</a>`, info.syncEnabled ? "ok" : "idle")}
+      </dl>
+    </section>`;
+
+  const bindingRow = (binding: (typeof BINDINGS)[number]) => {
+    const present = info.bindings[binding.name];
+    if (present === undefined) return "";
+    const state = present ? "Set" : binding.required ? "Missing" : "Not set";
+    const tone = present ? "ok" : binding.required ? "bad" : "idle";
+    return `<li><span class="grow"><code>${escapeHtml(binding.name)}</code><span class="purpose">${escapeHtml(binding.purpose)}</span></span><span class="bind-state ${tone}"><span class="dot ${tone}" aria-hidden="true"></span>${state}</span></li>`;
+  };
+  const secrets = `
+    <section class="card">
+      <div class="card-head"><h2>Secrets and bindings</h2><p class="card-sub">Whether each is set, never its value. Set secrets with <code>wrangler secret put</code>.</p></div>
+      <div class="card-body">
+        <p class="group">Required</p><ul class="list binds">${BINDINGS.filter((binding) => binding.required).map(bindingRow).join("")}</ul>
+        <p class="group">Optional</p><ul class="list binds">${BINDINGS.filter((binding) => !binding.required).map(bindingRow).join("")}</ul>
+      </div>
+    </section>`;
+
   const endpoints = [
     ["Panel", "/panel", "Sign in with ADMIN_TOKEN"],
-    ["Door (MCP)", "/mcp", "OAuth sign-in, or Bearer MCP_TOKEN"],
-    ["Admin MCP", "/mcp/admin", "Bearer ADMIN_TOKEN only: raw items, relations, plugin manifests, custom tools"],
-    ["Health", "/health", "Public JSON: database and scheduler"],
+    ["Door", "/mcp", "For your agent: OAuth, or Bearer MCP_TOKEN"],
+    ["Admin MCP", "/mcp/admin", "Bearer ADMIN_TOKEN: raw items, relations and manifests"],
+    ["Health", "/health", "Public JSON for uptime checks"],
   ]
-    .map(([name, path, auth]) => `<li><span class="grow"><strong>${name}</strong><br><span class="muted small">${auth}</span></span><code class="end-code">${escapeHtml(host)}${path}</code></li>`)
+    .map(([name, path, auth]) => {
+      const url = `${info.origin}${path}`;
+      return `<li><span class="grow"><strong>${name}</strong><span class="purpose">${auth}</span></span><span class="end-url"><code>${escapeHtml(host)}${path}</code><button type="button" class="ghost xs" data-copy="${escapeHtml(url)}" aria-label="Copy the ${name} URL">${icon("copy")}<span>Copy</span></button></span></li>`;
+    })
     .join("");
-  const bindings = Object.entries(info.bindings)
-    .map(([name, present]) => `<li><span class="grow"><code>${escapeHtml(name)}</code></span><span class="state${present ? "" : " off"}">${present ? "Set" : "Not set"}</span></li>`)
-    .join("");
+  const endpointCard = `
+    <section class="card">
+      <div class="card-head"><h2>Endpoints</h2><p class="card-sub">Everything this Worker answers on.</p></div>
+      <div class="card-body"><ul class="list binds">${endpoints}</ul></div>
+    </section>`;
+
   const body = `
-    <div class="grid2 wide-cards">
-      <section class="card"><div class="card-head"><div class="card-title">${icon("server")}<h2>Health</h2></div><p class="card-sub">Checked when this page loaded, ${escapeHtml(formatIn(now.toISOString(), zone, { hour: "2-digit", minute: "2-digit", hour12: false }))}.</p></div><div class="card-body">${health}</div></section>
-      <section class="card"><div class="card-head"><div class="card-title">${icon("key")}<h2>Secrets and bindings</h2></div><p class="card-sub">Presence only; values never leave the Worker. Set with <code>wrangler secret put</code>.</p></div><div class="card-body"><ul class="list">${bindings}</ul></div></section>
-    </div>
-    <section class="card"><div class="card-head"><div class="card-title">${icon("connect")}<h2>Endpoints</h2></div></div><div class="card-body"><ul class="list endpoints">${endpoints}</ul></div></section>
-    <div class="grid2 wide-cards">
-      <section class="card"><div class="card-head"><div class="card-title">${icon("sync")}<h2>Upgrade</h2></div><p class="card-sub">From your clone: pull, apply new migrations, redeploy. Data and secrets carry over.</p></div><div class="card-body">
-        ${copyRow("git pull", true)}${copyRow("npm ci", true)}${copyRow("npm run upgrade", true)}
-        <p class="muted small" style="margin:10px 0 0"><a href="https://unicorn.tuuhub.com/docs/unicorn/upgrade" target="_blank" rel="noopener">Upgrade notes</a> list anything a release needs by hand.</p>
+    ${health}
+    <div class="deploy-grid">
+      <div class="col">${secrets}</div>
+      <div class="col">
+      ${endpointCard}
+      <section class="card"><div class="card-head"><h2>Upgrade</h2><p class="card-sub">From your clone. Data and secrets carry over.</p></div><div class="card-body">
+        ${copyRow("git pull && npm ci && npm run upgrade", true)}
+        <p class="muted small" style="margin:0"><a href="https://unicorn.tuuhub.com/docs/unicorn/upgrade" target="_blank" rel="noopener">Upgrade notes</a> list anything a release needs by hand.</p>
       </div></section>
-      <section class="card"><div class="card-head"><div class="card-title">${icon("download")}<h2>Your data</h2></div><p class="card-sub">Everything lives in this Worker's D1 database, on your Cloudflare account. Non-course items move to the archive after ${info.retentionDays} days.</p></div><div class="card-body">
-        <a class="button secondary" href="/panel/export" download>${icon("download")}Export memory, plans, briefs, activity (JSON)</a>
-        <p class="muted small" style="margin:12px 0 0">A full backup, synced items included: <code>wrangler d1 export unicorn --remote --output backup.sql</code></p>
+      <section class="card"><div class="card-head"><h2>Your data</h2><p class="card-sub">It all lives in this Worker's D1 database. Items outside your units move to the archive after ${info.retentionDays} days.</p></div><div class="card-body">
+        <div><a class="button ghost" href="/panel/export" download>${icon("download")}<span>Export memory, plans and briefs</span></a></div>
+        <p class="muted small" style="margin:0">For a full backup with synced items: <code>wrangler d1 export unicorn --remote --output backup.sql</code></p>
       </div></section>
+      </div>
     </div>
     <style>
-      .endpoints .grow{line-height:1.45}
-      .end-code{flex:none;font-size:12px}
-      @media (max-width:640px){.endpoints>li{flex-direction:column;align-items:flex-start}}
+      .deploy-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;align-items:start}
+      .deploy-grid .col{display:flex;flex-direction:column;gap:16px;min-width:0}
+      .deploy-grid .card{height:auto;margin:0}
+      @media (max-width:1000px){.deploy-grid{grid-template-columns:minmax(0,1fr)}}
+      .health{height:auto;margin-bottom:16px}
+      .health-head{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:20px 20px 0}
+      .health-head h2{margin:0;font-size:18px;line-height:26px;font-weight:600;letter-spacing:-.01em}
+      .health-head form{margin:0}
+      .facts{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));margin:16px 0 0;border-top:1px solid var(--separator)}
+      .fact{padding:14px 20px 16px;border-left:1px solid var(--separator)}
+      .fact:first-child{border-left:0}
+      .fact dt{color:var(--muted);font-size:12.5px}
+      .fact dd{display:flex;align-items:center;gap:7px;margin:4px 0 0;font-size:15px;font-weight:500;font-variant-numeric:tabular-nums}
+      .fact dd a{font-size:12.5px;font-weight:400;color:var(--muted)}
+      .dot{flex:none;width:7px;height:7px;border-radius:50%;background:var(--fg)}
+      .dot.idle{background:transparent;box-shadow:inset 0 0 0 1.5px var(--faint)}
+      .dot.bad{background:var(--danger)}
+      .group{margin:4px 0 2px;color:var(--muted);font-size:12.5px}
+      .group:not(:first-child){margin-top:16px}
+      .binds>li{padding:10px 0}
+      .binds .grow{display:flex;flex-direction:column;gap:2px}
+      .binds code{align-self:flex-start;font-size:12px}
+      .binds strong{font-weight:500}
+      .purpose{color:var(--muted);font-size:12.5px}
+      .bind-state{display:inline-flex;align-items:center;gap:7px;flex:none;font-size:13px}
+      .bind-state.idle{color:var(--muted)}
+      .bind-state.bad{color:var(--danger-text)}
+      .end-url{display:inline-flex;align-items:center;gap:8px;flex:none;min-width:0}
+      .end-url code{font-size:12px}
+      .end-url button{height:28px;padding:0 10px;font-size:12.5px}
+      .end-url button .i{width:14px;height:14px}
+      .card-body{gap:12px}
+      @media (max-width:760px){
+        .facts{grid-template-columns:repeat(2,minmax(0,1fr))}
+        .fact:nth-child(3){border-left:0}
+        .fact:nth-child(n+3){border-top:1px solid var(--separator)}
+        .health-head{flex-wrap:wrap}
+      }
+      @media (max-width:640px){.binds>li:has(.end-url){flex-direction:column;align-items:flex-start}}
     </style>
     ${PANEL_STYLE}${PANEL_SCRIPT}`;
   return renderPage({
     title: "unicorn — deployment",
     active: "/panel/deployment",
     heading: "Deployment",
-    subtitle: `Your Worker at ${escapeHtml(host)}, on your own Cloudflare account. Nobody else holds your tokens or data.`,
+    subtitle: `${escapeHtml(host)}, on your own Cloudflare account.`,
     body,
     wide: true,
   });
