@@ -4,6 +4,7 @@ import {
   buildSourceStatuses,
   D1SourceCredentialStore,
   decryptFields,
+  detectEdRegion,
   encryptFields,
   isSourceId,
   itemCountsByPlugin,
@@ -139,17 +140,32 @@ describe("credential resolution precedence", () => {
     it("falls back to the stored token when no env secret is set", () => {
       const options = resolveEdCredentials(sourceEnv(), ok({ token: "stored-token", region: "eu" }));
 
-      expect(options).toEqual({ token: "stored-token", region: "eu" });
+      expect(options).toEqual({ token: "stored-token", region: "eu", apiBaseUrl: "https://eu.edstem.org/api/" });
     });
 
     it("returns null when neither is configured", () => {
       expect(resolveEdCredentials(sourceEnv(), none())).toBeNull();
     });
 
-    it("defaults region to us when not stored", () => {
+    it("defaults to the AU host when no region is stored", () => {
       const options = resolveEdCredentials(sourceEnv({ ED_API_TOKEN: "env-token" }), none());
 
-      expect(options?.region).toBe("us");
+      expect(options?.region).toBe("au");
+      expect(options?.apiBaseUrl).toBe("https://edstem.org/api/");
+    });
+  });
+
+  describe("detectEdRegion", () => {
+    it("returns the region whose API accepts the token", async () => {
+      const fetcher = vi.fn<typeof fetch>(async (input) => new Response(null, { status: String(input).startsWith("https://us.edstem.org/") ? 200 : 401 }));
+
+      expect(await detectEdRegion("t", fetcher)).toBe("us");
+      expect(fetcher).toHaveBeenCalledWith("https://edstem.org/api/user", { headers: { authorization: "Bearer t" } });
+    });
+
+    it("returns null when no region accepts it, or the network fails", async () => {
+      expect(await detectEdRegion("t", vi.fn<typeof fetch>(async () => new Response(null, { status: 401 })))).toBeNull();
+      expect(await detectEdRegion("t", vi.fn<typeof fetch>(async () => Promise.reject(new Error("offline"))))).toBeNull();
     });
   });
 

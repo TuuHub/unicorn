@@ -113,7 +113,7 @@ describe("EdPlugin.pull", () => {
     expect(thread2Facets.find((facet) => facet.type === "discussion-category")).toBeUndefined();
   });
 
-  it("defaults course and thread URLs to the us region, and honors an explicit region", async () => {
+  it("defaults course and thread URLs to the au region, and honors an explicit region", async () => {
     const fetcher = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(
@@ -121,17 +121,17 @@ describe("EdPlugin.pull", () => {
       )
       .mockResolvedValueOnce(Response.json({ threads: [{ id: 1, number: 1, course_id: 100, title: "T" }] }));
     const defaultRegion = await new EdPlugin({ token: "t", fetch: fetcher }).pull();
-    expect(defaultRegion[0]?.url).toBe("https://edstem.org/us/courses/100/discussion/");
-    expect(defaultRegion[1]?.url).toBe("https://edstem.org/us/courses/100/discussion/1");
+    expect(defaultRegion[0]?.url).toBe("https://edstem.org/au/courses/100/discussion/");
+    expect(defaultRegion[1]?.url).toBe("https://edstem.org/au/courses/100/discussion/1");
 
-    const fetcherAu = vi
+    const fetcherUs = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(
         Response.json({ user: { id: 1 }, courses: [{ course: { id: 100, code: "FIT2099", status: "active" } }] }),
       )
       .mockResolvedValueOnce(Response.json({ threads: [{ id: 1, number: 1, course_id: 100, title: "T" }] }));
-    const auRegion = await new EdPlugin({ token: "t", region: "au", fetch: fetcherAu }).pull();
-    expect(auRegion[0]?.url).toBe("https://edstem.org/au/courses/100/discussion/");
-    expect(auRegion[1]?.url).toBe("https://edstem.org/au/courses/100/discussion/1");
+    const usRegion = await new EdPlugin({ token: "t", region: "us", fetch: fetcherUs }).pull();
+    expect(usRegion[0]?.url).toBe("https://edstem.org/us/courses/100/discussion/");
+    expect(usRegion[1]?.url).toBe("https://edstem.org/us/courses/100/discussion/1");
   });
 });
