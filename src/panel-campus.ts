@@ -13,7 +13,7 @@
 import type { ItemSummary, BucketGroup } from "./mcp/door-contracts";
 import { EVENT_LABELS, eventIcon, icon, sourceDot, sourceMark, sourceTile } from "./marks";
 import type { PanelRuntime } from "./panel";
-import { dayKey, empty, formatIn, PANEL_SCRIPT, PANEL_STYLE, relative, safeZone, shortAgo, SOURCE_NAMES } from "./panel-kit";
+import { dayKey, empty, formatIn, isHandedIn, PANEL_SCRIPT, PANEL_STYLE, relative, safeZone, shortAgo, SOURCE_NAMES } from "./panel-kit";
 import { computeCsrfToken } from "./settings";
 import { loadTermCourses, type TermCourse } from "./term";
 import { escapeHtml, renderPage } from "./ui";
@@ -181,7 +181,7 @@ export async function renderDeadlines(runtime: PanelRuntime, url: URL): Promise<
     runtime.repo.upcoming({ days, course, includeOverdue: true, now: at }).catch((): ItemSummary[] => []),
     loadTermCourses(runtime.db).catch((): TermCourse[] => []),
   ]);
-  const overdue = items.filter((item) => item.dueAt && Date.parse(item.dueAt) < at.getTime());
+  const overdue = items.filter((item) => item.dueAt && Date.parse(item.dueAt) < at.getTime() && !isHandedIn(item.state));
   const ahead = items.filter((item) => !item.dueAt || Date.parse(item.dueAt) >= at.getTime());
   const weeks = new Map<string, ItemSummary[]>();
   for (const item of ahead) {

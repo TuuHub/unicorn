@@ -42,6 +42,12 @@ export function timeTag(iso: string): string {
   return `<time datetime="${escapeHtml(iso)}">${escapeHtml(iso.slice(0, 16).replace("T", " "))} UTC</time>`;
 }
 
+// Submission states that mean "handed in": a past deadline in one of these is not overdue.
+const DONE_STATES = new Set(["submitted", "graded", "complete", "completed", "done", "pending_review"]);
+export function isHandedIn(state: string | null): boolean {
+  return state !== null && DONE_STATES.has(state.toLowerCase());
+}
+
 export function safeZone(zone: string): string {
   try {
     new Intl.DateTimeFormat("en-AU", { timeZone: zone });
