@@ -52,6 +52,13 @@ Use sentence case everywhere. Don't use all-caps labels.
 - Depth comes from a 1px ring (`--shadow`), not from a drop shadow. The only exception is `--shadow-lg`, for floating elements such as the board's edit bar.
 - Spacing steps are 4, 8, 12, 16, 24 and 40.
 
+## Controls
+
+- **Status dot.** 7px. Ink when a thing works, a hollow faint ring when it is off or not set up, `--danger` when it is broken. A green dot is never used for "fine": fine is the default and stays greyscale.
+- **Switch.** 40×24. Off is a `--default` track with a faint ring and a small faint knob. On is an ink track with a `--surface` knob, so it reads in both themes. On the server it is a `<button role="switch" aria-checked>` inside a form, because the CSP allows no fetch.
+- **Destructive actions** are quiet text buttons in `--danger-text` that confirm first. They never get a red fill until hovered.
+- **Errors sit where they happened.** A form that fails puts its message inside its own card and scrolls there, not only at the top of the page.
+
 ## Overview board
 
 The overview is a grid of widgets the user can rearrange. The code is in `src/panel-board.ts`.
