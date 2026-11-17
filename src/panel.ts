@@ -366,12 +366,12 @@ function renderAgenda(items: ItemSummary[], zone: string, now: Date): string {
     .join("")}</div>`;
 }
 
+// Neutral on purpose: more or fewer agent calls is neither good nor bad. Failures have their own chip.
 function trendChip(current: number, previous: number): string {
   if (!previous && !current) return "";
-  if (!previous) return `<span class="trend up" title="none the day before">new</span>`;
+  if (!previous) return `<span class="trend" title="none the day before">new</span>`;
   const change = Math.round(((current - previous) / previous) * 100);
-  const dir = change > 0 ? "up" : change < 0 ? "down" : "flat";
-  return `<span class="trend ${dir}" title="vs the day before">${change > 0 ? "↑" : change < 0 ? "↓" : ""} ${Math.abs(change)}%</span>`;
+  return `<span class="trend" title="vs the day before">${change > 0 ? "↑" : change < 0 ? "↓" : ""} ${Math.abs(change)}%</span>`;
 }
 
 function renderWeekChart(days: Array<{ day: string; calls: number; errors: number }>): string {
