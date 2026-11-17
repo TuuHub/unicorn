@@ -112,6 +112,7 @@ export const PANEL_STYLE = `<style>
 .setup-steps li.done{background:transparent;box-shadow:inset 0 0 0 1px var(--separator)}
 .setup-steps li.done p{margin-bottom:0}
 .setup-steps li.done h3{color:var(--muted)}
+@media (max-width:640px){.setup-steps li.done{display:none}}
 .setup-num{flex:none;display:grid;place-items:center;width:24px;height:24px;border-radius:999px;background:var(--surface);box-shadow:var(--shadow);font-size:12px;font-weight:600;font-variant-numeric:tabular-nums;color:var(--muted)}
 .setup-num .i{width:14px;height:14px}
 .done .setup-num{background:var(--success-soft);color:var(--success-text);box-shadow:none}

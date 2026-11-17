@@ -16,7 +16,7 @@ function escapeHtml(value: string): string {
 type IconName =
   | "overview" | "activity" | "memory" | "connect" | "sources" | "account" | "docs" | "external"
   | "arrow" | "check" | "copy" | "key" | "clock" | "sync" | "spark" | "calendar" | "units" | "agents"
-  | "signout" | "alert" | "plus" | "horn" | "changes" | "brief" | "plan" | "search" | "playbook" | "server" | "download" | "chevron";
+  | "signout" | "alert" | "plus" | "horn" | "changes" | "brief" | "plan" | "search" | "playbook" | "server" | "download" | "chevron" | "grip" | "close" | "edit";
 
 const ICON_PATHS: Record<IconName, string[]> = {
   horn: ["M12 2.5 17.5 20a5.5 2 0 0 1-11 0Z", "M8.4 14.4q3.6 1.9 7.4-.6M10.1 9q2.2 1.2 4.3-.4"],
@@ -49,6 +49,9 @@ const ICON_PATHS: Record<IconName, string[]> = {
   server: ["M4 4.5h16v6H4z", "M4 13.5h16v6H4z", "M7.5 7.5h.01M7.5 16.5h.01"],
   download: ["M12 4v11", "M7.5 10.5 12 15l4.5-4.5", "M4.5 19.5h15"],
   chevron: ["M9 6l6 6-6 6"],
+  grip: ["M9 6h.01M15 6h.01M9 12h.01M15 12h.01M9 18h.01M15 18h.01"],
+  close: ["M6.5 6.5l11 11M17.5 6.5l-11 11"],
+  edit: ["M4.5 19.5h4l10-10-4-4-10 10z", "M13 7l4 4"],
 };
 
 export function icon(name: IconName, className = "i"): string {

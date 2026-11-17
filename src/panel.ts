@@ -1,6 +1,6 @@
 // The panel (ADR-0048): the human side of unicorn. Four pages next to /settings:
 //
-//   /panel           overview — this term, what's due, what your agents did, setup checklist
+//   /panel           overview — the most urgent thing in one sentence, then the board (panel-board.ts)
 //   /panel/activity  the transparent log: every tool call (which client, which arguments,
 //                    how long, did it fail) and every source sync
 //   /panel/memory    read and edit what your agents remember about you (ADR-0047)
@@ -25,6 +25,7 @@ import { clientLabel, clientMark, clientTile, icon, sourceDot, sourceMark, sourc
 import {
   capitalize,
   copyRow,
+  isHandedIn,
   dayKey,
   empty,
   formatIn,
@@ -41,6 +42,7 @@ import {
 } from "./panel-kit";
 import {
   CAMPUS_STYLE,
+  isoWeek,
   markBriefsRead,
   recentChanges,
   renderChangeDays,
@@ -55,6 +57,8 @@ import {
   togglePlanItem,
 } from "./panel-campus";
 import { type DeploymentInfo, renderDeployment, renderExport, renderPlaybooks } from "./panel-setup";
+import { BOARD_SCRIPT, BOARD_STYLE, handleBoardPost, loadBoard, renderBoard, type WidgetContent, type WidgetId, WIDGETS } from "./panel-board";
+import { checklistProgress, listChecklistItems } from "./widgets/checklist.js";
 import { escapeHtml, htmlResponse, renderPage } from "./ui";
 
 export { relative } from "./panel-kit";
@@ -102,6 +106,7 @@ export async function handlePanel(request: Request, runtime: PanelRuntime): Prom
     }
     if (path === "/panel/briefs/read") return markBriefsRead(runtime, form, url);
     if (path === "/panel/plans/toggle") return togglePlanItem(runtime, form, url);
+    if (path === "/panel/board") return handleBoardPost(runtime.db, form, url);
     return new Response("Not found.", { status: 404 });
   }
 
@@ -151,22 +156,79 @@ export async function handlePanel(request: Request, runtime: PanelRuntime): Prom
 }
 
 // --- overview -----------------------------------------------------------------
+//
+// One sentence on top says the most urgent thing (overdue work, else the next deadline). Below
+// it, the board (panel-board.ts): widgets the student arranges, sizes and hides themselves.
 
 async function renderOverview(runtime: PanelRuntime): Promise<string> {
   const now = runtime.now ? runtime.now() : new Date();
-  const [courses, upcoming, unread, stats, recent, memory, csrf] = await Promise.all([
+  const zone = safeZone(runtime.timezone);
+  const week = isoWeek(now.toISOString(), zone);
+  const [courses, upcoming, unread, stats, recent, memory, csrf, changes, grades, plan, board] = await Promise.all([
     loadTermCourses(runtime.db).catch((): TermCourse[] => []),
-    runtime.repo.upcoming({ days: 7, includeOverdue: false, now }).catch((): ItemSummary[] => []),
+    runtime.repo.upcoming({ days: 14, includeOverdue: true, now }).catch((): ItemSummary[] => []),
     runtime.briefs.list({ unreadOnly: true, limit: 1000 }).catch(() => []),
     runtime.activity.stats(now),
     runtime.activity.list({ limit: 8 }),
     readAllMemory(runtime.memory),
     computeCsrfToken(runtime.adminToken),
+    recentChanges(runtime.db, { limit: 8 }).catch(() => []),
+    recentChanges(runtime.db, { types: ["grade.changed"], limit: 5 }).catch(() => []),
+    runtime.db
+      .prepare("SELECT content, updated_at FROM plans WHERE kind = 'weekly' AND subject = ?")
+      .bind(week)
+      .first<{ content: string; updated_at: string }>()
+      .catch(() => null),
+    loadBoard(runtime.db),
   ]);
-  const changes = await recentChanges(runtime.db, { limit: 6 }).catch(() => []);
-  const zone = safeZone(runtime.timezone);
   const totalItems = Object.values(runtime.itemCounts).reduce((sum, count) => sum + count, 0);
   const user = memory.find((view) => view.target === "user")!;
+  const overdue = upcoming.filter((item) => item.dueAt && Date.parse(item.dueAt) < now.getTime() && !isHandedIn(item.state));
+  const ahead = upcoming.filter((item) => !item.dueAt || Date.parse(item.dueAt) >= now.getTime());
+  const changes24h = changes.filter((row) => now.getTime() - Date.parse(row.created_at) < 86_400_000).length;
+
+  const content: Record<WidgetId, WidgetContent> = {
+    due: { title: WIDGETS.due, count: upcoming.length, more: { href: "/panel/due", label: "All deadlines" }, body: renderAgenda(overdue, ahead.slice(0, 12), zone, now) },
+    changes: {
+      title: WIDGETS.changes,
+      more: { href: "/panel/changes", label: "All" },
+      body: changes.length ? renderChangeDays(changes, zone, now) : empty("changes", "Nothing yet. Changes show up after each sync."),
+    },
+    units: { title: WIDGETS.units, more: { href: "/panel/units", label: "All units" }, body: renderUnitRows(courses, ahead, now) },
+    briefs: {
+      title: WIDGETS.briefs,
+      count: unread.length,
+      more: { href: "/panel/briefs", label: "Briefs" },
+      body: unread.length
+        ? `<ul class="list">${unread
+            .slice(0, 5)
+            .map((brief) => `<li><a class="grow plain brief-line" href="/panel/briefs"><span class="tile-mark sm ev ev-notice-posted">${icon("brief", "")}</span><span class="truncate">${escapeHtml(brief.title)}</span></a><span class="end">${escapeHtml(shortAgo(brief.createdAt, now))}</span></li>`)
+            .join("")}</ul>`
+        : empty("check", "You're caught up."),
+    },
+    plan: { title: WIDGETS.plan, more: { href: "/panel/plans", label: "Plans" }, body: renderPlanSummary(plan, now) },
+    grades: {
+      title: WIDGETS.grades,
+      more: { href: "/panel/changes?type=grades", label: "All" },
+      body: grades.length ? renderChangeDays(grades, zone, now) : empty("check", "No new grades."),
+    },
+    agents: { title: WIDGETS.agents, more: { href: "/panel/activity", label: "Log" }, body: renderAgentSummary(stats, now) },
+    profile: {
+      title: WIDGETS.profile,
+      more: { href: "/panel/memory", label: "Edit" },
+      body: user.entries.length
+        ? `<ul class="list profile">${user.entries
+            .slice(0, 6)
+            .map((entry) => `<li><span class="grow">${escapeHtml(entry)}</span></li>`)
+            .join("")}</ul>`
+        : empty("memory", "Empty. Ask your agent “get to know me”."),
+    },
+    calls: {
+      title: WIDGETS.calls,
+      more: { href: "/panel/activity", label: "Full log" },
+      body: recent.length ? renderRecentTable(recent, now) : empty("activity", "No agent calls yet."),
+    },
+  };
 
   const checklist = [
     {
@@ -197,174 +259,174 @@ async function renderOverview(runtime: PanelRuntime): Promise<string> {
       </div>
       <ol class="setup-steps">${checklist
         .map(
-          (step, index) => `<li class="${step.done ? "done" : ""}">
-          <span class="setup-num" aria-hidden="true">${step.done ? icon("check") : index + 1}</span>
+          (step) => `<li class="${step.done ? "done" : ""}">
+          <span class="setup-num" aria-hidden="true">${step.done ? icon("check") : ""}</span>
           <div><h3>${step.title}${step.done ? '<span class="sr-only"> (done)</span>' : ""}</h3><p>${step.text}</p>${step.done ? "" : `<a class="more" href="${step.href}">${step.cta}${icon("arrow")}</a>`}</div>
         </li>`,
         )
         .join("")}</ol>
     </section>`;
 
-  const lastSync = runtime.lastCycle.at;
-  const dueUnits = new Set(upcoming.map((item) => item.course ?? item.source)).size;
-  const stat = (iconName: Parameters<typeof icon>[0], label: string, value: string, hint: string, href: string, trend = "") =>
-    `<a class="stat" href="${href}"><div class="stat-label">${icon(iconName)}${escapeHtml(label)}</div><div class="stat-value"><span>${value}</span>${trend}</div><div class="stat-hint">${hint}</div></a>`;
-  const today = stats.daily7d.at(-1)?.calls ?? 0;
-  const yesterday = stats.daily7d.at(-2)?.calls ?? 0;
-  const callTrend = trendChip(today, yesterday);
-  const stats5 = [
-    stat("units", "Units this term", String(courses.length), escapeHtml(courses.find((course) => course.term)?.term ?? (courses.length ? "this term" : "after the first sync")), "/panel/units"),
-    stat("calendar", "Due in 7 days", String(upcoming.length), upcoming.length ? `across ${dueUnits} unit${dueUnits === 1 ? "" : "s"}` : "nothing due", "/panel/due"),
-    stat("brief", "Unread briefs", String(unread.length), "agents read these first", "/panel/briefs"),
-    stat(
-      "agents",
-      "Agent calls · 24h",
-      String(stats.toolCalls24h),
-      stats.errors24h ? `<span class="state bad">${stats.errors24h} error${stats.errors24h === 1 ? "" : "s"}</span>` : `<span class="state">no errors</span>`,
-      "/panel/activity",
-      callTrend,
-    ),
-    stat(
-      "sync",
-      "Last sync",
-      lastSync ? shortAgo(lastSync, now) : "—",
-      runtime.schedulerRunning ? `<span class="state">hourly · running</span>` : `<span class="state bad">scheduler stopped</span>`,
-      "/settings",
-    ),
-  ].join("");
-
-  const due = renderAgenda(upcoming.slice(0, 10), zone, now);
-
-  const units = courses.length
-    ? `<ul class="list">${courses
-        .map(
-          (course) => `<li>
-            <span class="grow term-row"><span class="badge course">${escapeHtml(course.code)}</span><span class="truncate">${escapeHtml(course.title ?? "")}</span></span>
-            <span class="end src-list">${course.sources.map((name) => `<span class="src-chip" title="${escapeHtml(name)}">${sourceDot(name)}${escapeHtml(name)}</span>`).join("")}</span>
-          </li>`,
-        )
-        .join("")}</ul>`
-    : empty("units", "Units appear after the first sync.");
-
-  const weekCalls = stats.daily7d.reduce((sum, day) => sum + day.calls, 0);
-  const clients = stats.clients7d.length
-    ? `<ul class="list clients">${stats.clients7d
-        .map((client) => {
-          const share = stats.clients7d[0].calls ? Math.max(4, Math.round((client.calls / stats.clients7d[0].calls) * 100)) : 0;
-          return `<li>
-            <span class="grow client-row">${clientTile(client.actor, "md")}<span class="client-info"><span class="client-top"><span class="truncate">${escapeHtml(clientName(client.actor))}</span><strong class="tabular">${client.calls}</strong></span><span class="bar" aria-hidden="true"><span style="width:${share}%"></span></span><span class="client-sub">last call ${escapeHtml(relative(client.lastAt, now))}</span></span></span>
-          </li>`;
-        })
-        .join("")}</ul>`
-    : `${empty("agents", "No calls in the last 7 days.")}<a class="more" href="/panel/connect">Connect one${icon("arrow")}</a>`;
-
-  const profile = user.entries.length
-    ? `<ul class="list profile">${user.entries
-        .slice(0, 6)
-        .map((entry) => `<li><span class="grow">${escapeHtml(entry)}</span></li>`)
-        .join("")}</ul>`
-    : empty("memory", "Empty. Ask your agent “get to know me”.");
-
-  const briefsCard = unread.length
-    ? `<section class="card" aria-labelledby="briefs-title"><div class="card-head row"><div class="card-title"><h2 id="briefs-title">Unread briefs</h2><span class="badge tabular">${unread.length}</span></div><a class="more" href="/panel/briefs">Read${icon("arrow")}</a></div><div class="card-body"><ul class="list">${unread
-        .slice(0, 4)
-        .map((brief) => `<li><a class="grow plain brief-line" href="/panel/briefs"><span class="tile-mark sm ev ev-notice-posted">${icon("brief", "")}</span><span class="truncate">${escapeHtml(brief.title)}</span></a><span class="end">${escapeHtml(shortAgo(brief.createdAt, now))}</span></li>`)
-        .join("")}</ul></div></section>`
-    : "";
-  const body = `
-    ${setup}
-    <div class="stats">${stats5}</div>
-    <div class="split">
-      <section class="card" aria-labelledby="due-title">
-        <div class="card-head row"><div class="card-title"><h2 id="due-title">Due this week</h2><span class="badge tabular">${upcoming.length}</span></div><a class="more" href="/panel/due">All deadlines${icon("arrow")}</a></div>
-        <div class="card-body">${due}</div>
-      </section>
-      <div class="col">
-        ${briefsCard}
-        <section class="card" aria-labelledby="term-title">
-          <div class="card-head row"><div class="card-title"><h2 id="term-title">This term</h2></div><a class="more" href="/panel/units">Units${icon("arrow")}</a></div>
-          <div class="card-body">${units}</div>
-        </section>
-      </div>
-    </div>
-    <div class="split even">
-      <section class="card" aria-labelledby="calls-title">
-        <div class="card-head row"><div class="card-title"><h2 id="calls-title">Agent calls</h2></div><span class="legend"><span><i class="dot accent"></i>Calls</span><span><i class="dot danger"></i>Failed</span></span></div>
-        <div class="card-body">
-          <div class="chart-stats">
-            <div><strong class="tabular">${weekCalls}</strong><span>Last 7 days</span></div>
-            <div><strong class="tabular">${today}</strong>${callTrend}<span>Today</span></div>
-            <div><strong class="tabular">${stats.errors24h}</strong><span>Failed · 24h</span></div>
-          </div>
-          ${weekCalls ? renderWeekChart(stats.daily7d) : empty("activity", "No agent calls in the last 7 days. Connect an app and ask it something.")}
-        </div>
-      </section>
-      <section class="card" aria-labelledby="agents-title">
-        <div class="card-head row"><div class="card-title"><h2 id="agents-title">Your agents</h2></div><a class="more" href="/panel/connect">Connect${icon("arrow")}</a></div>
-        <div class="card-body">${clients}</div>
-      </section>
-    </div>
-    <div class="split even">
-      <section class="card" aria-labelledby="changes-title">
-        <div class="card-head row"><div class="card-title"><h2 id="changes-title">Latest changes</h2></div><a class="more" href="/panel/changes">All changes${icon("arrow")}</a></div>
-        <div class="card-body">${changes.length ? renderChangeDays(changes, zone, now) : empty("changes", "No changes yet.")}</div>
-      </section>
-      <section class="card" aria-labelledby="knows-title">
-        <div class="card-head row"><div class="card-title"><h2 id="knows-title">Your profile</h2></div><a class="more" href="/panel/memory">Edit${icon("arrow")}</a></div>
-        <div class="card-body">${profile}</div>
-      </section>
-    </div>
-    <div class="section-label"><h2>Recent activity<span class="count tabular">${recent.length}</span></h2><a class="more" href="/panel/activity">Full log${icon("arrow")}</a></div>
-    ${recent.length ? renderRecentTable(recent, now) : `<section class="card">${empty("activity", "No activity yet.")}</section>`}
-    ${PANEL_STYLE}${CAMPUS_STYLE}
-    ${PANEL_SCRIPT}`;
-
-  const actions = `<form method="post" action="/settings/sync-now" style="margin:0"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><button type="submit" class="secondary">${icon("sync")}Sync now</button></form>`;
+  const actions = `<button type="button" class="secondary" data-board-edit>${icon("edit")}Customize</button><form method="post" action="/settings/sync-now" style="margin:0"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><button type="submit" class="secondary">${icon("sync")}Sync now</button></form>`;
 
   return renderPage({
     title: "unicorn — overview",
     active: "/panel",
-    heading: escapeHtml(longDate(now, zone)),
-    subtitle: upcoming[0]?.dueAt
-      ? `Next due ${escapeHtml(relative(upcoming[0].dueAt, now))}: ${upcoming[0].course ? `${escapeHtml(upcoming[0].course)} ` : ""}${escapeHtml(upcoming[0].title)}.`
-      : "Nothing due in the next 7 days.",
-    body,
+    heading: headline(overdue, ahead, zone, now),
+    subtitle: standfirst({ now, zone, overdue: overdue.length, aheadThisWeek: ahead.filter((item) => item.dueAt && !isHandedIn(item.state) && Date.parse(item.dueAt) - now.getTime() < 7 * 86_400_000).length, changes24h, runtime }),
+    body: `${setup}${renderBoard(board, content, csrf)}${PANEL_STYLE}${CAMPUS_STYLE}${BOARD_STYLE}${OVERVIEW_STYLE}${PANEL_SCRIPT}${BOARD_SCRIPT}`,
     wide: true,
     actions,
   });
 }
 
-function renderAgenda(items: ItemSummary[], zone: string, now: Date): string {
-  if (items.length === 0) {
-    return empty("check", "Nothing due in the next 7 days.");
+// The page's one sentence: what needs you first.
+function headline(overdue: ItemSummary[], ahead: ItemSummary[], zone: string, now: Date): string {
+  const lead = (item: ItemSummary) => `${item.course ? `<span class="badge course">${escapeHtml(item.course)}</span> ` : ""}${escapeHtml(item.title)}`;
+  if (overdue.length) {
+    const first = overdue[0];
+    const others = overdue.length > 1 ? ` <span class="h-more">and ${overdue.length - 1} more</span>` : "";
+    return `<span class="h-overdue">${lead(first)} was due ${escapeHtml(relative(first.dueAt!, now))}</span>${others}.`;
   }
+  const next = ahead.find((item) => item.dueAt && !isHandedIn(item.state));
+  if (!next) return "Nothing due in the next two weeks.";
+  return `${lead(next)} is due ${escapeHtml(dueWhen(next.dueAt!, zone, now))}.`;
+}
+
+function standfirst(input: { now: Date; zone: string; overdue: number; aheadThisWeek: number; changes24h: number; runtime: PanelRuntime }): string {
+  const { now, zone, runtime } = input;
+  const parts = [`${escapeHtml(longDate(now, zone))}.`];
+  const more = input.overdue ? input.aheadThisWeek : Math.max(0, input.aheadThisWeek - 1);
+  parts.push(more ? `${more} more due this week.` : "Nothing else due this week.");
+  if (input.changes24h) parts.push(`<a class="h-changes" href="/panel/changes">${input.changes24h} change${input.changes24h === 1 ? "" : "s"} since yesterday.</a>`);
+  const lastSync = runtime.lastCycle.at;
+  if (!runtime.schedulerRunning) parts.push(`<a class="h-bad" href="${runtime.hosted ? "/settings" : "/panel/deployment"}">Hourly sync is stopped.</a>`);
+  else if (lastSync) parts.push(`Synced ${escapeHtml(relative(lastSync, now))}.`);
+  return parts.join(" ");
+}
+
+// "today at 23:55", "tomorrow at 09:00", "on Friday at 17:00", "on 3 Dec at 23:59"
+function dueWhen(iso: string, zone: string, now: Date): string {
+  const time = formatIn(iso, zone, { hour: "2-digit", minute: "2-digit", hour12: false });
+  const day = dayKey(iso, zone);
+  if (day === dayKey(now.toISOString(), zone)) return `today at ${time}`;
+  if (day === dayKey(new Date(now.getTime() + 86_400_000).toISOString(), zone)) return `tomorrow at ${time}`;
+  if (Date.parse(iso) - now.getTime() < 6 * 86_400_000) return `on ${formatIn(iso, zone, { weekday: "long" })} at ${time}`;
+  return `on ${formatIn(iso, zone, { day: "numeric", month: "short" })} at ${time}`;
+}
+
+function renderAgenda(overdue: ItemSummary[], ahead: ItemSummary[], zone: string, now: Date): string {
+  if (overdue.length === 0 && ahead.length === 0) {
+    return empty("check", "Nothing due in the next two weeks.");
+  }
+  const row = (item: ItemSummary) => {
+    const title = item.url ? `<a class="plain" href="${escapeHtml(item.url)}" target="_blank" rel="noopener">${escapeHtml(item.title)}</a>` : escapeHtml(item.title);
+    const mark = sourceMark(item.source);
+    const left = item.dueAt ? Date.parse(item.dueAt) - now.getTime() : Infinity;
+    const urgency = isHandedIn(item.state) ? "handed-in" : left < 0 ? "late" : left < 48 * 3_600_000 ? "soon" : "";
+    return `<li class="${urgency}">
+      <span class="grow due-row"><i class="urgency" aria-hidden="true"></i>${item.course ? `<a class="badge course" href="/panel/units/${encodeURIComponent(item.course)}">${escapeHtml(item.course)}</a>` : ""}<span class="truncate" title="${escapeHtml(item.title)}${mark ? ` · ${mark.name}` : ""}">${title}</span></span>
+      <span class="end">${item.dueAt ? escapeHtml(left < 0 ? relative(item.dueAt, now) : formatIn(item.dueAt, zone, { hour: "2-digit", minute: "2-digit", hour12: false })) : ""}</span>
+    </li>`;
+  };
+  const late = overdue.length
+    ? `<div class="day late"><div class="day-label"><span class="dow">Late</span><span class="dom tabular">${overdue.length}</span></div><ul class="list">${overdue.map(row).join("")}</ul></div>`
+    : "";
   const groups = new Map<string, ItemSummary[]>();
-  for (const item of items) {
+  for (const item of ahead) {
     const key = item.dueAt ? dayKey(item.dueAt, zone) : "";
     groups.set(key, [...(groups.get(key) ?? []), item]);
   }
   const today = dayKey(now.toISOString(), zone);
-  const tomorrow = dayKey(new Date(now.getTime() + 86_400_000).toISOString(), zone);
-  return `<div class="agenda">${[...groups.entries()]
+  const days = [...groups.entries()]
     .map(([key, group]) => {
       const first = group[0].dueAt ?? now.toISOString();
       const label = key === today ? "Today" : formatIn(first, zone, { weekday: "short" });
       return `<div class="day${key === today ? " today" : ""}">
-        <div class="day-label"><span class="dow">${escapeHtml(label)}</span><span class="dom tabular">${escapeHtml(formatIn(first, zone, { day: "numeric" }))}</span><span class="mon">${escapeHtml(formatIn(first, zone, { month: "short" }))}</span></div>
-        <ul class="list">${group
-          .map((item) => {
-            const title = item.url ? `<a class="plain" href="${escapeHtml(item.url)}" target="_blank" rel="noopener">${escapeHtml(item.title)}</a>` : escapeHtml(item.title);
-            const mark = sourceMark(item.source);
-            return `<li>
-              <span class="grow due-row">${sourceDot(item.source)}${item.course ? `<span class="badge course">${escapeHtml(item.course)}</span>` : ""}<span class="truncate" title="${escapeHtml(item.title)}${mark ? ` · ${mark.name}` : ""}">${title}</span></span>
-              <span class="end">${item.dueAt ? escapeHtml(formatIn(item.dueAt, zone, { hour: "2-digit", minute: "2-digit", hour12: false })) : ""}</span>
-            </li>`;
-          })
-          .join("")}</ul>
+        <div class="day-label"><span class="dow">${escapeHtml(label)}</span><span class="dom tabular">${escapeHtml(formatIn(first, zone, { day: "numeric" }))}</span></div>
+        <ul class="list">${group.map(row).join("")}</ul>
       </div>`;
     })
-    .join("")}</div>`;
+    .join("");
+  const nowLine = `<div class="now-line" role="separator" aria-label="Now"><span>Now ${escapeHtml(formatIn(now.toISOString(), zone, { hour: "2-digit", minute: "2-digit", hour12: false }))}</span></div>`;
+  return `<div class="agenda">${late}${nowLine}${days || empty("check", "Nothing else in the next two weeks.")}</div>`;
 }
+
+function renderUnitRows(courses: TermCourse[], ahead: ItemSummary[], now: Date): string {
+  if (!courses.length) return empty("units", "Units appear after the first sync.");
+  return `<ul class="list unit-rows">${courses
+    .map((course) => {
+      const due = ahead.filter((item) => item.course === course.code && item.dueAt && !isHandedIn(item.state));
+      const next = due[0];
+      return `<li>
+        <a class="grow plain unit-line" href="/panel/units/${encodeURIComponent(course.code)}"><span class="badge course">${escapeHtml(course.code)}</span><span class="unit-text"><span class="truncate">${escapeHtml(course.title ?? "")}</span><span class="unit-next truncate">${next ? `Next: ${escapeHtml(next.title)}, ${escapeHtml(relative(next.dueAt!, now))}` : "Nothing due in two weeks"}</span></span></a>
+        <span class="end">${due.length ? `<span class="badge tabular" title="Due in the next two weeks">${due.length} due</span>` : ""}</span>
+      </li>`;
+    })
+    .join("")}</ul>`;
+}
+
+function renderPlanSummary(plan: { content: string; updated_at: string } | null, now: Date): string {
+  if (!plan) return `${empty("plan", "No plan for this week.")}<p class="hint">Ask your agent “plan my week”.</p>`;
+  const items = listChecklistItems(plan.content);
+  const { done, total } = checklistProgress(plan.content);
+  const open = items.filter((item) => !item.checked).slice(0, 5);
+  return `<div class="plan-sum">
+      <div class="plan-meter"><strong class="tabular">${done}/${total}</strong><span class="progress" aria-hidden="true"><span style="width:${total ? (done / total) * 100 : 0}%"></span></span></div>
+      ${open.length ? `<ul class="list plan-open">${open.map((item) => `<li><span class="tick-dot" aria-hidden="true"></span><span class="grow truncate">${escapeHtml(item.text.replace(/[*_`]/g, ""))}</span></li>`).join("")}</ul>` : `<p class="muted small">All done. Updated ${escapeHtml(relative(plan.updated_at, now))}.</p>`}
+    </div>`;
+}
+
+function renderAgentSummary(stats: Awaited<ReturnType<ActivityLog["stats"]>>, now: Date): string {
+  const weekCalls = stats.daily7d.reduce((sum, day) => sum + day.calls, 0);
+  if (!weekCalls) return `${empty("agents", "No agent calls in the last 7 days.")}<a class="more" href="/panel/connect">Connect one${icon("arrow")}</a>`;
+  const clients = stats.clients7d
+    .slice(0, 3)
+    .map((client) => `<li><span class="grow client-row">${clientTile(client.actor, "sm")}<span class="truncate">${escapeHtml(clientName(client.actor))}</span></span><span class="end tabular">${client.calls} · ${escapeHtml(shortAgo(client.lastAt, now))}</span></li>`)
+    .join("");
+  return `<p class="agent-line"><strong class="tabular">${weekCalls}</strong> calls in 7 days${stats.errors24h ? `, <span class="state bad">${stats.errors24h} failed today</span>` : ""}</p>
+    ${renderWeekChart(stats.daily7d)}
+    ${clients ? `<ul class="list clients-sm">${clients}</ul>` : ""}`;
+}
+
+const OVERVIEW_STYLE = `<style>
+.page-head h1{font-size:26px;line-height:34px;font-weight:600;letter-spacing:-.02em;max-width:34ch}
+.page-head h1 .badge.course{height:28px;padding:0 10px;font-size:15px;border-radius:9px;vertical-align:3px}
+.page-head .sub{margin-top:6px}
+.h-overdue{text-decoration:underline;text-decoration-color:var(--danger);text-decoration-thickness:2px;text-underline-offset:6px}
+.h-more{color:var(--muted)}
+.h-changes{color:var(--fg);text-decoration:underline;text-decoration-color:var(--faint);text-underline-offset:3px}
+.h-changes:hover,.h-bad:hover{text-decoration:underline;text-underline-offset:3px}
+.h-bad{color:var(--danger-text);font-weight:500}
+.due-row .urgency{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--faint);flex:none}
+.agenda li.soon .urgency{background:var(--warning)}
+.agenda li.late .urgency{background:var(--danger)}
+.agenda li.late .end{color:var(--danger-text)}
+.agenda li.handed-in .urgency{background:var(--success)}
+.agenda li.handed-in .truncate{color:var(--muted);text-decoration:line-through;text-decoration-color:var(--faint)}
+.day.late .day-label{background:var(--danger-soft)}
+.day.late .dow,.day.late .dom{color:var(--danger-text)}
+.now-line{display:flex;align-items:center;gap:10px;margin:2px 0 10px;font-size:11.5px;font-weight:600;color:var(--fg)}
+.now-line::after{content:"";flex:1;height:1px;background:var(--fg)}
+.day.late+.now-line{margin-top:10px}
+.unit-rows>li{padding:10px 0}
+.unit-line{display:flex;align-items:center;gap:12px;min-width:0}
+.unit-line .badge.course{min-width:72px;justify-content:center}
+.unit-text{display:flex;flex-direction:column;min-width:0}
+.unit-next{font-size:12.5px;color:var(--muted)}
+.unit-line:hover .unit-text>.truncate:first-child{text-decoration:underline;text-underline-offset:3px}
+.plan-meter{display:flex;align-items:center;gap:12px;margin-bottom:8px}
+.plan-meter strong{font-size:20px;font-weight:600;letter-spacing:-.02em}
+.plan-meter .progress{flex:1}
+.plan-open>li{padding:8px 0;gap:10px}
+.tick-dot{width:14px;height:14px;border-radius:5px;box-shadow:inset 0 0 0 1.5px var(--faint);flex:none}
+.agent-line{margin:0 0 10px;color:var(--muted)}
+.agent-line strong{color:var(--fg);font-size:20px;font-weight:600;margin-right:4px}
+.widget .chart{min-height:120px}
+.clients-sm>li{padding:8px 0}
+.clients-sm .client-row{display:flex;align-items:center;gap:10px;min-width:0}
+.clients-sm .end{color:var(--muted);font-size:12.5px}
+</style>`;
 
 // Neutral on purpose: more or fewer agent calls is neither good nor bad. Failures have their own chip.
 function trendChip(current: number, previous: number): string {
