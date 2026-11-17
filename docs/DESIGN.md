@@ -57,9 +57,22 @@ Use sentence case everywhere. Don't use all-caps labels.
 - **Status dot.** 7px. Ink when a thing works, a hollow faint ring when it is off or not set up, `--danger` when it is broken. A green dot is never used for "fine": fine is the default and stays greyscale.
 - **Switch.** 40×24. Off is a `--default` track with a faint ring and a small faint knob. On is an ink track with a `--surface` knob, so it reads in both themes. On the server it is a `<button role="switch" aria-checked>` inside a form, because the CSP allows no fetch.
 - **Destructive actions** are quiet text buttons in `--danger-text` that confirm first. They never get a red fill until hovered.
-- **Ask chip.** A line to say to the user's agent, with a spark icon. Clicking copies it. unicorn has no agent of its own, so empty states that the agent fills (plans, profile) offer the line that fills them instead of explaining how.
+- **Ask chip.** A line to say to the user's agent, with a spark icon. Clicking opens a menu: open it as a new chat in Claude or ChatGPT, or copy it. unicorn has no agent of its own, so empty states that the agent fills (plans, profile) offer the line that fills them instead of explaining how.
 - **Optical alignment.** Columns of values share one grid so they start on the same line. An icon-only button at a card's edge takes a negative margin so its glyph, not its hit area, lines up with the content.
 - **Errors sit where they happened.** A form that fails puts its message inside its own card and scrolls there, not only at the top of the page.
+- **Confirmations are toasts.** "Saved", "Removed Ed" and the like float in at the bottom right, show for four seconds and leave. The flag that triggered one is dropped from the address so a reload doesn't repeat it.
+
+## Motion
+
+The design skills in `.agents/skills` (from `../site`) set the rules; these are the ones the panel uses.
+
+- Two curves, both tokens in `:root`: `--ease-out` (`cubic-bezier(.23,1,.32,1)`) for anything entering or responding to a press, `--ease-in-out` for movement on screen. Never `ease-in`, never `transition: all`.
+- Under 300ms. Press feedback 160ms, menus 160ms, reveals 200ms, toasts 260ms in and 200ms out.
+- Buttons scale to `.96` on press. The switch knob slides as its form submits.
+- Menus scale from `.97` at their trigger. `<details>` content fades down 4px.
+- Charts grow once on load, staggered 30–40ms per bar. Nothing else animates on load.
+- Nothing that happens tens of times a minute animates: hovers change color only.
+- Under `prefers-reduced-motion` everything stops except the toast, which fades instead of sliding so it still leaves.
 
 ## Overview board
 

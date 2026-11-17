@@ -598,14 +598,12 @@ async function renderActivity(runtime: PanelRuntime, url: URL): Promise<string> 
   ).join("");
   const errorsToggle = `<div class="filters"><a href="${query({ status: errorsOnly ? undefined : "error", before: undefined })}" aria-current="${errorsOnly}">${icon("alert")}Errors only</a></div>`;
   const older = entries.length === 50 ? `<div class="pager"><a class="button secondary" href="${query({ before: String(entries.at(-1)!.id) })}">Older${icon("arrow")}</a></div>` : "";
-  const topMax = stats.topTools7d[0]?.calls ?? 1;
-  const top = stats.topTools7d.length
-    ? `<section class="card" aria-labelledby="top-title"><div class="card-head row"><div class="card-title">${icon("spark")}<h2 id="top-title">Most used this week</h2></div></div><div class="card-body"><ul class="list tools">${stats.topTools7d
-        .map(
-          (tool) =>
-            `<li><span class="grow"><span class="tool">${escapeHtml(tool.name)}</span><span class="bar" aria-hidden="true"><span style="width:${Math.max(4, Math.round((tool.calls / topMax) * 100))}%"></span></span></span><span class="end tabular">${tool.calls}</span></li>`,
-        )
-        .join("")}</ul></div></section>`
+  const weekCalls = stats.daily7d.reduce((sum, day) => sum + day.calls, 0);
+  const week = weekCalls
+    ? `<div class="act-week">
+        <section class="card" aria-labelledby="week-title"><div class="card-head"><h2 id="week-title">This week</h2><p class="card-sub"><span class="tabular">${weekCalls}</span> agent call${weekCalls === 1 ? "" : "s"} in 7 days</p></div><div class="card-body">${renderWeekChart(stats.daily7d)}</div></section>
+        <section class="card" aria-labelledby="top-title"><div class="card-head"><h2 id="top-title">Most used tools</h2><p class="card-sub">Share of this week's calls</p></div><div class="card-body">${renderTopTools(stats.topTools7d)}</div></section>
+      </div>`
     : "";
   const statStrip = `<div class="stats">
       <div class="stat"><div class="stat-label">${icon("agents")}Agent calls · 24h</div><div class="stat-value">${stats.toolCalls24h}</div><div class="stat-hint">${stats.errors24h ? `<span class="state bad">${stats.errors24h} failed</span>` : '<span class="state">no errors</span>'}</div></div>
@@ -618,11 +616,10 @@ async function renderActivity(runtime: PanelRuntime, url: URL): Promise<string> 
 
   const body = `
     ${statStrip}
+    ${week}
     <div class="toolbar"><div class="filters">${filters}</div>${errorsToggle}</div>
     ${entries.length ? renderActivityTable(entries, now) : `<section class="card">${empty("activity", "Nothing matches.")}</section>`}
     ${older}
-    <div style="height:16px"></div>
-    ${top}
     ${PANEL_STYLE}
     ${PANEL_SCRIPT}`;
   return renderPage({
@@ -633,6 +630,21 @@ async function renderActivity(runtime: PanelRuntime, url: URL): Promise<string> 
     body,
     wide: true,
   });
+}
+
+// One row per tool. The fill behind each row is its count against the busiest tool, so the
+// leader always spans the row; the number on the right is its share of all calls.
+function renderTopTools(tools: Array<{ name: string; calls: number }>): string {
+  if (!tools.length) return empty("spark", "No tool calls this week.");
+  const peak = tools[0].calls || 1;
+  const total = tools.reduce((sum, tool) => sum + tool.calls, 0) || 1;
+  return `<ol class="ranks">${tools
+    .slice(0, 6)
+    .map(
+      (tool, index) =>
+        `<li style="--fill:${Math.max(6, Math.round((tool.calls / peak) * 100))}%;--i:${index}"><span class="rank-name">${escapeHtml(tool.name)}</span><span class="rank-calls tabular">${tool.calls}</span><span class="rank-share tabular">${Math.round((tool.calls / total) * 100)}%</span></li>`,
+    )
+    .join("")}</ol>`;
 }
 
 function renderActivityTable(entries: ActivityEntry[], now: Date): string {
