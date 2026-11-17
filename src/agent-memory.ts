@@ -291,21 +291,6 @@ export async function writeMemory(
   throw new Error("Memory write conflicted three times.");
 }
 
-/** Replaces a whole target's content (the panel's edit form). Same limit and screening rules. */
-export async function replaceMemory(store: MemoryStore, target: MemoryTarget, content: string, expectedUpdatedAt?: string): Promise<MemoryView> {
-  const spec = MEMORY_TARGETS[target];
-  const entries = splitEntries(content, spec.split);
-  for (const entry of entries) {
-    screenEntry(entry);
-  }
-  const joined = joinEntries(entries, spec.split);
-  if (joined.length > spec.limit) {
-    throw new MemoryOperationError("over_limit", `${spec.title} is ${joined.length}/${spec.limit} chars — shorten it before saving.`);
-  }
-  const saved = await store.save(spec.domain, joined, expectedUpdatedAt);
-  return toView(spec, saved);
-}
-
 /** The frozen snapshot the door puts in its MCP `instructions` at session start. */
 export function renderMemorySnapshot(views: MemoryView[], now: Date = new Date()): string {
   const blocks = views.map((view) => {
@@ -370,6 +355,7 @@ export async function trackMemoryWrite<T>(
   target: MemoryTarget,
   who: { actor: string | null; via: string | null },
   write: () => Promise<T>,
+  extra: Record<string, unknown> = {},
 ): Promise<T> {
   const spec = MEMORY_TARGETS[target];
   const before = splitEntries((await store.get(spec.domain)).content, spec.split);
@@ -378,7 +364,7 @@ export async function trackMemoryWrite<T>(
     const after = splitEntries((await store.get(spec.domain)).content, spec.split);
     const { added, removed } = diffEntries(before, after);
     if (added.length || removed.length) {
-      await activity.record({ kind: "memory", name: target, status: "ok", actor: who.actor, via: who.via, detail: { added, removed } }).catch(() => undefined);
+      await activity.record({ kind: "memory", name: target, status: "ok", actor: who.actor, via: who.via, detail: { added, removed, ...extra } }).catch(() => undefined);
     }
   }
   return result;

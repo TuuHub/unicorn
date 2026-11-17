@@ -13,10 +13,9 @@
 
 import type { GrantSummary } from "@cloudflare/workers-oauth-provider";
 import type { ActivityEntry, ActivityKind, ActivityLog } from "./activity";
-import { MEMORY_TARGETS, MemoryOperationError, type MemoryTarget, type MemoryView, readAllMemory, replaceMemory } from "./agent-memory";
+import { type MemoryTarget, readAllMemory } from "./agent-memory";
 import type { BriefStore } from "./briefs";
 import type { MemoryStore } from "./memory";
-import { MemoryConflictError } from "./memory";
 import type { ItemSummary } from "./mcp/door-contracts";
 import type { DoorRepository } from "./mcp/door-repository";
 import { computeCsrfToken, type LastCycleInfo } from "./settings";
@@ -24,14 +23,12 @@ import { loadTermCourses, type TermCourse } from "./term";
 import { clientLabel, clientMark, clientTile, icon, sourceDot, sourceMark, sourceTile } from "./marks";
 import {
   askChip,
-  capitalize,
   copyRow,
   emptyAsk,
   isHandedIn,
   dayKey,
   empty,
   formatIn,
-  MEMORY_PURPOSE,
   memoryTitle,
   PANEL_SCRIPT,
   PANEL_STYLE,
@@ -39,7 +36,6 @@ import {
   safeZone,
   shortAgo,
   SOURCE_NAMES,
-  timeTag,
 } from "./panel-kit";
 import {
   CAMPUS_STYLE,
@@ -57,6 +53,7 @@ import {
   renderUnits,
   togglePlanItem,
 } from "./panel-campus";
+import { renderMemoryPage, saveMemoryEntry, undoMemoryChange } from "./panel-memory";
 import { type DeploymentInfo, renderDeployment, renderExport, renderPlaybooks } from "./panel-setup";
 import { BOARD_SCRIPT, BOARD_STYLE, handleBoardPost, loadBoard, renderBoard, type WidgetContent, type WidgetId, WIDGETS } from "./panel-board";
 import { checklistProgress, listChecklistItems } from "./widgets/checklist.js";
@@ -101,9 +98,10 @@ export async function handlePanel(request: Request, runtime: PanelRuntime): Prom
     if (String(form.get("csrf") ?? "") !== (await computeCsrfToken(runtime.adminToken))) {
       return new Response("Invalid form token. Reload the page and try again.", { status: 403 });
     }
+    if (path === "/panel/memory/undo") return undoMemoryChange(runtime, form, url);
     const memoryMatch = path.match(/^\/panel\/memory\/(user|notes|corrections)$/);
     if (memoryMatch) {
-      return saveMemory(runtime, memoryMatch[1] as MemoryTarget, form, url);
+      return saveMemoryEntry(runtime, memoryMatch[1] as MemoryTarget, form, url);
     }
     if (path === "/panel/briefs/read") return markBriefsRead(runtime, form, url);
     if (path === "/panel/plans/toggle") return togglePlanItem(runtime, form, url);
@@ -682,8 +680,10 @@ function summarize(entry: ActivityEntry): string {
     return `pulled ${detail.pulled ?? 0} · new ${detail.created ?? 0} · changed ${detail.updated ?? 0} · events ${detail.events ?? 0}`;
   }
   if (entry.kind === "memory") {
-    const added = Array.isArray(detail.added) ? (detail.added as string[]).join(", ") : "";
-    return detail.status ? `${detail.status}${added ? `: +${added}` : ""}` : String(detail.via ?? "");
+    const added = Array.isArray(detail.added) ? (detail.added as string[]) : [];
+    const removed = Array.isArray(detail.removed) ? (detail.removed as string[]) : [];
+    if (detail.status) return `${detail.status}${added.length ? `: +${added.join(", ")}` : ""}`;
+    return [added.length ? `${added.length} added` : "", removed.length ? `${removed.length} removed` : ""].filter(Boolean).join(", ");
   }
   const args = detail.args && typeof detail.args === "object" ? Object.entries(detail.args as Record<string, unknown>) : [];
   const argText = args
@@ -693,66 +693,6 @@ function summarize(entry: ActivityEntry): string {
   const results = typeof detail.results === "number" ? ` → ${detail.results}` : "";
   return `${argText}${results}`.slice(0, 120);
 }
-
-// --- memory -------------------------------------------------------------------
-
-async function renderMemoryPage(runtime: PanelRuntime, url: URL): Promise<string> {
-  const views = await readAllMemory(runtime.memory);
-  const csrf = await computeCsrfToken(runtime.adminToken);
-  const saved = url.searchParams.get("saved");
-  const error = url.searchParams.get("error");
-  const notes = await Promise.all(views.map(async (view) => ({ view, note: await runtime.memory.get(MEMORY_TARGETS[view.target].domain) })));
-  const cards = notes.map(({ view, note }) => renderMemoryCard(view, note.content, note.updatedAt, csrf)).join("");
-  const body = `
-    ${saved ? `<p class="notice" role="status">Saved ${escapeHtml(memoryTitle(saved))}. Your agents see it from their next session.</p>` : ""}
-    ${error ? `<p class="notice error" role="alert">${escapeHtml(error)}</p>` : ""}
-    <div class="grid2 wide-cards">${cards}</div>
-    ${PANEL_STYLE}
-    ${PANEL_SCRIPT}`;
-  return renderPage({
-    title: "unicorn — memory",
-    active: "/panel/memory",
-    heading: "Memory",
-    subtitle: "Every agent session, in any app, reads all of this first. Agents keep it current; you can correct it here.",
-    body,
-    wide: true,
-  });
-}
-
-function renderMemoryCard(view: MemoryView, content: string, updatedAt: string, csrf: string): string {
-  const warn = view.usagePercent >= 80 ? " warn" : "";
-  const meter = `<div class="mem-meta"><span class="tabular" title="characters used of the limit">${view.chars.toLocaleString("en")} / ${view.limit.toLocaleString("en")}</span><span>${view.updatedAt ? `updated ${timeTag(view.updatedAt)}` : "empty"}</span></div><div class="meter${warn}" role="meter" aria-valuemin="0" aria-valuemax="${view.limit}" aria-valuenow="${view.chars}" aria-label="${escapeHtml(memoryTitle(view.title))} usage"><span style="width:${Math.min(view.usagePercent, 100)}%"></span></div>`;
-  const editor = view.writable
-    ? `<form method="post" action="/panel/memory/${view.target}">
-        <input type="hidden" name="csrf" value="${escapeHtml(csrf)}">
-        <input type="hidden" name="updatedAt" value="${escapeHtml(content ? updatedAt : "")}">
-        <textarea name="content" aria-label="${escapeHtml(view.title)}" maxlength="${view.limit + 200}" placeholder="Empty. Your agent fills this in as it learns.">${escapeHtml(content)}</textarea>
-        <div class="mem-actions"><span class="muted small">${view.entries.length} entr${view.entries.length === 1 ? "y" : "ies"} · a line with only <code>§</code> separates them</span><button type="submit">Save</button></div>
-      </form>`
-    : `<pre>${escapeHtml(content || "(empty — filled after the first sync)")}</pre><p class="muted small" style="margin:10px 0 0">If it's wrong, tell your agent; it records the fix in Notes.</p>`;
-  const tag = view.writable ? "" : `<span class="badge">Read-only</span>`;
-  return `<section class="card"><div class="card-head row"><div><h2>${escapeHtml(memoryTitle(view.title))}</h2><p class="card-sub">${escapeHtml(MEMORY_PURPOSE[view.target] ?? capitalize(view.purpose))}</p></div>${tag}</div><div class="card-body">${meter}${editor}</div></section>`;
-}
-
-async function saveMemory(runtime: PanelRuntime, target: MemoryTarget, form: FormData, url: URL): Promise<Response> {
-  const content = String(form.get("content") ?? "").replace(/\r\n/g, "\n");
-  const updatedAt = String(form.get("updatedAt") ?? "") || undefined;
-  const back = (query: string) => new Response(null, { status: 303, headers: { location: new URL(`/panel/memory?${query}`, url).toString() } });
-  try {
-    await replaceMemory(runtime.memory, target, content, updatedAt);
-    await runtime.activity.record({ kind: "memory", name: target, status: "ok", via: "panel", detail: { chars: content.length } }).catch(() => undefined);
-    return back(`saved=${encodeURIComponent(MEMORY_TARGETS[target].title)}`);
-  } catch (error) {
-    const message =
-      error instanceof MemoryOperationError
-        ? error.message
-        : error instanceof MemoryConflictError
-          ? "An agent changed this memory while you were editing. Your edit was not saved — reload to see its version."
-          : "Memory could not be saved.";
-    return back(`error=${encodeURIComponent(message)}`);
-  }
-}
-
 
 // --- connect ------------------------------------------------------------------
 
