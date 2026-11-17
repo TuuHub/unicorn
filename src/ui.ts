@@ -156,7 +156,22 @@ h1{margin:0;font-size:20px;line-height:28px;font-weight:600;letter-spacing:-.01e
 .page-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .foot{margin-top:40px;display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;color:var(--muted);font-size:12.5px}
 .foot a:hover{color:var(--fg)}
-@media (max-width:900px){
+/* tablets: the sidebar folds to an icon rail, so every page and the sign-out stay one tap away */
+@media (min-width:641px) and (max-width:900px){
+  .shell{grid-template-columns:64px minmax(0,1fr)}
+  .side{align-items:center;padding:12px 10px}
+  .brand{order:-2;padding:6px 0}.brand-text{display:none}
+  .side-search{display:none}
+  .search-m{order:-1;display:grid;place-items:center;flex:none;width:44px;height:36px;border-radius:12px;color:var(--muted)}
+  .search-m:hover{background:color-mix(in oklab,var(--default) 70%,transparent)}
+  .search-m .i{width:18px;height:18px}
+  .nav{align-items:center}
+  .nav-group{width:28px;height:1px;margin:10px 0;overflow:hidden;color:transparent;background:color-mix(in oklab,var(--fg) 12%,transparent)}
+  .nav-group:first-child{display:none}
+  .nav a,.side-foot a,.side-foot button{width:44px;justify-content:center;padding:0}
+  .nav a span,.side-foot span,.side-foot .ext{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+}
+@media (max-width:640px){
   .shell{display:block}
   .side{position:sticky;z-index:20;height:auto;flex-direction:row;align-items:center;gap:6px;padding:8px 10px;box-shadow:inset 0 -1px 0 rgb(0 0 0/.08);background:color-mix(in srgb,var(--bg) 88%,transparent);-webkit-backdrop-filter:blur(16px) saturate(1.6);backdrop-filter:blur(16px) saturate(1.6)}
   .brand{padding:0}.brand-text{display:none}.brand-mark{width:30px;height:30px}
@@ -164,9 +179,13 @@ h1{margin:0;font-size:20px;line-height:28px;font-weight:600;letter-spacing:-.01e
   .nav::-webkit-scrollbar{display:none}
   .nav a{height:32px;padding:0 10px;white-space:nowrap;gap:6px}
   .nav a .i{width:16px;height:16px}
-  .nav-group,.side-foot,.side-search{display:none}
+  .nav-group,.side-search,.side-foot a{display:none}
   .search-m{display:grid;place-items:center;flex:none;width:32px;height:32px;border-radius:999px;background:var(--default)}
   .search-m .i{width:16px;height:16px}
+  .side-foot{flex:none;margin:0}
+  .side-foot button{width:32px;height:32px;justify-content:center;padding:0;border-radius:999px;background:var(--default)}
+  .side-foot button .i{width:16px;height:16px}
+  .side-foot span{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
   .main{padding:16px 14px 40px}
 }
 
@@ -263,10 +282,7 @@ a.stat:hover{box-shadow:var(--shadow-lg)}
 .chip.accent,.badge.tool{background:var(--accent-soft);color:var(--accent-text)}
 .badge.course{background:var(--default);color:var(--fg);font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:.01em}
 a.badge.course:hover{background:var(--default-hover)}
-.trend{display:inline-flex;align-items:center;gap:2px;height:20px;padding:0 6px;border-radius:999px;font-size:12px;font-weight:500;letter-spacing:0}
-.trend.up{background:var(--success-soft);color:var(--success-text)}
-.trend.down{background:var(--danger-soft);color:var(--danger-text)}
-.trend.flat{background:var(--default);color:var(--muted)}
+.trend{display:inline-flex;align-items:center;gap:2px;height:20px;padding:0 6px;border-radius:999px;background:var(--default);color:var(--muted);font-size:12px;font-weight:500;letter-spacing:0}
 .tile-mark{display:inline-grid;place-items:center;flex:none;width:32px;height:32px;border-radius:999px;background:var(--surface-2);color:var(--fg)}
 .tile-mark svg{width:16px;height:16px}
 .tile-mark.sm{width:24px;height:24px}
@@ -378,7 +394,7 @@ div.notice{display:block;font-weight:400}
 
 function renderNav(active: string): string {
   const link = (page: NavLink) =>
-    `<a href="${page.path}"${page.path === active ? ' aria-current="page"' : ""}>${page.icon ? icon(page.icon) : ""}<span>${page.label}</span></a>`;
+    `<a href="${page.path}" title="${page.label}"${page.path === active ? ' aria-current="page"' : ""}>${page.icon ? icon(page.icon) : ""}<span>${page.label}</span></a>`;
   const groups = [...NAV_GROUPS, { label: "Setup", links: setupNav }];
   return groups.map((group) => `<p class="nav-group">${group.label}</p>${group.links.map(link).join("")}`).join("");
 }
@@ -448,9 +464,9 @@ export function renderPage(options: PageOptions): string {
       <nav class="nav" aria-label="Dashboard">${renderNav(options.active)}</nav>
       <a class="search-m" href="/panel/search" aria-label="Search">${icon("search")}</a>
       <div class="side-foot">
-        <a href="${DOCS}" target="_blank" rel="noopener">${icon("docs")}Docs${ext}</a>
-        <a href="${SITE}" target="_blank" rel="noopener">${icon("horn")}unicorn.tuuhub.com${ext}</a>
-        <form method="post" action="/logout"><button type="submit">${icon("signout")}Sign out</button></form>
+        <a href="${DOCS}" target="_blank" rel="noopener" title="Docs">${icon("docs")}<span>Docs</span>${ext}</a>
+        <a href="${SITE}" target="_blank" rel="noopener" title="unicorn.tuuhub.com">${icon("horn")}<span>unicorn.tuuhub.com</span>${ext}</a>
+        <form method="post" action="/logout"><button type="submit" title="Sign out">${icon("signout")}<span>Sign out</span></button></form>
       </div>
     </aside>
     <main class="main${options.wide ? " wide" : ""}"><div class="inner">
