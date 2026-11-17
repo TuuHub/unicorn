@@ -25,7 +25,7 @@
     "server:build": "node scripts/build-server.mjs",
     "server:start": "node dist/server.mjs",
     "server:dev": "npm run server:build && UNICORN_PUBLIC_URL=http://localhost:8787 UNICORN_SECRET=dev-secret-dev-secret-dev-secret-0000 node dist/server.mjs",
-    "seed:local": "esbuild scripts/seed-local.ts --bundle --platform=node --format=esm --packages=external --log-level=warning --outfile=.wrangler/seed-local.mjs && node .wrangler/seed-local.mjs"
+    "seed:local": "esbuild scripts/seed-local.ts --bundle --platform=node --format=esm --packages=external --log-level=warning --outfile=.wrangler/seed-local.mjs && TZ=Australia/Melbourne node .wrangler/seed-local.mjs"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20261021.1",
