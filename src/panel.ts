@@ -29,7 +29,6 @@ import {
   dayKey,
   empty,
   formatIn,
-  longDate,
   MEMORY_PURPOSE,
   memoryTitle,
   PANEL_SCRIPT,
@@ -185,7 +184,6 @@ async function renderOverview(runtime: PanelRuntime): Promise<string> {
   const user = memory.find((view) => view.target === "user")!;
   const overdue = upcoming.filter((item) => item.dueAt && Date.parse(item.dueAt) < now.getTime() && !isHandedIn(item.state));
   const ahead = upcoming.filter((item) => !item.dueAt || Date.parse(item.dueAt) >= now.getTime());
-  const changes24h = changes.filter((row) => now.getTime() - Date.parse(row.created_at) < 86_400_000).length;
 
   const content: Record<WidgetId, WidgetContent> = {
     due: { title: WIDGETS.due, count: upcoming.length, more: { href: "/panel/due", label: "All deadlines" }, body: renderAgenda(overdue, ahead.slice(0, 12), zone, now) },
@@ -267,52 +265,67 @@ async function renderOverview(runtime: PanelRuntime): Promise<string> {
         .join("")}</ol>
     </section>`;
 
-  const actions = `<button type="button" class="secondary" data-board-edit>${icon("edit")}Customize</button><form method="post" action="/settings/sync-now" style="margin:0"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><button type="submit" class="secondary">${icon("sync")}Sync now</button></form>`;
+  const syncState = runtime.schedulerRunning
+    ? ""
+    : `<a class="sync-stopped" href="${runtime.hosted ? "/settings" : "/panel/deployment"}"><span class="dot" aria-hidden="true"></span>Sync stopped</a>`;
+  const actions = `${syncState}<button type="button" class="secondary" data-board-edit>${icon("edit")}Customize</button><form method="post" action="/settings/sync-now" style="margin:0"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><button type="submit" class="secondary">${icon("sync")}Sync now</button></form>`;
 
   return renderPage({
     title: "unicorn — overview",
     active: "/panel",
     heading: headline(overdue, ahead, zone, now),
-    subtitle: standfirst({ now, zone, overdue: overdue.length, aheadThisWeek: ahead.filter((item) => item.dueAt && !isHandedIn(item.state) && Date.parse(item.dueAt) - now.getTime() < 7 * 86_400_000).length, changes24h, runtime }),
+    subtitle: standfirst({ now, zone, overdue, ahead }),
     body: `${setup}${renderBoard(board, content, csrf)}${PANEL_STYLE}${CAMPUS_STYLE}${BOARD_STYLE}${OVERVIEW_STYLE}${PANEL_SCRIPT}${BOARD_SCRIPT}`,
     wide: true,
     actions,
   });
 }
 
-// The page's one sentence: what needs you first.
+// The page's one line: what needs you first. The unit, time and the rest go in the subtitle.
 function headline(overdue: ItemSummary[], ahead: ItemSummary[], zone: string, now: Date): string {
-  const lead = (item: ItemSummary) => `${item.course ? `<span class="badge course">${escapeHtml(item.course)}</span> ` : ""}${escapeHtml(item.title)}`;
   if (overdue.length) {
     const first = overdue[0];
-    const others = overdue.length > 1 ? ` <span class="h-more">and ${overdue.length - 1} more</span>` : "";
-    return `<span class="h-overdue">${lead(first)} was due ${escapeHtml(relative(first.dueAt!, now))}</span>${others}.`;
+    return `<span class="h-overdue">${escapeHtml(first.title)}</span> is ${escapeHtml(lateBy(first.dueAt!, now))} late`;
   }
-  const next = ahead.find((item) => item.dueAt && !isHandedIn(item.state));
-  if (!next) return "Nothing due in the next two weeks.";
-  return `${lead(next)} is due ${escapeHtml(dueWhen(next.dueAt!, zone, now))}.`;
+  const next = nextDue(ahead);
+  if (!next) return "Nothing due in the next two weeks";
+  return `${escapeHtml(next.title)}, due ${escapeHtml(dueDay(next.dueAt!, zone, now))}`;
 }
 
-function standfirst(input: { now: Date; zone: string; overdue: number; aheadThisWeek: number; changes24h: number; runtime: PanelRuntime }): string {
-  const { now, zone, runtime } = input;
-  const parts = [`${escapeHtml(longDate(now, zone))}.`];
-  const more = input.overdue ? input.aheadThisWeek : Math.max(0, input.aheadThisWeek - 1);
-  parts.push(more ? `${more} more due this week.` : "Nothing else due this week.");
-  if (input.changes24h) parts.push(`<a class="h-changes" href="/panel/changes">${input.changes24h} change${input.changes24h === 1 ? "" : "s"} since yesterday.</a>`);
-  const lastSync = runtime.lastCycle.at;
-  if (!runtime.schedulerRunning) parts.push(`<a class="h-bad" href="${runtime.hosted ? "/settings" : "/panel/deployment"}">Hourly sync is stopped.</a>`);
-  else if (lastSync) parts.push(`Synced ${escapeHtml(relative(lastSync, now))}.`);
-  return parts.join(" ");
+function standfirst(input: { now: Date; zone: string; overdue: ItemSummary[]; ahead: ItemSummary[] }): string {
+  const { now, zone, overdue, ahead } = input;
+  const weekAhead = ahead.filter((item) => item.dueAt && !isHandedIn(item.state) && Date.parse(item.dueAt) - now.getTime() < 7 * 86_400_000);
+  const lead = overdue[0] ?? nextDue(ahead);
+  const parts: string[] = [];
+  if (lead?.dueAt) {
+    const time = formatIn(lead.dueAt, zone, { hour: "2-digit", minute: "2-digit", hour12: false });
+    parts.push(`${lead.course ? `${escapeHtml(lead.course)} at ` : "At "}${escapeHtml(time)}.`);
+  }
+  if (overdue.length > 1) parts.push(`${overdue.length - 1} more overdue.`);
+  const more = overdue.length ? weekAhead.length : Math.max(0, weekAhead.length - 1);
+  parts.push(more ? `${more} more due this week.` : lead ? "Nothing else this week." : "");
+  return parts.filter(Boolean).join(" ");
 }
 
-// "today at 23:55", "tomorrow at 09:00", "on Friday at 17:00", "on 3 Dec at 23:59"
-function dueWhen(iso: string, zone: string, now: Date): string {
-  const time = formatIn(iso, zone, { hour: "2-digit", minute: "2-digit", hour12: false });
+function nextDue(ahead: ItemSummary[]): ItemSummary | undefined {
+  return ahead.find((item) => item.dueAt && !isHandedIn(item.state));
+}
+
+// "3 days", "5 hours"
+function lateBy(iso: string, now: Date): string {
+  const hours = Math.max(1, Math.round((now.getTime() - Date.parse(iso)) / 3_600_000));
+  if (hours < 48) return `${hours} hour${hours === 1 ? "" : "s"}`;
+  const days = Math.round(hours / 24);
+  return `${days} days`;
+}
+
+// "today", "tomorrow", "Friday", "3 Dec"
+function dueDay(iso: string, zone: string, now: Date): string {
   const day = dayKey(iso, zone);
-  if (day === dayKey(now.toISOString(), zone)) return `today at ${time}`;
-  if (day === dayKey(new Date(now.getTime() + 86_400_000).toISOString(), zone)) return `tomorrow at ${time}`;
-  if (Date.parse(iso) - now.getTime() < 6 * 86_400_000) return `on ${formatIn(iso, zone, { weekday: "long" })} at ${time}`;
-  return `on ${formatIn(iso, zone, { day: "numeric", month: "short" })} at ${time}`;
+  if (day === dayKey(now.toISOString(), zone)) return "today";
+  if (day === dayKey(new Date(now.getTime() + 86_400_000).toISOString(), zone)) return "tomorrow";
+  if (Date.parse(iso) - now.getTime() < 6 * 86_400_000) return formatIn(iso, zone, { weekday: "long" });
+  return formatIn(iso, zone, { day: "numeric", month: "short" });
 }
 
 function renderAgenda(overdue: ItemSummary[], ahead: ItemSummary[], zone: string, now: Date): string {
@@ -390,14 +403,12 @@ function renderAgentSummary(stats: Awaited<ReturnType<ActivityLog["stats"]>>, no
 }
 
 const OVERVIEW_STYLE = `<style>
-.page-head h1{font-size:26px;line-height:34px;font-weight:600;letter-spacing:-.02em;max-width:34ch}
-.page-head h1 .badge.course{height:28px;padding:0 10px;font-size:15px;border-radius:9px;vertical-align:3px}
+.page-head h1{font-size:24px;line-height:32px;font-weight:600;letter-spacing:-.02em}
 .page-head .sub{margin-top:6px}
+.sync-stopped{display:inline-flex;align-items:center;gap:8px;height:36px;padding:0 12px;border-radius:999px;color:var(--fg);font-size:14px;font-weight:500}
+.sync-stopped:hover{background:var(--default)}
+.sync-stopped .dot{width:7px;height:7px;border-radius:50%;background:var(--danger)}
 .h-overdue{text-decoration:underline;text-decoration-color:var(--danger);text-decoration-thickness:2px;text-underline-offset:6px}
-.h-more{color:var(--muted)}
-.h-changes{color:var(--fg);text-decoration:underline;text-decoration-color:var(--faint);text-underline-offset:3px}
-.h-changes:hover,.h-bad:hover{text-decoration:underline;text-underline-offset:3px}
-.h-bad{color:var(--danger-text);font-weight:500}
 .due-row .urgency{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--faint);flex:none}
 .agenda li.soon .urgency{background:var(--warning)}
 .agenda li.late .urgency{background:var(--danger)}
