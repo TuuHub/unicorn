@@ -257,7 +257,7 @@ h3{margin:0;font-size:14px;font-weight:600}
 .section-label .count{color:var(--muted);font-weight:500;margin-left:6px;font-size:13px}
 .rows>*{border-top:1px solid var(--separator)}
 .rows>:first-child{border-top:0}
-.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(360px,100%),1fr));gap:16px;align-items:start}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(360px,100%),1fr));gap:16px;align-items:stretch;margin-bottom:16px}
 .grid2>.card{margin-bottom:0}
 .split{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);gap:16px;align-items:start;margin-bottom:16px}
 .split.even{align-items:stretch}
