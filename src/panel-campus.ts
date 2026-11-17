@@ -13,7 +13,7 @@
 import type { ItemSummary, BucketGroup } from "./mcp/door-contracts";
 import { EVENT_LABELS, eventIcon, icon, sourceDot, sourceMark, sourceTile } from "./marks";
 import type { PanelRuntime } from "./panel";
-import { dayKey, empty, formatIn, isHandedIn, PANEL_SCRIPT, PANEL_STYLE, relative, safeZone, shortAgo, SOURCE_NAMES } from "./panel-kit";
+import { dayKey, empty, emptyAsk, formatIn, isHandedIn, PANEL_SCRIPT, PANEL_STYLE, relative, safeZone, shortAgo, SOURCE_NAMES } from "./panel-kit";
 import { computeCsrfToken } from "./settings";
 import { loadTermCourses, type TermCourse } from "./term";
 import { escapeHtml, renderPage } from "./ui";
@@ -493,7 +493,7 @@ export async function renderPlans(runtime: PanelRuntime, url: URL): Promise<stri
   const planCard = selected
     ? `<section class="card"><div class="card-head row"><div><h2>${progress.total ? `${progress.done} of ${progress.total} done` : "Plan"}</h2><p class="card-sub">Updated ${escapeHtml(relative(selected.updated_at, at))}. Ticking here saves straight to the plan your agents read.</p></div>${progress.total ? `<div class="progress"><span style="width:${(progress.done / progress.total) * 100}%"></span></div>` : ""}</div>
         <div class="card-body">${renderPlanBody(selected, csrf, back)}</div></section>`
-    : `<section class="card"><div class="card-body" style="padding-top:18px">${empty("plan", assignment ? "This plan no longer exists." : `No plan for ${escapeHtml(week)}. Ask your agent “plan my week”.`)}</div></section>`;
+    : `<section class="card"><div class="card-body" style="padding-top:18px">${assignment ? empty("plan", "This plan no longer exists.") : emptyAsk("plan", "No plan yet.", week === current ? "Plan my week." : `Plan the week of ${weekRange(week)}.`)}</div></section>`;
 
   const list = all
     .map((plan) => {
@@ -518,7 +518,7 @@ export async function renderPlans(runtime: PanelRuntime, url: URL): Promise<stri
     title: "unicorn — plans",
     active: "/panel/plans",
     heading,
-    subtitle: assignment ? "An assignment plan your agent saved with save_plan." : "The week's checklist your agent saved. Same plan on every device and app.",
+    subtitle: assignment ? "Written by your agent. Tick items here or in any app." : "Written by your agent from your deadlines. Tick items here or in any app.",
     body,
     wide: true,
     actions: assignment

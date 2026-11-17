@@ -57,6 +57,8 @@ Use sentence case everywhere. Don't use all-caps labels.
 - **Status dot.** 7px. Ink when a thing works, a hollow faint ring when it is off or not set up, `--danger` when it is broken. A green dot is never used for "fine": fine is the default and stays greyscale.
 - **Switch.** 40×24. Off is a `--default` track with a faint ring and a small faint knob. On is an ink track with a `--surface` knob, so it reads in both themes. On the server it is a `<button role="switch" aria-checked>` inside a form, because the CSP allows no fetch.
 - **Destructive actions** are quiet text buttons in `--danger-text` that confirm first. They never get a red fill until hovered.
+- **Ask chip.** A line to say to the user's agent, with a spark icon. Clicking copies it. unicorn has no agent of its own, so empty states that the agent fills (plans, profile) offer the line that fills them instead of explaining how.
+- **Optical alignment.** Columns of values share one grid so they start on the same line. An icon-only button at a card's edge takes a negative margin so its glyph, not its hit area, lines up with the content.
 - **Errors sit where they happened.** A form that fails puts its message inside its own card and scrolls there, not only at the top of the page.
 
 ## Overview board
@@ -67,4 +69,5 @@ The overview is a grid of widgets the user can rearrange. The code is in `src/pa
 - The layout is saved in the `settings` table as one JSON row with the key `overview_board`. It is saved with a plain form POST to `/panel/board`, because the CSP allows no `fetch`.
 - Every widget is rendered on the server. Hidden widgets carry the `hidden` attribute. Customizing toggles them in place, and nothing is fetched.
 - The headline above the board is a single sentence saying what needs attention next. It is the most useful line on the page, so no widget repeats it.
+- Below the headline, once an agent is connected, up to three ask chips suggest the next useful playbook, picked from what the board shows.
 - The setup checklist appears only while setup is incomplete. On phones it shows only the unfinished steps.

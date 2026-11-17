@@ -23,8 +23,10 @@ import { computeCsrfToken, type LastCycleInfo } from "./settings";
 import { loadTermCourses, type TermCourse } from "./term";
 import { clientLabel, clientMark, clientTile, icon, sourceDot, sourceMark, sourceTile } from "./marks";
 import {
+  askChip,
   capitalize,
   copyRow,
+  emptyAsk,
   isHandedIn,
   dayKey,
   empty,
@@ -219,7 +221,7 @@ async function renderOverview(runtime: PanelRuntime): Promise<string> {
             .slice(0, 6)
             .map((entry) => `<li><span class="grow">${escapeHtml(entry)}</span></li>`)
             .join("")}</ul>`
-        : empty("memory", "Empty. Ask your agent “get to know me”."),
+        : emptyAsk("memory", "Your agent hasn't written a profile yet.", "Get to know me."),
     },
     calls: {
       title: WIDGETS.calls,
@@ -247,6 +249,7 @@ async function renderOverview(runtime: PanelRuntime): Promise<string> {
     { done: user.entries.length > 0, title: "Introduce yourself", text: "Ask your agent “get to know me”; it writes your profile.", href: "/panel/memory", cta: "Profile" },
   ];
   const doneCount = checklist.filter((step) => step.done).length;
+  const asks = checklist[2].done ? renderAsks({ overdue, ahead, hasPlan: Boolean(plan), hasProfile: user.entries.length > 0 }) : "";
   const setup =
     doneCount === checklist.length
       ? ""
@@ -275,10 +278,26 @@ async function renderOverview(runtime: PanelRuntime): Promise<string> {
     active: "/panel",
     heading: headline(overdue, ahead, zone, now),
     subtitle: standfirst({ now, zone, overdue, ahead }),
-    body: `${setup}${renderBoard(board, content, csrf)}${PANEL_STYLE}${CAMPUS_STYLE}${BOARD_STYLE}${OVERVIEW_STYLE}${PANEL_SCRIPT}${BOARD_SCRIPT}`,
+    body: `${setup}${asks}${renderBoard(board, content, csrf)}${PANEL_STYLE}${CAMPUS_STYLE}${BOARD_STYLE}${OVERVIEW_STYLE}${PANEL_SCRIPT}${BOARD_SCRIPT}`,
     wide: true,
     actions,
   });
+}
+
+// Up to three lines to say to the agent, picked from what the board shows. Each one starts a
+// playbook; the agent does the work and writes the plan or brief back here.
+function renderAsks(input: { overdue: ItemSummary[]; ahead: ItemSummary[]; hasPlan: boolean; hasProfile: boolean }): string {
+  const lines: string[] = [];
+  if (!input.hasProfile) lines.push("Get to know me.");
+  if (input.overdue.length) lines.push("Catch me up.");
+  if (!input.hasPlan) lines.push("Plan my week.");
+  const assessment = [...input.overdue, ...input.ahead].find((item) => item.kind === "assessment" && !isHandedIn(item.state));
+  if (assessment) lines.push(`Break ${assessment.course ? `${assessment.course} ` : ""}${assessment.title} into daily tasks.`);
+  lines.push("What did staff post on the forums today?");
+  return `<nav class="asks" aria-label="Ask your agent"><span class="asks-label">Ask your agent</span>${lines
+    .slice(0, 3)
+    .map(askChip)
+    .join("")}<a class="asks-more" href="/panel/playbooks">All playbooks</a></nav>`;
 }
 
 // The page's one line: what needs you first. The unit, time and the rest go in the subtitle.
@@ -380,7 +399,7 @@ function renderUnitRows(courses: TermCourse[], ahead: ItemSummary[], now: Date):
 }
 
 function renderPlanSummary(plan: { content: string; updated_at: string } | null, now: Date): string {
-  if (!plan) return `${empty("plan", "No plan for this week.")}<p class="hint">Ask your agent “plan my week”.</p>`;
+  if (!plan) return emptyAsk("plan", "No plan for this week.", "Plan my week.");
   const items = listChecklistItems(plan.content);
   const { done, total } = checklistProgress(plan.content);
   const open = items.filter((item) => !item.checked).slice(0, 5);
@@ -403,6 +422,11 @@ function renderAgentSummary(stats: Awaited<ReturnType<ActivityLog["stats"]>>, no
 }
 
 const OVERVIEW_STYLE = `<style>
+.asks{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 24px}
+.asks-label{margin-right:4px;color:var(--muted);font-size:13px}
+.asks-more{margin-left:4px;color:var(--muted);font-size:13px;text-decoration:underline;text-decoration-color:var(--faint);text-underline-offset:3px}
+.asks-more:hover{color:var(--fg)}
+@media (max-width:640px){.asks-label{flex-basis:100%}}
 .page-head h1{font-size:24px;line-height:32px;font-weight:600;letter-spacing:-.02em}
 .page-head .sub{margin-top:6px}
 .sync-stopped{display:inline-flex;align-items:center;gap:8px;height:36px;padding:0 12px;border-radius:999px;color:var(--fg);font-size:14px;font-weight:500}
