@@ -16,7 +16,7 @@ function escapeHtml(value: string): string {
 type IconName =
   | "overview" | "activity" | "memory" | "connect" | "sources" | "account" | "docs" | "external"
   | "arrow" | "check" | "copy" | "key" | "clock" | "sync" | "spark" | "calendar" | "units" | "agents"
-  | "signout" | "alert" | "plus" | "horn" | "changes" | "brief" | "plan" | "search" | "playbook" | "server" | "download" | "chevron" | "grip" | "close" | "edit";
+  | "signout" | "alert" | "plus" | "horn" | "changes" | "brief" | "plan" | "search" | "playbook" | "server" | "download" | "chevron" | "grip" | "close" | "edit" | "github";
 
 const ICON_PATHS: Record<IconName, string[]> = {
   horn: ["M12 2.5 17.5 20a5.5 2 0 0 1-11 0Z", "M8.4 14.4q3.6 1.9 7.4-.6M10.1 9q2.2 1.2 4.3-.4"],
@@ -52,6 +52,7 @@ const ICON_PATHS: Record<IconName, string[]> = {
   grip: ["M9 6h.01M15 6h.01M9 12h.01M15 12h.01M9 18h.01M15 18h.01"],
   close: ["M6.5 6.5l11 11M17.5 6.5l-11 11"],
   edit: ["M4.5 19.5h4l10-10-4-4-10 10z", "M13 7l4 4"],
+  github: ["M15 21v-3.5a4 4 0 0 0-1-3c3 0 6-2 6-5.5a5.4 5.4 0 0 0-1-3.5c.3-1.1.3-2.3 0-3.5 0 0-1 0-3 1.5a12.6 12.6 0 0 0-6 0C7 2 6 2 6 2c-.3 1.2-.3 2.4 0 3.5A5.4 5.4 0 0 0 5 9c0 3.5 3 5.5 6 5.5a4 4 0 0 0-1 3V21", "M10 18c-4 1.5-4.5-1.5-6.5-2"],
 };
 
 export function icon(name: IconName, className = "i"): string {
@@ -106,7 +107,7 @@ export function sourceMark(idOrName: string): SourceMark | null {
 export function sourceTile(idOrName: string, size: "sm" | "md" | "lg" = "md"): string {
   const mark = sourceMark(idOrName);
   if (!mark) return `<span class="tile-mark ${size} mono" aria-hidden="true">${escapeHtml(idOrName.slice(0, 1).toUpperCase())}</span>`;
-  return `<span class="tile-mark ${size} src" style="--hue:${mark.hue}" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${mark.paths
+  return `<span class="tile-mark ${size} hued" style="--hue:${mark.hue}" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${mark.paths
     .map((d) => `<path d="${d}"/>`)
     .join("")}</svg></span>`;
 }

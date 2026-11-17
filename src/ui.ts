@@ -40,6 +40,7 @@ const NAV_GROUPS: Array<{ label: string; links: NavLink[] }> = [
 
 const SITE = "https://unicorn.tuuhub.com";
 const DOCS = `${SITE}/docs/unicorn`;
+const GITHUB = "https://github.com/TuuHub/unicorn";
 
 // The hosted server (ADR-0046) adds its account links once at startup; a self-deployed Worker
 // never calls this. Module-level on purpose: one process serves one deployment mode.
@@ -50,7 +51,8 @@ let setupNav: NavLink[] = [
 ];
 let brandHref = "/panel";
 let instanceLabel = "Self-hosted";
-let footNote = "Runs on your Cloudflare account";
+// The hosted server says whose server it is; a self-deployed Worker shows no footer.
+let footNote = "";
 
 export function configureChrome(options: { setupNav?: NavLink[]; brandHref?: string; instanceLabel?: string; footNote?: string }): void {
   if (options.setupNav) setupNav = options.setupNav;
@@ -159,8 +161,7 @@ code,pre,kbd,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas
 h1{margin:0;font-size:20px;line-height:28px;font-weight:600;letter-spacing:-.01em}
 .sub{margin:2px 0 0;color:var(--muted);font-size:14px;max-width:72ch}
 .page-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-.foot{margin-top:40px;display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;color:var(--muted);font-size:12.5px}
-.foot a:hover{color:var(--fg)}
+.foot{margin-top:40px;color:var(--muted);font-size:12.5px}
 /* tablets: the sidebar folds to an icon rail, so every page and the sign-out stay one tap away */
 @media (min-width:641px) and (max-width:900px){
   .shell{grid-template-columns:64px minmax(0,1fr)}
@@ -298,7 +299,7 @@ a.badge.course:hover{background:var(--default-hover)}
 .tile-mark.client{background:var(--surface);box-shadow:var(--shadow)}
 .tile-mark.mono{background:var(--default);color:var(--muted);font-size:12px;font-weight:600}
 .tile-mark.sm.mono{font-size:10.5px}
-.tile-mark.src{background:color-mix(in oklab,var(--hue) 18%,var(--surface));color:color-mix(in oklab,var(--hue) 55%,var(--fg))}
+.tile-mark.hued{background:color-mix(in oklab,var(--hue) 18%,var(--surface));color:color-mix(in oklab,var(--hue) 55%,var(--fg))}
 .src-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--hue);flex:none}
 .who{display:inline-flex;align-items:center;gap:10px;min-width:0;vertical-align:middle}
 .who-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -471,7 +472,7 @@ export function renderPage(options: PageOptions): string {
       <a class="search-m" href="/panel/search" aria-label="Search">${icon("search")}</a>
       <div class="side-foot">
         <a href="${DOCS}" target="_blank" rel="noopener" title="Docs">${icon("docs")}<span>Docs</span>${ext}</a>
-        <a href="${SITE}" target="_blank" rel="noopener" title="unicorn.tuuhub.com">${icon("horn")}<span>unicorn.tuuhub.com</span>${ext}</a>
+        <a href="${GITHUB}" target="_blank" rel="noopener" title="GitHub">${icon("github")}<span>GitHub</span>${ext}</a>
         <form method="post" action="/logout"><button type="submit" title="Sign out">${icon("signout")}<span>Sign out</span></button></form>
       </div>
     </aside>
@@ -481,7 +482,7 @@ export function renderPage(options: PageOptions): string {
         ${options.actions ? `<div class="page-actions">${options.actions}</div>` : ""}
       </header>
       ${options.body}
-      <footer class="foot"><span>${footNote}</span><span><a href="${DOCS}" target="_blank" rel="noopener">Docs</a> · <a href="https://github.com/TuuHub/unicorn" target="_blank" rel="noopener">GitHub</a></span></footer>
+      ${footNote ? `<footer class="foot">${footNote}</footer>` : ""}
     </div></main>
   </div>
 </body>
