@@ -52,7 +52,7 @@ export const SOURCE_PRESETS: SourcePreset[] = [
     id: "ed",
     label: "Ed Discussion",
     fields: [{ key: "token", label: "API token", type: "password" }],
-    instructions: "Create a token on Ed's API tokens page and paste it here. unicorn finds your region (AU, US or EU) from the token.",
+    instructions: "Paste an Ed API token. unicorn works out the region.",
     instructionsUrl: "https://edstem.org/settings/api-tokens",
   },
   {
@@ -62,7 +62,7 @@ export const SOURCE_PRESETS: SourcePreset[] = [
       { key: "baseUrl", label: "Base URL", type: "text", placeholder: "https://learning.monash.edu" },
       { key: "session", label: "Session cookie (advanced)", type: "password" },
     ],
-    instructions: "Run `npm run moodle:push` from your machine to push a fresh session; paste one below only if you can't run that locally.",
+    instructions: "Run `npm run moodle:push` from your clone, or paste a session cookie.",
     hostedInstructions:
       "After `okta login`, run `npm run moodle:push -- --hosted <this site> --token <your token from Connect>` from a clone of unicorn — or paste your MoodleSession cookie below.",
     instructionsUrl: "https://unicorn.tuuhub.com/docs/unicorn/sources#moodle",
@@ -74,7 +74,7 @@ export const SOURCE_PRESETS: SourcePreset[] = [
       { key: "baseUrl", label: "Base URL", type: "text", placeholder: "https://school.instructure.com" },
       { key: "token", label: "Personal access token", type: "password" },
     ],
-    instructions: "In Canvas, open Account, then Settings, and choose New access token.",
+    instructions: "Make one in Canvas under Account, then Settings.",
     instructionsUrl: "https://canvas.instructure.com/doc/api/file.oauth.html#manual-token-generation",
   },
   {

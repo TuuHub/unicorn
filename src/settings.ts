@@ -639,7 +639,7 @@ async function renderSettingsPage(settings: AppSettings, runtime: SettingsRuntim
     title: "unicorn — sources",
     active: "/settings",
     heading: "Sources",
-    subtitle: "Where unicorn reads from. Changes apply on the next hourly sync.",
+    subtitle: "Where unicorn reads from.",
     body,
     wide: true,
   });
@@ -653,7 +653,7 @@ function renderSyncBar(status: SettingsRuntime["status"], lastCycle: LastCycleIn
     return `
       <div class="sync-bar stopped" role="alert">
         <span class="dot bad" aria-hidden="true"></span>
-        <p><strong>Hourly sync is stopped.</strong> Nothing new arrives until it runs. ${last}</p>
+        <p><strong>Hourly sync is stopped.</strong> ${last}</p>
         <form method="post" action="/settings/start-scheduler">${hidden}<button class="button sm" type="submit">Start hourly sync</button></form>
       </div>`;
   }
@@ -770,7 +770,7 @@ async function renderBuiltInCard(status: SourceStatus, context: PageContext): Pr
       </form>`;
     body = status.configured
       ? `<p class="src-how">Moodle sessions expire after a few days of no use. Sign in again when sync starts failing.</p>${signIn}${details("Paste a session cookie instead", `${how}${credentialForm}`)}`
-      : `<p class="src-how">Sign in the way you always do. unicorn opens Moodle in a private browser on Cloudflare and keeps the session once you're in.</p>${signIn}${details("Other ways to connect", `${how}${credentialForm}`)}`;
+      : `<p class="src-how">Sign in as usual. unicorn keeps the session.</p>${signIn}${details("Other ways to connect", `${how}${credentialForm}`)}`;
   } else {
     body = status.configured ? details(status.id === "ed" ? "Replace token" : "Change details", `${how}${credentialForm}`) : `${how}${credentialForm}`;
   }
@@ -835,7 +835,7 @@ function renderGmailCard(status: SourceStatus, context: PageContext): string {
   const body = !configured
     ? context.hosted
       ? `<p class="src-how">This server has no Google sign-in yet.</p>`
-      : `<p class="src-how">Needs a Google OAuth client on this Worker. Set <code>PLUGIN_SECRET_GOOGLE_CLIENT_ID</code> and its secret, then reload. <a href="https://unicorn.tuuhub.com/docs/unicorn/sources#gmail" target="_blank" rel="noopener">How</a></p>`
+      : `<p class="src-how">Needs <code>PLUGIN_SECRET_GOOGLE_CLIENT_ID</code> and its secret on this Worker. <a href="https://unicorn.tuuhub.com/docs/unicorn/sources#gmail" target="_blank" rel="noopener">How</a></p>`
     : connected
       ? `<p class="src-how">Reads only mail that matches your Gmail scope below, never the whole inbox.</p>`
       : `<p class="src-how">Reads only mail from your university, from senders you allow, or that mentions a unit code.</p><div class="row-end"><a class="button" href="/settings/oauth/gmail/start">Connect Gmail</a></div>`;
@@ -925,16 +925,16 @@ function renderAddPluginCard(context: PageContext): string {
         <span class="tile-mark lg mono">${icon("plus")}</span>
         <div class="src-title">
           <h3 id="add-source-title">Add a source</h3>
-          <p class="src-state">An HTTPS feed, a JSON API or a remote MCP tool</p>
+          <p class="src-state">A feed, a JSON API or an MCP tool</p>
         </div>
       </div>
       <div class="src-body">
         ${failed ? `<p class="src-error" role="alert">${escapeHtml(failed.error)}</p>` : ""}
         <form method="post" action="/settings/plugins" class="stack">
           ${hiddenCsrf(context.csrf)}
-          <label for="new-manifest">Manifest</label>
+          <div class="label-row"><label for="new-manifest">Manifest</label><a href="https://unicorn.tuuhub.com/docs/unicorn/custom-tools" target="_blank" rel="noopener">Format${icon("external", "i ext")}</a></div>
           <textarea id="new-manifest" name="manifest" rows="9" spellcheck="false" class="code" placeholder="${escapeHtml(EXAMPLE_MANIFEST)}">${escapeHtml(failed?.text ?? "")}</textarea>
-          <p class="hint">unicorn checks the manifest before it saves. Keys come from <code>PLUGIN_SECRET_*</code> Worker secrets, never from this box.</p>
+          <p class="hint">Keys go in <code>PLUGIN_SECRET_*</code> Worker secrets, not here.</p>
           <div class="row-end"><button class="button" type="submit">Add source</button></div>
         </form>
       </div>
@@ -1043,6 +1043,10 @@ const PAGE_STYLE = `
       .src-more summary{color:var(--fg);font-weight:500}
       .src-more-body{display:flex;flex-direction:column;gap:12px;padding-top:12px}
 
+      .label-row{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
+      .label-row a{display:inline-flex;align-items:center;gap:2px;color:var(--muted);font-size:12.5px}
+      .label-row a:hover{color:var(--fg)}
+      .label-row .ext{width:13px;height:13px}
       .src-add{grid-column:1/-1;box-shadow:inset 0 0 0 1px var(--border);background:transparent}
       .src-add .src-state{white-space:normal}
 
