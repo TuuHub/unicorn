@@ -124,12 +124,15 @@ export const PANEL_STYLE = `<style>
 .ask>summary::before{content:none}
 .ask>summary .i{flex:none;width:14px;height:14px;color:var(--muted)}
 .ask>summary:hover,.ask[open]>summary{background:var(--default)}
-.ask-menu{position:absolute;z-index:20;top:calc(100% + 6px);left:0;display:flex;flex-direction:column;min-width:200px;padding:4px;border-radius:12px;background:var(--surface);box-shadow:var(--shadow-lg)}
+.ask-menu{position:absolute;z-index:20;top:calc(100% + 6px);left:0;transform-origin:top left;display:flex;flex-direction:column;min-width:200px;padding:4px;border-radius:12px;background:var(--surface);box-shadow:var(--shadow-lg)}
 .ask-menu a,.ask-menu button{display:flex;align-items:center;justify-content:flex-start;gap:10px;width:100%;box-shadow:none;height:34px;padding:0 10px;border:0;border-radius:8px;background:none;color:var(--fg);font:inherit;font-size:13px;text-align:left;text-decoration:none;cursor:pointer}
 .ask-menu a:hover,.ask-menu button:hover{background:var(--default)}
 .ask-menu .i{flex:none;width:16px;height:16px;color:var(--muted)}
 .empty .ask{margin-top:4px}
 .empty .ask-menu{left:50%;translate:-50% 0}
+details.ask[open]>.ask-menu{animation:menu-in .16s var(--ease-out)}
+.empty .ask-menu{transform-origin:top center}
+@keyframes menu-in{from{opacity:0;transform:scale(.97) translateY(-2px)}}
 .setup .card-head{align-items:center}
 .setup .progress{width:160px;flex:none}
 .setup-steps{list-style:none;margin:0;padding:12px 16px 16px;display:grid;grid-template-columns:repeat(auto-fit,minmax(min(220px,100%),1fr));gap:12px}
@@ -178,9 +181,11 @@ export const PANEL_STYLE = `<style>
 .chart-grid i{display:block;height:1px;background:var(--separator)}
 .chart-bars{position:absolute;inset:0;display:grid;grid-template-columns:repeat(7,1fr)}
 .bar-col{display:flex;flex-direction:column;align-items:center;min-width:0}
-.bar-stack{flex:1;width:22px;display:flex;flex-direction:column;justify-content:flex-end;padding-bottom:0;margin-bottom:6px}
-.bar-ok{display:block;width:100%;background:var(--accent);border-radius:999px;min-height:0}
-.bar-err{display:block;width:100%;background:var(--danger);border-radius:999px;margin-bottom:3px}
+.bar-stack{flex:1;width:min(22px,60%);display:flex;flex-direction:column;justify-content:flex-end;margin-bottom:6px}
+.bar-ok{display:block;width:100%;min-height:0;background:color-mix(in oklab,var(--fg) 26%,transparent);transition:background-color .15s ease}
+.bar-ok:first-child,.bar-err{border-radius:5px 5px 0 0}
+.bar-err{display:block;width:100%;background:var(--danger)}
+.bar-col.today .bar-ok,.bar-col:hover .bar-ok{background:var(--fg)}
 .bar-label{height:16px;font-size:11px;color:var(--muted)}
 .bar-col.today .bar-label{color:var(--fg);font-weight:600}
 .clients>li{padding:10px 0}
@@ -192,6 +197,20 @@ export const PANEL_STYLE = `<style>
 .bar{display:block;height:4px;border-radius:999px;background:var(--default);overflow:hidden}
 .bar>span{display:block;height:100%;background:var(--accent);border-radius:999px}
 .tools .grow{display:flex;flex-direction:column;gap:6px}
+.act-week{display:grid;grid-template-columns:minmax(0,3fr) minmax(0,2fr);gap:16px;margin:16px 0}
+.act-week .card{height:auto;margin:0}
+@media (max-width:900px){.act-week{grid-template-columns:minmax(0,1fr)}}
+.ranks{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px}
+.ranks li{position:relative;isolation:isolate;display:flex;align-items:center;gap:12px;height:34px;padding:0 10px;font-size:13px}
+.ranks li::before{content:"";position:absolute;inset:0;z-index:-1;width:var(--fill);border-radius:8px;background:color-mix(in oklab,var(--fg) 8%,transparent);transform-origin:left;animation:rank-in .5s var(--ease-out) calc(var(--i) * 40ms) both}
+.rank-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px}
+.rank-calls{font-weight:500}
+.rank-share{width:4ch;text-align:right;color:var(--muted);font-size:12px}
+@keyframes rank-in{from{transform:scaleX(0)}}
+.bar-ok,.bar-err{transform-origin:bottom;animation:bar-in .5s var(--ease-out) both}
+.bar-col:nth-child(2) span{animation-delay:30ms}.bar-col:nth-child(3) span{animation-delay:60ms}.bar-col:nth-child(4) span{animation-delay:90ms}
+.bar-col:nth-child(5) span{animation-delay:120ms}.bar-col:nth-child(6) span{animation-delay:150ms}.bar-col:nth-child(7) span{animation-delay:180ms}
+@keyframes bar-in{from{transform:scaleY(0)}}
 .profile>li{font-size:14px}
 .brief-line{display:flex;align-items:center;gap:10px;min-width:0}
 .brief-line:hover .truncate{text-decoration:underline;text-underline-offset:3px}

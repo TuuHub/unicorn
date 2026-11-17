@@ -94,6 +94,7 @@ const CSS = `
 --shadow:0 0 0 1px var(--border);
 --shadow-lg:0 0 0 1px var(--border),0 12px 28px -10px rgb(23 22 28/.18);
 --chip:#ffffff;--night:#08080b;
+--ease-out:cubic-bezier(.23,1,.32,1);--ease-in-out:cubic-bezier(.77,0,.175,1);
 /* names older page styles still use */
 --paper:var(--bg);--paper-2:var(--surface-2);--ink:var(--fg);--ink-2:var(--muted);--ink-3:var(--faint);--rule:var(--separator);--rule-2:var(--separator);
 --card:var(--surface);--muted-text:var(--muted);--track:var(--default);--ok:var(--success-text);--bad:var(--danger-text);--sel:var(--default);--lift:var(--shadow);--lift-2:var(--shadow-lg);
@@ -221,9 +222,9 @@ h1{margin:0;font-size:20px;line-height:28px;font-weight:600;letter-spacing:-.01e
 @media (max-width:900px){.door{display:block}.door-night{min-height:min(52vh,460px)}}
 
 /* --- buttons ------------------------------------------------------------------------- */
-button,.button{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:36px;padding:0 16px;border:0;border-radius:999px;background:var(--accent);color:var(--accent-fg);font:inherit;font-size:14px;font-weight:500;white-space:nowrap;cursor:pointer;user-select:none;touch-action:manipulation;transition:background-color .15s cubic-bezier(.4,0,.2,1),transform .1s ease-out,opacity .15s}
+button,.button{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:36px;padding:0 16px;border:0;border-radius:999px;background:var(--accent);color:var(--accent-fg);font:inherit;font-size:14px;font-weight:500;white-space:nowrap;cursor:pointer;user-select:none;touch-action:manipulation;transition:background-color .15s ease,transform .16s var(--ease-out),opacity .15s ease}
 button:hover,.button:hover{background:color-mix(in oklab,var(--accent) 86%,var(--bg))}
-button:active,.button:active{transform:scale(.97)}
+button:active,.button:active{transform:scale(.96)}
 button .i,.button .i{width:16px;height:16px}
 button.secondary,.button.secondary,.button.ghost,button.ghost{background:var(--default);color:var(--fg)}
 button.secondary:hover,.button.secondary:hover,.button.ghost:hover,button.ghost:hover{background:var(--default-hover)}
@@ -340,6 +341,8 @@ details summary{cursor:pointer;color:var(--muted);font-size:13px;list-style:none
 details summary::-webkit-details-marker{display:none}
 details summary::before{content:"";flex:none;width:5px;height:5px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;rotate:-45deg;transition:rotate .15s ease-out}
 details[open] summary::before{rotate:45deg}
+details[open]>:not(summary){animation:reveal .2s var(--ease-out)}
+@keyframes reveal{from{opacity:0;transform:translateY(-4px)}}
 details summary span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
 /* --- code, commands, fields ------------------------------------------------------------ */
@@ -362,8 +365,17 @@ input[type=text],input[type=email],input[type=password],input[type=number],input
 textarea:focus,input:focus,select:focus{outline:none;box-shadow:0 0 0 2px var(--fg)}
 ::placeholder{color:var(--muted)}
 label.field{display:block;font-size:14px;font-weight:500;margin:14px 0 6px}
-.notice{display:flex;align-items:center;gap:10px;margin:0 0 16px;padding:10px 14px;border-radius:12px;background:var(--success-soft);color:var(--success-text);font-size:13.5px;font-weight:500}
-.notice.error{background:var(--danger-soft);color:var(--danger-text)}
+/* Confirmations are a toast: they float in, say what happened, and leave on their own. Errors
+   stay in the page, where the problem is. */
+.notice{position:fixed;z-index:60;right:24px;bottom:24px;display:flex;align-items:center;gap:10px;max-width:min(420px,calc(100vw - 32px));margin:0;padding:11px 16px 11px 12px;border-radius:14px;background:var(--surface);color:var(--fg);box-shadow:var(--shadow-lg);font-size:13.5px;font-weight:500;line-height:20px;pointer-events:none;animation:toast-in .26s var(--ease-out) both,toast-out .2s ease-out 4s forwards}
+.notice::before{content:"";flex:none;width:18px;height:18px;border-radius:50%;background:var(--fg)}
+.notice::after{content:"";position:absolute;left:19px;top:50%;width:4px;height:8px;border:solid var(--surface);border-width:0 1.75px 1.75px 0;transform:translateY(-62%) rotate(45deg)}
+@keyframes toast-in{from{opacity:0;transform:translateY(10px) scale(.97)}}
+@keyframes toast-out{to{opacity:0;transform:translateY(6px);visibility:hidden}}
+.notice.error{position:static;display:flex;max-width:none;margin:0 0 16px;padding:10px 14px;border-radius:12px;background:var(--danger-soft);color:var(--danger-text);box-shadow:none;pointer-events:auto;animation:none}
+.notice.error::before{width:7px;height:7px;background:var(--danger)}
+.notice.error::after{content:none}
+@media (max-width:640px){.notice{left:16px;right:16px;bottom:16px;max-width:none}}
 div.notice{display:block;font-weight:400}
 .meter,.progress{height:6px;background:var(--default);border-radius:999px;overflow:hidden}
 .meter>span,.progress>span{display:block;height:100%;background:var(--fg);border-radius:999px}
@@ -396,7 +408,12 @@ div.notice{display:block;font-weight:400}
 .steps li::before{content:counter(step);position:absolute;left:0;top:6px;width:22px;height:22px;border-radius:999px;background:var(--default);display:grid;place-items:center;font-size:12px;font-weight:600;color:var(--muted);font-variant-numeric:tabular-nums}
 .steps li strong,.steps li em{color:var(--fg)}
 .pager{display:flex;justify-content:center;margin-top:14px}
-@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+@media (prefers-reduced-motion:reduce){
+  *:not(.notice){transition:none!important;animation:none!important}
+  .notice{animation:fade-in .2s ease both,fade-out .2s ease 4s forwards}
+}
+@keyframes fade-in{from{opacity:0}}
+@keyframes fade-out{to{opacity:0;visibility:hidden}}
 `;
 
 function renderNav(active: string): string {
@@ -483,6 +500,16 @@ export function renderPage(options: PageOptions): string {
       </header>
       ${options.body}
       ${footNote ? `<footer class="foot">${footNote}</footer>` : ""}
+      <script>
+        // A confirmation shows once: drop its flag from the address so a reload doesn't repeat it.
+        (function () {
+          var url = new URL(location.href), flags = ["saved", "synced", "schedulerStarted", "signedIn", "disconnected", "removed", "revoked", "marked"];
+          var hit = flags.filter(function (flag) { return url.searchParams.has(flag); });
+          if (!hit.length) return;
+          hit.forEach(function (flag) { url.searchParams.delete(flag); });
+          history.replaceState(null, "", url.pathname + url.search + url.hash);
+        })();
+      </script>
     </div></main>
   </div>
 </body>

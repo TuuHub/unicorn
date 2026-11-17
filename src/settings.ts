@@ -1072,9 +1072,11 @@ const PAGE_STYLE = `
 
       .toggle-form{margin:0;flex:none}
       .toggle,.switch{appearance:none;flex:none;position:relative;width:40px;height:24px;margin:0;padding:0;border:0;border-radius:999px;background:var(--default);box-shadow:inset 0 0 0 1.5px var(--faint);cursor:pointer;transition:background-color .15s ease-out,box-shadow .15s ease-out}
-      .toggle span,.switch::after{content:"";position:absolute;top:6px;left:6px;width:12px;height:12px;border-radius:50%;background:var(--faint);transition:all .2s cubic-bezier(.23,1,.32,1)}
+      .toggle span,.switch::after{content:"";position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:var(--faint);transform:scale(.667);transition:transform .22s var(--ease-out),background-color .15s ease}
       .toggle[aria-checked=true],.switch:checked{background:var(--fg);box-shadow:none}
-      .toggle[aria-checked=true] span,.switch:checked::after{top:3px;left:19px;width:18px;height:18px;background:var(--surface)}
+      .toggle[aria-checked=true] span,.switch:checked::after{transform:translateX(16px);background:var(--surface)}
+      .toggle:active span,.switch:active::after{transform:scale(.6)}
+      .toggle[aria-checked=true]:active span,.switch:checked:active::after{transform:translateX(16px) scale(.92)}
       .toggle:focus-visible,.switch:focus-visible{outline:2px solid var(--fg);outline-offset:2px}
       @media (prefers-reduced-motion:reduce){.toggle span,.switch::after{transition:none}}
 
@@ -1090,6 +1092,14 @@ const PAGE_STYLE = `
 const PAGE_SCRIPT = `
     <script>
       (function () {
+        // Flip the switch as the form goes out, so the knob slides while the page reloads.
+        document.querySelectorAll("form.toggle-form").forEach(function (form) {
+          form.addEventListener("submit", function () {
+            var toggle = form.querySelector(".toggle");
+            if (toggle) toggle.setAttribute("aria-checked", toggle.getAttribute("aria-checked") === "true" ? "false" : "true");
+          });
+        });
+
         document.querySelectorAll("form[data-confirm]").forEach(function (form) {
           form.addEventListener("submit", function (event) {
             if (!window.confirm(form.getAttribute("data-confirm") || "Are you sure?")) {
