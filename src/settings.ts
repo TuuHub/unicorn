@@ -105,14 +105,8 @@ export class D1SettingsRepository implements SettingsRepository {
   }
 }
 
+// The caller authenticates (index.ts gates /settings with admin-auth.ts's requireAdmin).
 export async function handleSettings(request: Request, runtime: SettingsRuntime): Promise<Response> {
-  if (!isBasicAuthorized(request.headers.get("authorization"), runtime.adminToken)) {
-    return new Response("Authentication required.", {
-      status: 401,
-      headers: { "www-authenticate": 'Basic realm="unicorn settings", charset="UTF-8"' },
-    });
-  }
-
   const url = new URL(request.url);
   const path = url.pathname;
 
@@ -170,7 +164,7 @@ function json404(): Response {
 
 // --- CSRF ----------------------------------------------------------------------
 //
-// The page is single-user behind HTTP Basic auth, so a token bound to the admin
+// The page is single-user behind the ADMIN_TOKEN sign-in, so a token bound to the admin
 // credential itself is enough: HMAC(ADMIN_TOKEN, "settings-csrf"), verified in
 // constant time. The Origin check (already the CSP's referrer-policy partner)
 // stays as the second layer for every POST below.

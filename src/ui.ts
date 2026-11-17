@@ -141,9 +141,10 @@ code,pre,kbd,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas
 .nav a[aria-current=page]{background:var(--default);font-weight:500}
 .nav a[aria-current=page] .i{color:var(--fg)}
 .side-foot{margin-top:auto;display:flex;flex-direction:column;gap:2px}
-.side-foot a{display:flex;align-items:center;gap:10px;height:36px;padding:0 8px;border-radius:12px;font-size:14px}
-.side-foot a .i{color:var(--muted)}
-.side-foot a:hover{background:color-mix(in oklab,var(--default) 70%,transparent)}
+.side-foot form{margin:0}
+.side-foot a,.side-foot button{display:flex;align-items:center;justify-content:flex-start;gap:10px;width:100%;height:36px;padding:0 8px;border:0;border-radius:12px;background:none;color:inherit;font:inherit;font-size:14px;font-weight:400;cursor:pointer}
+.side-foot a .i,.side-foot button .i{color:var(--muted)}
+.side-foot a:hover,.side-foot button:hover{background:color-mix(in oklab,var(--default) 70%,transparent)}
 .side-foot .ext{margin-left:auto;width:14px;height:14px}
 .search-m{display:none}
 .main{min-width:0;padding:16px 24px 48px}
@@ -449,6 +450,7 @@ export function renderPage(options: PageOptions): string {
       <div class="side-foot">
         <a href="${DOCS}" target="_blank" rel="noopener">${icon("docs")}Docs${ext}</a>
         <a href="${SITE}" target="_blank" rel="noopener">${icon("horn")}unicorn.tuuhub.com${ext}</a>
+        <form method="post" action="/logout"><button type="submit">${icon("signout")}Sign out</button></form>
       </div>
     </aside>
     <main class="main${options.wide ? " wide" : ""}"><div class="inner">

@@ -111,7 +111,7 @@ export async function renderDeployment(runtime: PanelRuntime): Promise<string | 
     ${row(info.syncEnabled, "Source sync", info.syncEnabled ? "On" : "Off in Sources")}
   </ul>`;
   const endpoints = [
-    ["Panel", "/panel", "Basic auth: user unicorn, password ADMIN_TOKEN"],
+    ["Panel", "/panel", "Sign in with ADMIN_TOKEN"],
     ["Door (MCP)", "/mcp", "OAuth sign-in, or Bearer MCP_TOKEN"],
     ["Admin MCP", "/mcp/admin", "Bearer ADMIN_TOKEN only: raw items, relations, plugin manifests, custom tools"],
     ["Health", "/health", "Public JSON: database and scheduler"],

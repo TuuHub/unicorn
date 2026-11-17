@@ -19,13 +19,6 @@ const current: AppSettings = {
 };
 
 describe("settings", () => {
-  it("requires HTTP Basic authentication", async () => {
-    const response = await handleSettings(new Request("https://unicorn.example/settings"), runtime());
-
-    expect(response.status).toBe(401);
-    expect(response.headers.get("www-authenticate")).toContain("Basic");
-  });
-
   it("renders current non-secret settings, deployment health, and every source card", async () => {
     const response = await handleSettings(
       new Request("https://unicorn.example/settings", { headers: { authorization: basic("admin-secret") } }),

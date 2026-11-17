@@ -7,8 +7,8 @@
 //   /panel/connect   connect Claude, ChatGPT, Claude Code or any MCP client; revoke apps
 //
 // Rendered on the server like /settings (ADR-0026: plain HTML strings, inline progressive
-// enhancement only). Both deployments mount it: a self-deployed Worker behind the /settings
-// Basic auth, the hosted server behind a signed-in session (ADR-0046). It never shows a
+// enhancement only). Both deployments mount it: a self-deployed Worker behind the ADMIN_TOKEN
+// sign-in, the hosted server behind a signed-in session (ADR-0046). It never shows a
 // credential except the door bearer token on Connect, which belongs to the viewer.
 
 import type { GrantSummary } from "@cloudflare/workers-oauth-provider";

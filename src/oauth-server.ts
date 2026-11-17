@@ -85,7 +85,7 @@ export interface OAuthProviderExtras<Env> {
 }
 
 // The single-user identity every grant is issued to: unicorn has one operator, authenticated by
-// ADMIN_TOKEN (via /authorize's Basic auth) or, for local dev, the MCP_TOKEN bearer directly.
+// ADMIN_TOKEN (via the sign-in in front of /authorize) or, for local dev, the MCP_TOKEN bearer directly.
 export const DOOR_USER_ID = "unicorn";
 
 export const DOOR_PATH = "/mcp";
@@ -118,7 +118,7 @@ function doorResource(origin: string): string {
 
 // Same algorithm as settings.ts's constantTimeEqual, duplicated rather than imported: this
 // module and settings.ts would otherwise import each other (index.ts gates /authorize and the
-// revoke route with settings.ts's isBasicAuthorized before calling into here), and six lines of
+// revoke route with admin-auth.ts's requireAdmin before calling into here), and six lines of
 // a well-understood loop is cheaper than a circular module dependency.
 function timingSafeEqual(left: string, right: string): boolean {
   let difference = left.length ^ right.length;
@@ -198,7 +198,7 @@ export function createOAuthProvider<Env extends OAuthServerEnv>(
 
 // --- /authorize: the consent page ------------------------------------------------------------
 //
-// Gated by the caller with the same Basic auth as /settings (index.ts checks isBasicAuthorized
+// Gated by the caller with the same sign-in as /settings (index.ts calls requireAdmin
 // before calling this) — for a single-user deployment, "signing in" to approve a connector is
 // entering ADMIN_TOKEN. CSRF on the POST is the library's job: beginConsent()/approveConsent()
 // bind the consent transaction to a single-use, `__Host-` cookie-bound handle (see
@@ -295,7 +295,7 @@ function redirectResponse(location: string, extra: Headers): Response {
 
 /**
  * GET renders the consent page; POST approves or denies it. Caller has already authenticated the
- * user (Basic auth on a self-deployed Worker, a signed-in session on the hosted server) and passes
+ * user (the ADMIN_TOKEN sign-in on a self-deployed Worker, a signed-in session on the hosted server) and passes
  * the grant's user id — DOOR_USER_ID by default, the tenant id when hosted.
  */
 export async function handleAuthorize(request: Request, helpers: OAuthHelpers, userId: string = DOOR_USER_ID): Promise<Response> {
@@ -354,7 +354,7 @@ export async function handleAuthorize(request: Request, helpers: OAuthHelpers, u
 
 // --- /settings: Connected apps ---------------------------------------------------------------
 
-/** Revokes a grant. Caller has already checked Basic auth, method and the request's origin. */
+/** Revokes a grant. Caller has already checked sign-in, method and the request's origin. */
 export async function handleRevokeApp(request: Request, helpers: OAuthHelpers, userId: string = DOOR_USER_ID): Promise<Response> {
   const form = await request.formData();
   const grantId = String(form.get("grantId") ?? "");
