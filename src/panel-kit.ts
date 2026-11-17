@@ -1,7 +1,7 @@
 // Shared pieces for the panel's pages (ADR-0048): formatting in the user's timezone, empty
 // states, copy rows, and the page-level styles and script every panel page appends.
 
-import { icon } from "./marks";
+import { clientLogo, icon } from "./marks";
 import { escapeHtml } from "./ui";
 
 export const SOURCE_NAMES: Record<string, string> = {
@@ -17,10 +17,16 @@ export function copyRow(value: string, shell = false, hero = false): string {
 
 // --- shared bits --------------------------------------------------------------
 
-// A line to say to the user's agent. unicorn has no brain of its own, so the chip copies the
-// line for the user to paste into Claude, ChatGPT or whichever client they connected.
+// A line to say to the user's agent. unicorn has no brain of its own, so the chip hands the
+// line over: opened as a new chat in Claude or ChatGPT (both prefill from ?q=, and the user
+// still presses send), or copied for any other client.
 export function askChip(line: string): string {
-  return `<button type="button" class="ask" data-copy="${escapeHtml(line)}" title="Copy, then paste it to your agent">${icon("spark")}<span>${escapeHtml(line)}</span></button>`;
+  const q = encodeURIComponent(line);
+  return `<details class="ask"><summary>${icon("spark")}<span>${escapeHtml(line)}</span></summary><div class="ask-menu">
+      <a class="plain" href="https://claude.ai/new?q=${q}" target="_blank" rel="noopener">${clientLogo("claude")}<span>Open in Claude</span></a>
+      <a class="plain" href="https://chatgpt.com/?q=${q}" target="_blank" rel="noopener">${clientLogo("chatgpt")}<span>Open in ChatGPT</span></a>
+      <button type="button" data-copy="${escapeHtml(line)}">${icon("copy")}<span>Copy</span></button>
+    </div></details>`;
 }
 
 export function emptyAsk(iconName: Parameters<typeof icon>[0], text: string, line: string): string {
@@ -113,11 +119,17 @@ export function relative(iso: string, now: Date): string {
 // Page-level layout the shared shell doesn't need: the agenda, the week chart, the feed, the
 // setup strip and the client cards.
 export const PANEL_STYLE = `<style>
-.ask{display:inline-flex;align-items:center;gap:7px;min-width:0;max-width:100%;height:32px;padding:0 13px 0 11px;border:0;border-radius:999px;background:var(--surface);box-shadow:var(--shadow);color:var(--fg);font:inherit;font-size:13px;cursor:pointer}
-.ask span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.ask .i{flex:none;width:14px;height:14px;color:var(--muted)}
-.ask:hover{background:var(--default)}
+.ask{position:relative;min-width:0;max-width:100%}
+.ask>summary{display:flex;align-items:center;gap:7px;max-width:100%;height:32px;padding:0 13px 0 11px;border-radius:999px;background:var(--surface);box-shadow:var(--shadow);color:var(--fg);font-size:13px}
+.ask>summary::before{content:none}
+.ask>summary .i{flex:none;width:14px;height:14px;color:var(--muted)}
+.ask>summary:hover,.ask[open]>summary{background:var(--default)}
+.ask-menu{position:absolute;z-index:20;top:calc(100% + 6px);left:0;display:flex;flex-direction:column;min-width:200px;padding:4px;border-radius:12px;background:var(--surface);box-shadow:var(--shadow-lg)}
+.ask-menu a,.ask-menu button{display:flex;align-items:center;justify-content:flex-start;gap:10px;width:100%;box-shadow:none;height:34px;padding:0 10px;border:0;border-radius:8px;background:none;color:var(--fg);font:inherit;font-size:13px;text-align:left;text-decoration:none;cursor:pointer}
+.ask-menu a:hover,.ask-menu button:hover{background:var(--default)}
+.ask-menu .i{flex:none;width:16px;height:16px;color:var(--muted)}
 .empty .ask{margin-top:4px}
+.empty .ask-menu{left:50%;translate:-50% 0}
 .setup .card-head{align-items:center}
 .setup .progress{width:160px;flex:none}
 .setup-steps{list-style:none;margin:0;padding:12px 16px 16px;display:grid;grid-template-columns:repeat(auto-fit,minmax(min(220px,100%),1fr));gap:12px}
@@ -210,6 +222,15 @@ export const PANEL_SCRIPT = `
 (function () {
   document.querySelectorAll("time[datetime]").forEach(function (node) {
     try { node.textContent = new Date(node.getAttribute("datetime")).toLocaleString(undefined, { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }); } catch (_) {}
+  });
+  document.addEventListener("click", function (event) {
+    document.querySelectorAll("details.ask[open]").forEach(function (menu) {
+      var item = event.target.closest && event.target.closest(".ask-menu a");
+      if (!menu.contains(event.target) || (item && menu.contains(item))) menu.removeAttribute("open");
+    });
+  });
+  document.addEventListener("keydown", function (event) {
+    if (event.key === "Escape") document.querySelectorAll("details.ask[open]").forEach(function (menu) { menu.removeAttribute("open"); });
   });
   document.querySelectorAll("[data-copy]").forEach(function (button) {
     button.addEventListener("click", function () {

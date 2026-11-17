@@ -184,6 +184,14 @@ export function clientMark(actor: string | null | undefined): ClientMark {
 }
 
 /** The client's logo in a small hairline tile; a glyph or monogram when there is no logo. */
+/** A client's logo at icon size, for inline use ("Open in Claude"). */
+export function clientLogo(actor: string): string {
+  const mark = clientMark(actor);
+  if (!mark.path) return icon("external");
+  const fill = mark.color ? ` style="color:${mark.color}"` : "";
+  return `<svg class="i" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"${fill}><path d="${mark.path}"/></svg>`;
+}
+
 export function clientTile(actor: string | null | undefined, size: "sm" | "md" | "lg" = "md"): string {
   const mark = clientMark(actor);
   let inner: string;
