@@ -697,7 +697,7 @@ export const CAMPUS_STYLE = `<style>
 .tile-mark.ev{background:var(--default);color:var(--muted)}
 .tile-mark.ev-deadline-changed{background:var(--warning-soft);color:var(--warning-text)}
 .tile-mark.ev-grade-changed{background:var(--success-soft);color:var(--success-text)}
-.tile-mark.ev-notice-posted{background:var(--accent-soft);color:var(--accent-text)}
+.tile-mark.ev-notice-posted{background:var(--opal-soft);color:var(--opal-text)}
 .tile-mark.ev-item-added{background:var(--default);color:var(--fg)}
 .tile-mark.ev-item-archived{background:var(--danger-soft);color:var(--danger-text)}
 /* units: HeroUI data grid */
@@ -745,7 +745,7 @@ a.task-card:hover{box-shadow:var(--shadow-lg)}
 .prose p{margin:0 0 10px}
 .prose ul,.prose ol{margin:0 0 10px;padding-left:20px}
 .prose li{margin:3px 0}
-.prose a{color:var(--accent-text)}
+.prose a{color:var(--fg);text-decoration:underline;text-decoration-color:var(--faint);text-underline-offset:3px}
 .prose>:first-child{margin-top:0}
 /* plans */
 .tasks{list-style:none;margin:4px 0 12px;padding:0}
@@ -764,7 +764,7 @@ a.task-card:hover{box-shadow:var(--shadow-lg)}
 .plan-link .i{width:16px;height:16px;color:var(--muted)}
 /* search */
 .search-big{display:flex;align-items:center;gap:10px;padding:4px 4px 4px 14px;background:var(--surface);border-radius:999px;box-shadow:var(--shadow);margin-bottom:16px}
-.search-big:focus-within{box-shadow:0 0 0 2px var(--accent)}
+.search-big:focus-within{box-shadow:0 0 0 2px var(--fg)}
 .search-big .i{color:var(--muted)}
 .search-big input::-webkit-search-cancel-button{display:none}
 .search-big input[type=search]{flex:1;border:0;background:transparent;height:40px;font:inherit;font-size:15px;color:var(--fg);outline:none;box-shadow:none;padding:0}

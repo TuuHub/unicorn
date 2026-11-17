@@ -116,7 +116,7 @@ export const PANEL_STYLE = `<style>
 .setup-num .i{width:14px;height:14px}
 .done .setup-num{background:var(--success-soft);color:var(--success-text);box-shadow:none}
 .setup-steps .more{padding:0 10px 0 0;height:24px}
-.setup-steps .more:hover{background:none;color:var(--accent-text)}
+.setup-steps .more:hover{background:none;color:var(--fg)}
 .agenda{display:flex;flex-direction:column}
 .day{display:grid;grid-template-columns:56px minmax(0,1fr);gap:12px;padding:12px 0;border-top:1px solid var(--separator)}
 .day:first-child{border-top:0;padding-top:0}
@@ -124,12 +124,12 @@ export const PANEL_STYLE = `<style>
 .dow{font-size:11px;font-weight:500;color:var(--muted)}
 .dom{font-size:18px;font-weight:600;letter-spacing:-.02em}
 .mon{display:none}
-.day.today .day-label{background:var(--accent-soft)}
-.day.today .dow,.day.today .dom{color:var(--accent-text)}
+.day.today .day-label{background:var(--fg);color:var(--bg)}
+.day.today .dow,.day.today .dom,.day.today .mon{color:var(--bg)}
 .day .list>li{padding:8px 0}
 .day .list>li:first-child{padding-top:6px}
 .due-row,.term-row{display:flex;align-items:center;gap:10px;min-width:0}
-.due-row a:hover{color:var(--accent-text)}
+.due-row a:hover{text-decoration:underline;text-underline-offset:3px}
 .src-list{display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap}
 .src-chip{display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 8px;border-radius:999px;background:var(--surface-2);font-size:12px;font-weight:500;color:var(--fg-2)}
 .src-chip .src-dot{width:6px;height:6px}
@@ -166,7 +166,7 @@ export const PANEL_STYLE = `<style>
 .tools .grow{display:flex;flex-direction:column;gap:6px}
 .profile>li{font-size:14px}
 .brief-line{display:flex;align-items:center;gap:10px;min-width:0}
-.brief-line:hover{color:var(--accent-text)}
+.brief-line:hover .truncate{text-decoration:underline;text-underline-offset:3px}
 .truncate-cell{max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .feed-row{display:flex;align-items:center;gap:10px;min-width:0}
 .feed-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px}

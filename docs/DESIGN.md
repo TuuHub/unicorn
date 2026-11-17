@@ -1,0 +1,63 @@
+# Design system: Pearl & Ink
+
+unicorn's panel is a quiet surface for loud information. Deadlines, changes and failures carry the color. Everything else is greyscale.
+
+Tokens live in `:root` in `src/ui.ts`, with a dark-mode block below them. Pages use tokens and never write raw hex values. The one exception is `#17161c` on the brand mark, because the horn is light in both themes.
+
+## Color
+
+| Token | Light | Dark | Role |
+|---|---|---|---|
+| `--bg` | `#f2f2f5` | `#08080b` | Page background (pearl / night) |
+| `--surface` | `#ffffff` | `#131318` | Cards and widgets |
+| `--surface-2` | `#f6f6f8` | `#1a1a20` | Insets inside a card |
+| `--default` | `#ebebef` | `#22222a` | Secondary buttons, chips, the current nav item |
+| `--fg` | `#17161c` | `#f4f3f7` | Ink: text, primary buttons, focus ring, progress fill |
+| `--muted` | `#6b6a75` | `#9a99a6` | Secondary text |
+| `--faint` | `#a3a2ad` | `#6c6b78` | Link underlines, idle dots |
+| `--border` | `#e3e2e8` | `#24232b` | The 1px ring every card uses as its shadow |
+| `--opal` | `#14a3a8` | `#46d1d3` | Something new or changed |
+| `--danger` | `#e5484d` | — | Overdue, failed, stopped |
+| `--warning` | `#e8a23a` | — | Due within 48 hours |
+| `--success` | `#3aa76a` | — | Handed in, done |
+| `--horn` | gradient | gradient | The brand mark only |
+
+Each signal color has `-soft` (fill) and `-text` (readable on a surface) variants.
+
+### Rules
+
+- **Ink is the accent.** The primary action is an ink button. A link is ink with a faint underline. There is no brand blue.
+- **Color is a signal, not a decoration.** A signal color appears only when its state is true: red only when something is late or broken, amber only when it is due soon. If nothing is wrong, the page is greyscale.
+- **One signal per sentence.** Never put two colored phrases side by side. When sync has stopped, that is the only red text in the subtitle.
+- **Prefer small marks.** Signals show as a 6px dot, a chip, or an icon tint before they take over a whole word.
+- **The horn appears once.** The iridescent gradient is the unicorn on the logo. It is never used for progress bars, lines, charts or backgrounds.
+
+## Type
+
+The system UI stack only. The CSP (`default-src 'none'`) blocks web fonts, and the native face reads well on every platform the panel runs on.
+
+| Use | Size / line | Weight |
+|---|---|---|
+| Overview headline | 26 / 34 | 600, -0.02em |
+| Page `h1` | 20 / 28 | 600, -0.01em |
+| Card title `h2` | 16 / 24 | 500 |
+| Body | 14 / 21 | 400 |
+| Meta, timestamps | 12.5 | 400, tabular numbers |
+
+Use sentence case everywhere. Don't use all-caps labels.
+
+## Shape
+
+- Radii: 16px for cards and widgets, 12px for controls and insets, 999px for chips and bars. An inner radius is never larger than its outer one.
+- Depth comes from a 1px ring (`--shadow`), not from a drop shadow. The only exception is `--shadow-lg`, for floating elements such as the board's edit bar.
+- Spacing steps are 4, 8, 12, 16, 24 and 40.
+
+## Overview board
+
+The overview is a grid of widgets the user can rearrange. The code is in `src/panel-board.ts`.
+
+- Three columns. A widget is `s` (one column), `m` (two columns) or `l` (full width). Tablets (≤1100px) get two columns, and phones (≤640px) get one.
+- The layout is saved in the `settings` table as one JSON row with the key `overview_board`. It is saved with a plain form POST to `/panel/board`, because the CSP allows no `fetch`.
+- Every widget is rendered on the server. Hidden widgets carry the `hidden` attribute. Customizing toggles them in place, and nothing is fetched.
+- The headline above the board is a single sentence saying what needs attention next. It is the most useful line on the page, so no widget repeats it.
+- The setup checklist appears only while setup is incomplete. On phones it shows only the unfinished steps.

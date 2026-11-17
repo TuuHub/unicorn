@@ -2,9 +2,9 @@
 // and the hosted server's sign-in. Plain HTML+CSS strings by design (ADR-0026): zero framework,
 // zero client state, nothing loaded from anywhere else.
 //
-// The look follows HeroUI v3's dashboard templates: a grey canvas, white surfaces lifted by a
-// hairline shadow, pill controls, soft chips and one blue accent. Source hues stay the landing
-// page's spectrum; the sign-in keeps its hero horn.
+// The look is unicorn's own "Pearl & Ink" system (docs/DESIGN.md): pearl neutrals, ink controls,
+// colour reserved for meaning. Source hues stay the landing page's spectrum; the sign-in keeps
+// its hero horn.
 
 import { HORN_FALLBACK, HORN_SCRIPT } from "./horn";
 import { icon } from "./marks";
@@ -76,39 +76,44 @@ export interface PageOptions {
 }
 
 const CSS = `
-/* Tokens follow HeroUI v3's default theme (heroui.com): a grey canvas, white surfaces that float
-   on a three-layer hairline shadow instead of borders, pill controls, soft tinted chips, one blue
-   accent. Dark mode drops the shadows and lifts surfaces by tone alone, as HeroUI does. */
+/* unicorn's design system, "Pearl & Ink" (docs/DESIGN.md). Cool pearl neutrals, ink for every
+   primary control, and colour only where it means something: opal for "changed", flare for
+   overdue or failed, lamp for due soon, moss for done. The horn gradient is the brand mark and
+   nothing else. */
 :root{color-scheme:light;
---bg:#f5f5f5;--surface:#ffffff;--surface-2:#efeff0;--surface-3:#eaeaeb;--default:#ebebec;--default-hover:#e2e2e4;
---fg:#18181b;--fg-2:#3f3f46;--muted:#71717a;--faint:#a1a1aa;--border:#dedee0;--separator:#e4e4e7;
---accent:#0485f7;--accent-fg:#ffffff;--accent-soft:color-mix(in oklab,#0485f7 12%,#fff);--accent-text:#0369c9;
---success:#17c964;--success-soft:color-mix(in oklab,#17c964 16%,#fff);--success-text:#12804a;
---warning:#f5a524;--warning-soft:color-mix(in oklab,#f5a524 18%,#fff);--warning-text:#a5650a;
---danger:#ff383c;--danger-soft:color-mix(in oklab,#ff383c 12%,#fff);--danger-text:#d4242a;
---shadow:0 2px 4px rgb(0 0 0/.04),0 1px 2px rgb(0 0 0/.06),0 0 1px rgb(0 0 0/.06);
---shadow-lg:0 8px 24px -6px rgb(0 0 0/.10),0 2px 4px rgb(0 0 0/.04),0 0 1px rgb(0 0 0/.08);
---chip:#ffffff;--night:#060607;
+--bg:#f2f2f5;--surface:#ffffff;--surface-2:#f6f6f8;--surface-3:#ececf0;--default:#ebebef;--default-hover:#e1e1e7;
+--fg:#17161c;--fg-2:#3c3b44;--muted:#6b6a75;--faint:#a3a2ad;--border:#e3e2e8;--separator:#e8e7ed;
+--accent:#17161c;--accent-fg:#ffffff;--accent-soft:#ebebef;--accent-text:#17161c;
+--opal:#14a3a8;--opal-soft:#dcf3f3;--opal-text:#0a7175;
+--success:#3aa76a;--success-soft:#e1f3e8;--success-text:#2a7048;
+--warning:#e8a23a;--warning-soft:#fbefd9;--warning-text:#94590a;
+--danger:#e5484d;--danger-soft:#fce5e5;--danger-text:#c4262c;
+--horn:linear-gradient(135deg,#8ec5ff 0%,#9ff0d0 34%,#ffe38a 66%,#ffb3d6 100%);
+--shadow:0 0 0 1px var(--border);
+--shadow-lg:0 0 0 1px var(--border),0 12px 28px -10px rgb(23 22 28/.18);
+--chip:#ffffff;--night:#08080b;
 /* names older page styles still use */
 --paper:var(--bg);--paper-2:var(--surface-2);--ink:var(--fg);--ink-2:var(--muted);--ink-3:var(--faint);--rule:var(--separator);--rule-2:var(--separator);
 --card:var(--surface);--muted-text:var(--muted);--track:var(--default);--ok:var(--success-text);--bad:var(--danger-text);--sel:var(--default);--lift:var(--shadow);--lift-2:var(--shadow-lg);
---btn-bg:var(--fg);--btn-ink:#fff;--btn-hover:#27272a;--outline-bg:var(--default);--outline-hover:var(--default-hover)}
+--btn-bg:var(--fg);--btn-ink:#fff;--btn-hover:#2e2d36;--outline-bg:var(--default);--outline-hover:var(--default-hover)}
 @media (prefers-color-scheme:dark){:root{color-scheme:dark;
---bg:#060607;--surface:#18181b;--surface-2:#232325;--surface-3:#262728;--default:#27272a;--default-hover:#323236;
---fg:#fafafa;--fg-2:#d4d4d8;--muted:#9f9fa9;--faint:#71717a;--border:#28282c;--separator:#26262a;
---accent:#0485f7;--accent-soft:color-mix(in oklab,#0485f7 22%,#18181b);--accent-text:#5eb1ff;
---success-soft:color-mix(in oklab,#17c964 20%,#18181b);--success-text:#45d483;
---warning-soft:color-mix(in oklab,#f5a524 20%,#18181b);--warning-text:#f7b750;
---danger-soft:color-mix(in oklab,#ff383c 20%,#18181b);--danger-text:#ff6b6e;
---shadow:0 0 0 1px rgb(255 255 255/.03);--shadow-lg:0 0 0 1px rgb(255 255 255/.06),0 12px 32px rgb(0 0 0/.5);--chip:#232325;--night:#000;
---btn-bg:#fafafa;--btn-ink:#18181b;--btn-hover:#e4e4e7}}
+--bg:#08080b;--surface:#131318;--surface-2:#1a1a20;--surface-3:#202027;--default:#22222a;--default-hover:#2c2c35;
+--fg:#f4f3f7;--fg-2:#d3d2db;--muted:#9a99a6;--faint:#6c6b78;--border:#24232b;--separator:#202027;
+--accent:#f4f3f7;--accent-fg:#131318;--accent-soft:#22222a;--accent-text:#f4f3f7;
+--opal:#46d1d3;--opal-soft:#10302f;--opal-text:#6fe0e1;
+--success-soft:#13291c;--success-text:#6fd39a;
+--warning-soft:#2e2312;--warning-text:#f5b961;
+--danger-soft:#33161a;--danger-text:#ff7a7e;
+--shadow:0 0 0 1px var(--border);--shadow-lg:0 0 0 1px var(--border),0 16px 36px rgb(0 0 0/.55);--chip:#1a1a20;--night:#000;
+--btn-bg:#f4f3f7;--btn-ink:#131318;--btn-hover:#dcdbe3}}
 *{box-sizing:border-box}
+[hidden]{display:none!important}
 html{-webkit-text-size-adjust:100%;background:var(--bg)}
 body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue","Noto Sans",Arial,sans-serif;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
 a{color:inherit;text-decoration:none;touch-action:manipulation}
 h1,h2,h3{text-wrap:balance}
 p,li{text-wrap:pretty}
-:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:8px}
+:focus-visible{outline:2px solid var(--fg);outline-offset:2px;border-radius:8px}
 .i{width:18px;height:18px;flex:none}
 code,pre,kbd,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}
 .tabular,.num{font-variant-numeric:tabular-nums}
@@ -122,7 +127,7 @@ code,pre,kbd,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas
 .side{position:sticky;top:0;height:100vh;height:100dvh;display:flex;flex-direction:column;gap:12px;padding:12px;box-shadow:inset -1px 0 0 rgb(0 0 0/.08);overflow-y:auto;scrollbar-width:none}
 @media (prefers-color-scheme:dark){.side{box-shadow:inset -1px 0 0 rgb(255 255 255/.06)}}
 .brand{display:flex;align-items:center;gap:10px;padding:6px 8px;border-radius:12px}
-.brand-mark{display:grid;place-items:center;width:32px;height:32px;border-radius:10px;background:var(--fg);color:var(--bg);flex:none}
+.brand-mark{display:grid;place-items:center;width:32px;height:32px;border-radius:10px;background:var(--horn);color:#17161c;flex:none}
 .brand-mark .i{width:18px;height:18px}
 .brand-text{display:flex;flex-direction:column;min-width:0;line-height:1.25}
 .brand-name{font-weight:600;font-size:14px}
@@ -216,7 +221,7 @@ h1{margin:0;font-size:20px;line-height:28px;font-weight:600;letter-spacing:-.01e
 
 /* --- buttons ------------------------------------------------------------------------- */
 button,.button{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:36px;padding:0 16px;border:0;border-radius:999px;background:var(--accent);color:var(--accent-fg);font:inherit;font-size:14px;font-weight:500;white-space:nowrap;cursor:pointer;user-select:none;touch-action:manipulation;transition:background-color .15s cubic-bezier(.4,0,.2,1),transform .1s ease-out,opacity .15s}
-button:hover,.button:hover{background:color-mix(in oklab,var(--accent) 90%,#fff 10%)}
+button:hover,.button:hover{background:color-mix(in oklab,var(--accent) 86%,var(--bg))}
 button:active,.button:active{transform:scale(.97)}
 button .i,.button .i{width:16px;height:16px}
 button.secondary,.button.secondary,.button.ghost,button.ghost{background:var(--default);color:var(--fg)}
@@ -229,7 +234,7 @@ button.lg,.button.lg{height:44px;padding:0 20px;font-size:15px}
 .icon-btn{width:32px;height:32px;padding:0;border-radius:999px;background:var(--default);color:var(--fg);display:inline-grid;place-items:center}
 .button.night{background:#fff;color:#030304}
 .button.night-outline{background:rgb(255 255 255/.08);color:#fff}
-.link{color:var(--accent-text)}
+.link{color:var(--fg);text-decoration:underline;text-decoration-color:var(--faint);text-underline-offset:3px}
 .link:hover{text-decoration:underline;text-underline-offset:3px}
 .more{display:inline-flex;align-items:center;gap:4px;color:var(--muted);font-size:13px;font-weight:500;white-space:nowrap;height:28px;padding:0 10px;border-radius:999px;transition:background-color .15s,color .15s}
 .more .i{width:14px;height:14px}
@@ -245,7 +250,7 @@ h2{margin:0;font-size:16px;line-height:24px;font-weight:500}
 h3{margin:0;font-size:14px;font-weight:600}
 .card-sub{margin:2px 0 0;color:var(--muted);font-size:13px}
 .card-body{padding:12px 16px 16px}
-.card-body a:not(.button):not(.more):not(.plain):not(.badge):not([aria-current]):not(.icon-btn),.card-sub a,.notice a,.steps a,.hint a{color:var(--accent-text)}
+.card-body a:not(.button):not(.more):not(.plain):not(.badge):not([aria-current]):not(.icon-btn),.card-sub a,.notice a,.steps a,.hint a{color:var(--fg);text-decoration:underline;text-decoration-color:var(--faint);text-underline-offset:3px}
 .card-body a:not(.button):not(.more):not(.plain):not(.badge):not([aria-current]):not(.icon-btn):hover,.card-sub a:hover{text-decoration:underline;text-underline-offset:3px}
 .section-label{margin:28px 0 10px;display:flex;align-items:center;justify-content:space-between;gap:12px}
 .section-label h2{font-size:16px;font-weight:600}
@@ -279,7 +284,8 @@ a.stat:hover{box-shadow:var(--shadow-lg)}
 .badge.ok,.chip.success{background:var(--success-soft);color:var(--success-text)}
 .badge.error,.chip.danger{background:var(--danger-soft);color:var(--danger-text)}
 .chip.warning{background:var(--warning-soft);color:var(--warning-text)}
-.chip.accent,.badge.tool{background:var(--accent-soft);color:var(--accent-text)}
+.chip.accent,.badge.tool{background:var(--default);color:var(--fg)}
+.chip.opal{background:var(--opal-soft);color:var(--opal-text)}
 .badge.course{background:var(--default);color:var(--fg);font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:.01em}
 a.badge.course:hover{background:var(--default-hover)}
 .trend{display:inline-flex;align-items:center;gap:2px;height:20px;padding:0 6px;border-radius:999px;background:var(--default);color:var(--muted);font-size:12px;font-weight:500;letter-spacing:0}
@@ -352,14 +358,14 @@ pre.night{background:#18181b;color:#fafafa;white-space:pre}
 textarea{width:100%;min-height:150px;font:13px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--surface);color:var(--fg);border:0;border-radius:12px;box-shadow:var(--shadow);padding:10px 12px;resize:vertical;transition:box-shadow .15s}
 .card textarea,.card input[type=text],.card input[type=email],.card input[type=password],.card input[type=number],.card select{background:var(--surface-2);box-shadow:none}
 input[type=text],input[type=email],input[type=password],input[type=number],input[type=search],select{width:100%;height:36px;font:inherit;font-size:14px;background:var(--surface);color:var(--fg);border:0;border-radius:12px;box-shadow:var(--shadow);padding:0 12px;transition:box-shadow .15s}
-textarea:focus,input:focus,select:focus{outline:none;box-shadow:0 0 0 2px var(--accent)}
+textarea:focus,input:focus,select:focus{outline:none;box-shadow:0 0 0 2px var(--fg)}
 ::placeholder{color:var(--muted)}
 label.field{display:block;font-size:14px;font-weight:500;margin:14px 0 6px}
 .notice{display:flex;align-items:center;gap:10px;margin:0 0 16px;padding:10px 14px;border-radius:12px;background:var(--success-soft);color:var(--success-text);font-size:13.5px;font-weight:500}
 .notice.error{background:var(--danger-soft);color:var(--danger-text)}
 div.notice{display:block;font-weight:400}
 .meter,.progress{height:6px;background:var(--default);border-radius:999px;overflow:hidden}
-.meter>span,.progress>span{display:block;height:100%;background:var(--accent);border-radius:999px}
+.meter>span,.progress>span{display:block;height:100%;background:var(--fg);border-radius:999px}
 .meter.warn>span{background:var(--warning)}
 
 /* --- settings: label left, control right, separators between (HeroUI's settings page) --- */
