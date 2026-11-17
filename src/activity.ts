@@ -3,7 +3,7 @@
 // Two writers: the door (one row per tool call, via instrumentTools in src/mcp/door.ts) and the
 // scheduler cycle (one row per source sync, plus memory/system events such as a new term being
 // detected). Arguments are kept so the user can see exactly what their agent asked, but long
-// free text (plan bodies, memory entries, brief bodies) is reduced to its length, and nothing
+// free text (plan bodies, brief bodies) is reduced to its length, and nothing
 // that is a credential ever reaches this table — the door never receives one.
 
 export type ActivityKind = "tool" | "sync" | "memory" | "system";
@@ -66,6 +66,9 @@ export interface ActivityLog {
 export const ACTIVITY_RETENTION_DAYS = 30;
 const LONG_TEXT_KEYS = new Set(["content", "body", "text", "sql"]);
 const MAX_STRING = 160;
+// A memory row's added/removed entries are kept whole: the panel shows them for review and
+// replays them to undo a change. Memory's own limits bound their size.
+const WHOLE_KEYS = new Set(["added", "removed"]);
 
 /** Shrinks tool arguments to something safe and readable to keep for 30 days. */
 export function redactDetail(value: unknown, key = "", depth = 0): unknown {
@@ -73,6 +76,9 @@ export function redactDetail(value: unknown, key = "", depth = 0): unknown {
     return value ?? null;
   }
   if (typeof value === "string") {
+    if (WHOLE_KEYS.has(key)) {
+      return value;
+    }
     if (LONG_TEXT_KEYS.has(key) && value.length > 80) {
       return `[${value.length} chars]`;
     }
@@ -85,6 +91,9 @@ export function redactDetail(value: unknown, key = "", depth = 0): unknown {
     return "[…]";
   }
   if (Array.isArray(value)) {
+    if (WHOLE_KEYS.has(key)) {
+      return value.map((item) => redactDetail(item, key, depth + 1));
+    }
     const items = value.slice(0, 10).map((item) => redactDetail(item, key, depth + 1));
     return value.length > 10 ? [...items, `…${value.length - 10} more`] : items;
   }
