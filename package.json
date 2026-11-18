@@ -9,6 +9,7 @@
   "dependencies": {
     "@cloudflare/workers-oauth-provider": "^1.1.0",
     "@modelcontextprotocol/sdk": "^1.32.1",
+    "edstem-cli": "^0.9.0",
     "fast-xml-parser": "^5.10.0",
     "moodle-cli": "^0.14.0",
     "okta-auth-cli": "^0.3.1",

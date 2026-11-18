@@ -106,11 +106,52 @@ describe("EdPlugin.pull", () => {
     expect(fetcher.mock.calls[0]?.[1]?.headers).toMatchObject({ Authorization: "Bearer ed-secret" });
     expect(items[2]).not.toHaveProperty("body");
     // View counters tick on every read; keeping them in raw would rewrite the item every sync.
-    expect((items[1] as { raw: Record<string, unknown> }).raw).not.toHaveProperty("view_count");
+    const raw = (items[1] as unknown as { raw: { metrics: Record<string, unknown> } }).raw;
+    expect(raw).not.toHaveProperty("updatedAt");
+    expect(raw.metrics).toEqual(expect.objectContaining({ replyCount: 3 }));
+    expect(raw.metrics).not.toHaveProperty("viewCount");
     const thread2Facets = (items[2] as { facets: Array<{ type: string; data: Record<string, unknown> }> }).facets;
     const authorFacet = thread2Facets.find((facet) => facet.type === "author");
     expect(authorFacet?.data).toEqual({ actor: "ed-user:100" });
     expect(thread2Facets.find((facet) => facet.type === "discussion-category")).toBeUndefined();
+  });
+
+  it("reads a thread with resolved authors, and turns Ed's errors into HTTP statuses", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        Response.json({
+          thread: {
+            id: 5001,
+            number: 12,
+            course_id: 100,
+            user_id: 7,
+            title: "Deadline?",
+            document: "When is it due?",
+            is_anonymous: false,
+            vote_count: 2,
+            created_at: "2026-07-12T10:00:00.000Z",
+            answers: [{ id: 1, user_id: 99, document: "Friday.", is_endorsed: true, vote_count: 4, comments: [{ id: 2, user_id: 7, document: "Thanks" }] }],
+            comments: [],
+          },
+          users: [
+            { id: 7, name: "Student", course_role: "student" },
+            { id: 99, name: "Tutor", course_role: "tutor" },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(Response.json({ message: "Not found" }, { status: 404 }));
+    const plugin = new EdPlugin({ token: "t", fetch: fetcher });
+
+    const view = await plugin.thread(5001);
+
+    expect(view).toMatchObject({
+      title: "Deadline?",
+      url: "https://edstem.org/au/courses/100/discussion/12",
+      post: { author: "Student", role: "student", votes: 2 },
+      answers: [{ author: "Tutor", role: "tutor", endorsed: true, votes: 4, replies: [{ author: "Student", body: "Thanks" }] }],
+    });
+    await expect(plugin.thread(1)).rejects.toMatchObject({ name: "HttpStatusError", status: 404 });
   });
 
   it("defaults course and thread URLs to the au region, and honors an explicit region", async () => {
