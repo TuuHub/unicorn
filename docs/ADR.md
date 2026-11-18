@@ -982,12 +982,17 @@ Unchanged from the original policy and still enforced: `SELECT`/`WITH` only as t
 
 ---
 
-## ADR-0050 — Optional Cloudflare Access sign-in for the human pages
+## ADR-0050 — "Continue with email" through Cloudflare Access, beside the admin token
 
 **Status:** Accepted (2026-11-18)
 
-**Context.** Self-deployers sign in to the panel with `ADMIN_TOKEN`, a random string they saw once during setup. Many already have Cloudflare Zero Trust, which offers email one-time codes and social logins for free.
+**Context.** Self-deployers sign in with `ADMIN_TOKEN`, a random string they saw once during setup. Cloudflare Access gives every Cloudflare account email one-time codes for free, but setting it up by hand is a dozen dashboard steps, and putting it on the whole Worker breaks `/mcp` and the OAuth endpoints, which client apps reach without a browser.
 
-**Decision.** When the `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` secrets are set, a request whose `Cf-Access-Jwt-Assertion` verifies (RS256 against the team's published keys, matching audience and issuer, not expired) counts as signed in. Without a valid JWT the `ADMIN_TOKEN` login and bearer auth work exactly as before. The Access application covers only `/panel*`, `/settings*`, `/login` and `/authorize*`, never the whole Worker, because client apps must reach `/mcp` and the OAuth endpoints without a browser. Sign out goes to `/cdn-cgi/access/logout` when Access is on.
+**Decision.**
+- The sign-in page offers two ways in: "Continue with email" and the admin token. Both end in the same session cookie, so every other page keeps one sign-in check.
+- The Access application covers only `/login/access`. A request that arrives there with a valid `Cf-Access-Jwt-Assertion` (RS256 against the team's published keys, matching audience and issuer, not expired) gets the session cookie and goes on to `next`. The header means nothing on any other path.
+- Onboarding turns it on: a checklist step links to a card on the Deployment page that takes an email and a Cloudflare API token made from a prefilled link (Access apps and account settings, edit). The Worker uses the token once to find or create the Zero Trust organization, make sure the one-time PIN login exists, and create or update the "unicorn" application with a policy that lets in that one email. The token is not stored.
+- The team domain, audience tag and email live in the `settings` table under `access_login`. None of them is a secret.
+- Sign out goes through `/cdn-cgi/access/logout` when email sign-in is on, so the next "Continue with email" asks for a code again.
 
-**Consequences.** The header is never trusted on its own: workers.dev can be reached around Access. `ADMIN_TOKEN` still derives the key that encrypts credentials pasted into `/settings`, so it must not be rotated just because nobody types it any more.
+**Consequences.** `ADMIN_TOKEN` stays the fallback and still derives the key that encrypts pasted credentials, so it must not be rotated just because nobody types it any more. Creating a Zero Trust organization through the API is untested on a fresh account; when Cloudflare refuses, the card tells the owner to open the Zero Trust dashboard once and try again.

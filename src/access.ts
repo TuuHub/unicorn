@@ -1,21 +1,47 @@
-// Optional Cloudflare Access in front of the human pages (/panel, /settings, /login, /authorize).
+// Optional "Continue with email" sign-in through Cloudflare Access.
 //
-// When ACCESS_TEAM_DOMAIN and ACCESS_AUD are set, a request carrying a valid Access JWT counts as
-// signed in, so the owner logs in with Access (email code, GitHub, ...) instead of ADMIN_TOKEN.
-// The token login stays as the fallback. The JWT is verified against the team's signing keys:
-// workers.dev is reachable around Access, so the header alone proves nothing.
+// The Access application covers only /login/access. A request that reaches that path with a
+// valid Access JWT gets the ordinary unicorn session cookie (admin-auth.ts), so every other page
+// keeps one sign-in check and the ADMIN_TOKEN login keeps working beside it. The JWT is verified
+// against the team's signing keys: workers.dev is reachable around Access, so the header alone
+// proves nothing. The settings are written by the onboarding form (access-setup.ts) and live in
+// the `settings` table under "access_login"; none of them is a secret.
+
+export const ACCESS_LOGIN_PATH = "/login/access";
+const KEY = "access_login";
 
 export interface AccessConfig {
   /** e.g. "bunizao.cloudflareaccess.com" */
   teamDomain: string;
   /** The Access application's audience tag. */
   aud: string;
+  /** The one address the application lets in. */
+  email: string;
 }
 
-export function accessConfig(env: { ACCESS_TEAM_DOMAIN?: string; ACCESS_AUD?: string }): AccessConfig | undefined {
-  const teamDomain = env.ACCESS_TEAM_DOMAIN?.trim().replace(/^https?:\/\//, "").replace(/\/+$/, "");
-  const aud = env.ACCESS_AUD?.trim();
-  return teamDomain && aud ? { teamDomain, aud } : undefined;
+export async function loadAccessConfig(db: D1Database): Promise<AccessConfig | null> {
+  const row = await db
+    .prepare("SELECT value_json FROM settings WHERE key = ?")
+    .bind(KEY)
+    .first<{ value_json: string }>()
+    .catch(() => null);
+  if (!row) return null;
+  try {
+    const value = JSON.parse(row.value_json) as Partial<AccessConfig>;
+    return value.teamDomain && value.aud && value.email ? { teamDomain: value.teamDomain, aud: value.aud, email: value.email } : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function saveAccessConfig(db: D1Database, config: AccessConfig, now = new Date()): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO settings (key, value_json, updated_at) VALUES (?, ?, ?)
+       ON CONFLICT (key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`,
+    )
+    .bind(KEY, JSON.stringify(config), now.toISOString())
+    .run();
 }
 
 interface Jwk extends JsonWebKey {
@@ -35,7 +61,7 @@ async function signingKeys(teamDomain: string, fetcher: typeof fetch, now: numbe
 }
 
 /** The signed-in email when `token` is a valid Access JWT for this application, otherwise null. */
-export async function verifyAccessJwt(token: string, config: AccessConfig, fetcher: typeof fetch = fetch, now = Date.now()): Promise<string | null> {
+export async function verifyAccessJwt(token: string, config: Pick<AccessConfig, "teamDomain" | "aud">, fetcher: typeof fetch = fetch, now = Date.now()): Promise<string | null> {
   const parts = token.split(".");
   if (parts.length !== 3) return null;
   try {

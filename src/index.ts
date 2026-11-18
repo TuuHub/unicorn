@@ -10,8 +10,8 @@ import { MoodleProbeError, probeMoodle } from "./moodle-probe";
 import { D1OAuthTokenStore, handleCallback, OAuthError, startAuthorization, type OAuthEnv } from "./oauth";
 import { createOAuthProvider, DOOR_USER_ID, type DoorProps, handleAuthorize, handleRevokeApp, listConnectedApps } from "./oauth-server";
 import { actorFromUserAgent, D1ActivityLog } from "./activity";
-import { accessConfig } from "./access";
-import { handleLogin, handleLogout, requireAdmin } from "./admin-auth";
+import { ACCESS_LOGIN_PATH, loadAccessConfig } from "./access";
+import { handleAccessLogin, handleLogin, handleLogout, requireAdmin } from "./admin-auth";
 import { handlePanel, type PanelRuntime } from "./panel";
 import { D1ManifestStore } from "./plugins/declarative/store";
 import gmailPreset from "./plugins/presets/gmail.json";
@@ -177,6 +177,7 @@ export async function buildPanelRuntime(env: Env, oauthHelpers: OAuthHelpers | u
           },
           retentionDays: settings.retentionDays,
           syncEnabled: settings.syncEnabled,
+          emailSignIn: (await loadAccessConfig(env.DB))?.email ?? null,
         },
   };
 }
@@ -198,19 +199,21 @@ export async function defaultFetch(request: Request, env: Env, context: Executio
     return Response.redirect(new URL("/panel", url).toString(), 302);
   }
 
-  // Sign-in for the human pages below (admin-auth.ts). The password is ADMIN_TOKEN, or a
-  // Cloudflare Access login when ACCESS_TEAM_DOMAIN and ACCESS_AUD are set (access.ts).
-  const access = accessConfig(env);
+  // Sign-in for the human pages below (admin-auth.ts): the ADMIN_TOKEN password, or "Continue
+  // with email" through Cloudflare Access once the owner has set it up (access.ts).
   if (url.pathname === "/login") {
-    return handleLogin(request, env.ADMIN_TOKEN, access);
+    return handleLogin(request, env.ADMIN_TOKEN, await loadAccessConfig(env.DB));
+  }
+  if (url.pathname === ACCESS_LOGIN_PATH && request.method === "GET") {
+    return handleAccessLogin(request, env.ADMIN_TOKEN, await loadAccessConfig(env.DB));
   }
   if (url.pathname === "/logout" && request.method === "POST") {
-    return handleLogout(request, access);
+    return handleLogout(request, await loadAccessConfig(env.DB));
   }
 
   // The panel (ADR-0048): overview, activity log, memory, connect.
   if (url.pathname === "/panel" || url.pathname.startsWith("/panel/")) {
-    const authError = await requireAdmin(request, env.ADMIN_TOKEN, access);
+    const authError = await requireAdmin(request, env.ADMIN_TOKEN);
     if (authError) return authError;
     return handlePanel(request, await buildPanelRuntime(env, oauthHelpers, url.origin));
   }
@@ -242,7 +245,7 @@ export async function defaultFetch(request: Request, env: Env, context: Executio
   // GET /settings/oauth/callback exchanges the code and stores the refresh token.
   // Both are gated behind the same sign-in as /settings itself.
   if (request.method === "GET" && url.pathname.startsWith("/settings/oauth/") && url.pathname.endsWith("/start")) {
-    const authError = await requireAdmin(request, env.ADMIN_TOKEN, access);
+    const authError = await requireAdmin(request, env.ADMIN_TOKEN);
     if (authError) return authError;
     const pluginId = url.pathname.split("/")[3];
     if (!pluginId) {
@@ -259,7 +262,7 @@ export async function defaultFetch(request: Request, env: Env, context: Executio
   }
 
   if (request.method === "GET" && url.pathname === "/settings/oauth/callback") {
-    const authError = await requireAdmin(request, env.ADMIN_TOKEN, access);
+    const authError = await requireAdmin(request, env.ADMIN_TOKEN);
     if (authError) return authError;
     try {
       const { pluginId } = await handleCallback(url, env as unknown as OAuthEnv);
@@ -283,13 +286,13 @@ export async function defaultFetch(request: Request, env: Env, context: Executio
   // OAuthProvider library's job (a single-use, cookie-bound consent handle) — see
   // oauth-server.ts's module comment.
   if (url.pathname === "/authorize" && (request.method === "GET" || request.method === "POST")) {
-    const authError = await requireAdmin(request, env.ADMIN_TOKEN, access);
+    const authError = await requireAdmin(request, env.ADMIN_TOKEN);
     if (authError) return authError;
     return handleAuthorize(request, oauthHelpers, doorUserId(env));
   }
 
   if (request.method === "POST" && url.pathname === "/settings/oauth/apps/revoke") {
-    const authError = await requireAdmin(request, env.ADMIN_TOKEN, access);
+    const authError = await requireAdmin(request, env.ADMIN_TOKEN);
     if (authError) return authError;
     if (request.headers.get("origin") !== url.origin) {
       return new Response("Invalid request origin.", { status: 403 });
@@ -299,7 +302,7 @@ export async function defaultFetch(request: Request, env: Env, context: Executio
   // --- Door OAuth connectors (ADR-0035): end ---
 
   if (url.pathname === "/settings" || url.pathname.startsWith("/settings/")) {
-    const authError = await requireAdmin(request, env.ADMIN_TOKEN, access);
+    const authError = await requireAdmin(request, env.ADMIN_TOKEN);
     if (authError) return authError;
     return handleSettings(request, {
       adminToken: env.ADMIN_TOKEN,

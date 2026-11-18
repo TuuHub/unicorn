@@ -301,7 +301,7 @@ async function main() {
     }
   }
 
-  stdout.write(`\n✓ Setup complete.\n  Settings page: HTTP Basic user "unicorn", password is your ADMIN_TOKEN.\n`);
+  stdout.write(`\n✓ Setup complete.\n  Panel: sign in with your ADMIN_TOKEN, then turn on "Sign in with email" from the Get started list.\n`);
   if (workerUrl) {
     const doorUrl = `${workerUrl.replace(/\/$/, "")}/mcp`;
     stdout.write(

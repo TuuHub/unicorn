@@ -1,12 +1,14 @@
 // The panel's agent and setup pages (ADR-0048):
 //
 //   /panel/playbooks    what each playbook does, how to start it, and which run on a schedule
-//   /panel/deployment   self-deployed Workers only: health, endpoints, secrets, upgrading
+//   /panel/deployment   self-deployed Workers only: health, email sign-in, endpoints, secrets, upgrading
 //   /panel/export       everything unicorn keeps about you that isn't a synced copy, as JSON
 //
 // The hosted server has no Deployment page; its account page (server/pages.ts) says where the
 // data lives and links the same export.
 
+import { saveAccessConfig } from "./access";
+import { AccessSetupError, setUpAccessLogin, TOKEN_URL } from "./access-setup";
 import { readAllMemory } from "./agent-memory";
 import { icon } from "./marks";
 import type { PanelRuntime } from "./panel";
@@ -22,6 +24,8 @@ export interface DeploymentInfo {
   bindings: Record<string, boolean>; // binding or secret name → present
   retentionDays: number;
   syncEnabled: boolean;
+  /** The address "Continue with email" lets in, or null until the owner sets it up. */
+  emailSignIn: string | null;
 }
 
 // Playbook descriptions are written for the agent ("Use when the user …"); these are for the person.
@@ -110,7 +114,7 @@ const BINDINGS: Array<{ name: string; purpose: string; required: boolean }> = [
   { name: "PLUGIN_SECRET_CANVAS_TOKEN", purpose: "Canvas, instead of Sources", required: false },
 ];
 
-export async function renderDeployment(runtime: PanelRuntime): Promise<string | null> {
+export async function renderDeployment(runtime: PanelRuntime, url: URL): Promise<string | null> {
   const info = runtime.deployment;
   if (!info) return null;
   const now = runtime.now ? runtime.now() : new Date();
@@ -161,8 +165,9 @@ export async function renderDeployment(runtime: PanelRuntime): Promise<string | 
       </div>
     </section>`;
 
+  const emailCard = renderEmailSignIn(info.emailSignIn, csrf, url.searchParams.get("error"));
   const endpoints = [
-    ["Panel", "/panel", "ADMIN_TOKEN"],
+    ["Panel", "/panel", info.emailSignIn ? "Email code or ADMIN_TOKEN" : "ADMIN_TOKEN"],
     ["Door", "/mcp", "OAuth or MCP_TOKEN"],
     ["Admin MCP", "/mcp/admin", "ADMIN_TOKEN"],
     ["Health", "/health", "Public"],
@@ -179,9 +184,10 @@ export async function renderDeployment(runtime: PanelRuntime): Promise<string | 
     </section>`;
 
   const body = `
+    ${url.searchParams.get("saved") === "email" ? '<p class="notice" role="status">Email sign-in is on.</p>' : ""}
     ${health}
     <div class="deploy-grid">
-      <div class="col">${secrets}</div>
+      <div class="col">${emailCard}${secrets}</div>
       <div class="col">
       ${endpointCard}
       <section class="card"><div class="card-head"><h2>Upgrade</h2><p class="card-sub">Run from your clone. Data and secrets stay. <a href="https://unicorn.tuuhub.com/docs/unicorn/upgrade" target="_blank" rel="noopener">Notes</a></p></div><div class="card-body">
@@ -234,6 +240,14 @@ export async function renderDeployment(runtime: PanelRuntime): Promise<string | 
       .data-export{align-self:flex-start}
       .group.data-group{margin:4px 0 -4px}
       .card-body .cmd{margin:0}
+      .email-form{display:flex;flex-direction:column}
+      .email-form label.field{margin-top:12px}
+      .email-form label.field:first-of-type{margin-top:0}
+      .email-form button{align-self:flex-start;margin-top:16px}
+      .email-on{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0}
+      .email-on span{display:inline-flex;align-items:center;gap:7px}
+      .email-change summary{color:var(--muted);font-size:13px;cursor:pointer}
+      .email-change[open] summary{margin-bottom:12px}
       .card-body{gap:12px}
       @media (max-width:760px){
         .facts{grid-template-columns:repeat(2,minmax(0,1fr))}
@@ -256,6 +270,48 @@ export async function renderDeployment(runtime: PanelRuntime): Promise<string | 
     body,
     wide: true,
   });
+}
+
+// --- email sign-in (access-setup.ts) ------------------------------------------------
+
+function renderEmailSignIn(email: string | null, csrf: string, error: string | null): string {
+  const form = `<form class="email-form" method="post" action="/panel/access">
+      <input type="hidden" name="csrf" value="${escapeHtml(csrf)}">
+      <label class="field" for="access-email">Your email</label>
+      <input id="access-email" name="email" type="email" autocomplete="email" required value="${escapeHtml(email ?? "")}">
+      <label class="field" for="access-token">Cloudflare API token</label>
+      <input id="access-token" name="token" type="password" autocomplete="off" required>
+      <p class="hint"><a href="${escapeHtml(TOKEN_URL)}" target="_blank" rel="noopener">Create the token</a> with its permissions already filled in: pick your account, then Continue to summary and Create. unicorn uses it once and doesn't keep it, so you can delete it afterwards.</p>
+      <button type="submit">${email ? "Save" : "Turn on"}</button>
+    </form>`;
+  const body = email
+    ? `<p class="email-on"><span><span class="dot ok" aria-hidden="true"></span>On for ${escapeHtml(email)}</span><a class="button ghost sm" href="/login/access?next=%2Fpanel%2Fdeployment">Try it</a></p>
+       <details class="email-change"${error ? " open" : ""}><summary>Change the email</summary>${form}</details>`
+    : form;
+  return `<section class="card" id="email-sign-in">
+      <div class="card-head"><h2>Sign in with email</h2><p class="card-sub">Get a one-time code by email instead of typing the admin token. It runs on Cloudflare Access, free on your own account, and the admin token keeps working.</p></div>
+      <div class="card-body">
+        ${error ? `<p class="notice error" role="alert">${escapeHtml(error)}</p>` : ""}
+        ${body}
+      </div>
+    </section>`;
+}
+
+/** POST /panel/access: set up (or re-point) Cloudflare Access with a token used once. */
+export async function saveEmailSignIn(runtime: PanelRuntime, form: FormData, url: URL): Promise<Response> {
+  const back = (query: string) => new Response(null, { status: 303, headers: { location: new URL(`/panel/deployment?${query}#email-sign-in`, url).toString() } });
+  const email = String(form.get("email") ?? "").trim();
+  const apiToken = String(form.get("token") ?? "").trim();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return back(`error=${encodeURIComponent("Enter the email you want the code sent to.")}`);
+  if (!apiToken) return back(`error=${encodeURIComponent("Paste the Cloudflare API token.")}`);
+  try {
+    const config = await setUpAccessLogin({ apiToken, email, host: url.host });
+    await saveAccessConfig(runtime.db, config, runtime.now ? runtime.now() : new Date());
+    return back("saved=email");
+  } catch (error) {
+    if (!(error instanceof AccessSetupError)) console.error(JSON.stringify({ event: "access_setup_failed", message: error instanceof Error ? error.message : String(error) }));
+    return back(`error=${encodeURIComponent(error instanceof AccessSetupError ? error.message : "Email sign-in could not be set up. Try again.")}`);
+  }
 }
 
 export async function renderExport(runtime: PanelRuntime): Promise<Response> {

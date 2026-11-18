@@ -24,8 +24,6 @@ export interface Env {
   ED_API_TOKEN?: string;
   MCP_TOKEN: string;
   // Optional Cloudflare Access login for the human pages (src/access.ts).
-  ACCESS_TEAM_DOMAIN?: string;
-  ACCESS_AUD?: string;
   MOODLE_BASE_URL: string;
   MOODLE_SESSION?: string;
   CANVAS_BASE_URL?: string;

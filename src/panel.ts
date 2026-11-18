@@ -54,7 +54,7 @@ import {
   togglePlanItem,
 } from "./panel-campus";
 import { renderMemoryPage, saveMemoryEntry, undoMemoryChange } from "./panel-memory";
-import { type DeploymentInfo, renderDeployment, renderExport, renderPlaybooks } from "./panel-setup";
+import { type DeploymentInfo, renderDeployment, renderExport, renderPlaybooks, saveEmailSignIn } from "./panel-setup";
 import { BOARD_SCRIPT, BOARD_STYLE, handleBoardPost, loadBoard, renderBoard, type WidgetContent, type WidgetId, WIDGETS } from "./panel-board";
 import { checklistProgress, listChecklistItems } from "./widgets/checklist.js";
 import { escapeHtml, htmlResponse, renderPage } from "./ui";
@@ -106,6 +106,7 @@ export async function handlePanel(request: Request, runtime: PanelRuntime): Prom
     if (path === "/panel/briefs/read") return markBriefsRead(runtime, form, url);
     if (path === "/panel/plans/toggle") return togglePlanItem(runtime, form, url);
     if (path === "/panel/board") return handleBoardPost(runtime.db, form, url);
+    if (path === "/panel/access" && runtime.deployment) return saveEmailSignIn(runtime, form, url);
     return new Response("Not found.", { status: 404 });
   }
 
@@ -140,7 +141,7 @@ export async function handlePanel(request: Request, runtime: PanelRuntime): Prom
     case "/panel/export":
       return renderExport(runtime);
     case "/panel/deployment": {
-      const page = await renderDeployment(runtime);
+      const page = await renderDeployment(runtime, url);
       return page ? htmlResponse(page) : new Response(null, { status: 303, headers: { location: new URL("/account", url).toString() } });
     }
     default: {
@@ -228,7 +229,20 @@ async function renderOverview(runtime: PanelRuntime): Promise<string> {
     },
   };
 
+  const connected = runtime.grants.length > 0 || stats.toolCalls24h > 0 || stats.clients7d.length > 0;
   const checklist = [
+    // Self-deployed only: the hosted server has its own sign-in.
+    ...(runtime.deployment
+      ? [
+          {
+            done: Boolean(runtime.deployment.emailSignIn),
+            title: "Sign in with email",
+            text: "A code by email instead of the admin token.",
+            href: "/panel/deployment#email-sign-in",
+            cta: "Set up",
+          },
+        ]
+      : []),
     {
       done: runtime.configuredSources > 0,
       title: "Add a source",
@@ -238,7 +252,7 @@ async function renderOverview(runtime: PanelRuntime): Promise<string> {
     },
     { done: totalItems > 0, title: "First sync", text: "Automatic every hour, or start it now.", href: "/settings", cta: "Sync now" },
     {
-      done: runtime.grants.length > 0 || stats.toolCalls24h > 0 || stats.clients7d.length > 0,
+      done: connected,
       title: "Connect your AI",
       text: "Claude, ChatGPT, Claude Code or any MCP client.",
       href: "/panel/connect",
@@ -247,7 +261,7 @@ async function renderOverview(runtime: PanelRuntime): Promise<string> {
     { done: user.entries.length > 0, title: "Introduce yourself", text: "Ask your agent “get to know me”; it writes your profile.", href: "/panel/memory", cta: "Profile" },
   ];
   const doneCount = checklist.filter((step) => step.done).length;
-  const asks = checklist[2].done ? renderAsks({ overdue, ahead, hasPlan: Boolean(plan), hasProfile: user.entries.length > 0 }) : "";
+  const asks = connected ? renderAsks({ overdue, ahead, hasPlan: Boolean(plan), hasProfile: user.entries.length > 0 }) : "";
   const setup =
     doneCount === checklist.length
       ? ""

@@ -40,7 +40,7 @@ describe("admin sign-in", () => {
   });
 
   it("signs in with ADMIN_TOKEN and the cookie authenticates later requests", async () => {
-    const response = await handleLogin(loginPost(TOKEN), TOKEN);
+    const response = await handleLogin(loginPost(TOKEN), TOKEN, null);
     const setCookie = response.headers.get("set-cookie") ?? "";
 
     expect(response.status).toBe(303);
@@ -55,7 +55,7 @@ describe("admin sign-in", () => {
   });
 
   it("rejects a wrong token without setting a cookie", async () => {
-    const response = await handleLogin(loginPost("nope"), TOKEN);
+    const response = await handleLogin(loginPost("nope"), TOKEN, null);
 
     expect(response.status).toBe(401);
     expect(response.headers.get("set-cookie")).toBeNull();
@@ -63,20 +63,20 @@ describe("admin sign-in", () => {
   });
 
   it("rejects a cross-origin sign-in", async () => {
-    const response = await handleLogin(loginPost(TOKEN, "/panel", "https://evil.example"), TOKEN);
+    const response = await handleLogin(loginPost(TOKEN, "/panel", "https://evil.example"), TOKEN, null);
 
     expect(response.status).toBe(403);
   });
 
   it("invalidates sessions when ADMIN_TOKEN rotates", async () => {
-    const cookie = sessionFrom(await handleLogin(loginPost(TOKEN), TOKEN));
+    const cookie = sessionFrom(await handleLogin(loginPost(TOKEN), TOKEN, null));
     const later = new Request(`${ORIGIN}/panel`, { headers: { cookie } });
 
     expect(await isAdminRequest(later, "rotated-secret")).toBe(false);
   });
 
   it("rejects a forged or expired cookie", async () => {
-    const [, value] = sessionFrom(await handleLogin(loginPost(TOKEN), TOKEN)).split("=");
+    const [, value] = sessionFrom(await handleLogin(loginPost(TOKEN), TOKEN, null)).split("=");
     const [, signature] = value.split(".");
     const extended = new Request(`${ORIGIN}/panel`, { headers: { cookie: `${SESSION_COOKIE}=${Date.now() + 1e12}.${signature}` } });
     const expired = new Request(`${ORIGIN}/panel`, { headers: { cookie: `${SESSION_COOKIE}=1.${signature}` } });
@@ -86,7 +86,7 @@ describe("admin sign-in", () => {
   });
 
   it("signs out by clearing the cookie", async () => {
-    const response = handleLogout(new Request(`${ORIGIN}/logout`, { method: "POST", headers: { origin: ORIGIN } }));
+    const response = handleLogout(new Request(`${ORIGIN}/logout`, { method: "POST", headers: { origin: ORIGIN } }), null);
 
     expect(response.status).toBe(303);
     expect(response.headers.get("location")).toBe("/login");
