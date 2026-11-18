@@ -54,6 +54,17 @@ export class D1ManifestStore {
     }
     return parseRow(row);
   }
+
+  async setEnabled(id: string, enabled: boolean): Promise<void> {
+    await this.db
+      .prepare("UPDATE plugin_manifests SET enabled = ?, updated_at = ? WHERE id = ?")
+      .bind(enabled ? 1 : 0, new Date().toISOString(), id)
+      .run();
+  }
+
+  async delete(id: string): Promise<void> {
+    await this.db.prepare("DELETE FROM plugin_manifests WHERE id = ?").bind(id).run();
+  }
 }
 
 function parseRow(row: ManifestRow): StoredPluginManifest {

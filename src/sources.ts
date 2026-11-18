@@ -51,12 +51,9 @@ export const SOURCE_PRESETS: SourcePreset[] = [
   {
     id: "ed",
     label: "Ed Discussion",
-    fields: [
-      { key: "token", label: "API token", type: "password" },
-      { key: "region", label: "Region", type: "select", options: ["us", "au", "eu"] },
-    ],
-    instructions: "Generate a token on Ed's API tokens page, then paste it below.",
-    instructionsUrl: "https://edstem.org/us/settings/api-tokens",
+    fields: [{ key: "token", label: "API token", type: "password" }],
+    instructions: "Paste an Ed API token. unicorn works out the region.",
+    instructionsUrl: "https://edstem.org/settings/api-tokens",
   },
   {
     id: "moodle",
@@ -65,7 +62,7 @@ export const SOURCE_PRESETS: SourcePreset[] = [
       { key: "baseUrl", label: "Base URL", type: "text", placeholder: "https://learning.monash.edu" },
       { key: "session", label: "Session cookie (advanced)", type: "password" },
     ],
-    instructions: "Run `npm run moodle:push` from your machine to push a fresh session; paste one below only if you can't run that locally.",
+    instructions: "Run `npm run moodle:push` from your clone, or paste a session cookie.",
     hostedInstructions:
       "After `okta login`, run `npm run moodle:push -- --hosted <this site> --token <your token from Connect>` from a clone of unicorn — or paste your MoodleSession cookie below.",
     instructionsUrl: "https://unicorn.tuuhub.com/docs/unicorn/sources#moodle",
@@ -77,7 +74,7 @@ export const SOURCE_PRESETS: SourcePreset[] = [
       { key: "baseUrl", label: "Base URL", type: "text", placeholder: "https://school.instructure.com" },
       { key: "token", label: "Personal access token", type: "password" },
     ],
-    instructions: "Create a personal access token from Account -> Settings -> New access token in Canvas.",
+    instructions: "Make one in Canvas under Account, then Settings.",
     instructionsUrl: "https://canvas.instructure.com/doc/api/file.oauth.html#manual-token-generation",
   },
   {
@@ -266,8 +263,36 @@ export function resolveEdCredentials(env: SourceEnv, lookup: CredentialLookup): 
   if (!token) {
     return null;
   }
-  const region = (stored?.region as EdRegion | undefined) ?? "us";
-  return { token, region };
+  const region = isEdRegion(stored?.region) ? stored.region : "au";
+  return { token, region, apiBaseUrl: ED_API_BASES[region] };
+}
+
+// Each Ed region is its own API host and a token works on exactly one of them (the same
+// table edstem-cli uses). Saving a token tries all three and keeps the one that answers.
+export const ED_API_BASES: Record<EdRegion, string> = {
+  au: "https://edstem.org/api/",
+  us: "https://us.edstem.org/api/",
+  eu: "https://eu.edstem.org/api/",
+};
+
+function isEdRegion(value: unknown): value is EdRegion {
+  return typeof value === "string" && Object.hasOwn(ED_API_BASES, value);
+}
+
+/** The region whose API accepts this token, or null when none does. */
+export async function detectEdRegion(token: string, fetcher: typeof fetch = fetch): Promise<EdRegion | null> {
+  const regions = Object.keys(ED_API_BASES) as EdRegion[];
+  const accepted = await Promise.all(
+    regions.map(async (region) => {
+      try {
+        const response = await fetcher(`${ED_API_BASES[region]}user`, { headers: { authorization: `Bearer ${token}` } });
+        return response.ok;
+      } catch {
+        return false;
+      }
+    }),
+  );
+  return regions.find((_, index) => accepted[index]) ?? null;
 }
 
 export function resolveMoodleCredentials(env: SourceEnv, lookup: CredentialLookup): MoodlePluginOptions | null {
@@ -295,7 +320,7 @@ export function resolveCanvasCredentials(env: SourceEnv, lookup: CredentialLooku
 export function nonSecretPrefill(id: SourceId, env: SourceEnv, lookup: CredentialLookup): Record<string, string> {
   const stored = fieldsOf(lookup);
   if (id === "ed") {
-    return { region: stored?.region ?? "us" };
+    return { region: isEdRegion(stored?.region) ? stored.region : "au" };
   }
   if (id === "moodle") {
     return { baseUrl: configWins(stored?.baseUrl, env.MOODLE_BASE_URL) };

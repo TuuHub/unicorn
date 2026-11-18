@@ -1,27 +1,65 @@
 // The panel (ADR-0048): the human side of unicorn. Four pages next to /settings:
 //
-//   /panel           overview — this term, what's due, what your agents did, setup checklist
+//   /panel           overview — the most urgent thing in one sentence, then the board (panel-board.ts)
 //   /panel/activity  the transparent log: every tool call (which client, which arguments,
 //                    how long, did it fail) and every source sync
 //   /panel/memory    read and edit what your agents remember about you (ADR-0047)
 //   /panel/connect   connect Claude, ChatGPT, Claude Code or any MCP client; revoke apps
 //
 // Rendered on the server like /settings (ADR-0026: plain HTML strings, inline progressive
-// enhancement only). Both deployments mount it: a self-deployed Worker behind the /settings
-// Basic auth, the hosted server behind a signed-in session (ADR-0046). It never shows a
+// enhancement only). Both deployments mount it: a self-deployed Worker behind the ADMIN_TOKEN
+// sign-in, the hosted server behind a signed-in session (ADR-0046). It never shows a
 // credential except the door bearer token on Connect, which belongs to the viewer.
 
 import type { GrantSummary } from "@cloudflare/workers-oauth-provider";
 import type { ActivityEntry, ActivityKind, ActivityLog } from "./activity";
-import { MEMORY_TARGETS, MemoryOperationError, type MemoryTarget, type MemoryView, readAllMemory, replaceMemory } from "./agent-memory";
+import { type MemoryTarget, readAllMemory } from "./agent-memory";
 import type { BriefStore } from "./briefs";
 import type { MemoryStore } from "./memory";
-import { MemoryConflictError } from "./memory";
 import type { ItemSummary } from "./mcp/door-contracts";
 import type { DoorRepository } from "./mcp/door-repository";
 import { computeCsrfToken, type LastCycleInfo } from "./settings";
 import { loadTermCourses, type TermCourse } from "./term";
+import { clientLabel, clientMark, clientTile, icon, sourceDot, sourceMark, sourceTile } from "./marks";
+import {
+  askChip,
+  copyRow,
+  emptyAsk,
+  isHandedIn,
+  dayKey,
+  empty,
+  formatIn,
+  memoryTitle,
+  PANEL_SCRIPT,
+  PANEL_STYLE,
+  relative,
+  safeZone,
+  shortAgo,
+  SOURCE_NAMES,
+} from "./panel-kit";
+import {
+  CAMPUS_STYLE,
+  isoWeek,
+  markBriefsRead,
+  recentChanges,
+  renderChangeDays,
+  renderBriefs,
+  renderChanges,
+  renderDeadlines,
+  renderDeadlinesIcs,
+  renderPlans,
+  renderSearch,
+  renderUnit,
+  renderUnits,
+  togglePlanItem,
+} from "./panel-campus";
+import { renderMemoryPage, saveMemoryEntry, undoMemoryChange } from "./panel-memory";
+import { type DeploymentInfo, renderDeployment, renderExport, renderPlaybooks, saveEmailSignIn } from "./panel-setup";
+import { BOARD_SCRIPT, BOARD_STYLE, handleBoardPost, loadBoard, renderBoard, type WidgetContent, type WidgetId, WIDGETS } from "./panel-board";
+import { checklistProgress, listChecklistItems } from "./widgets/checklist.js";
 import { escapeHtml, htmlResponse, renderPage } from "./ui";
+
+export { relative } from "./panel-kit";
 
 export interface PanelRuntime {
   db: D1Database;
@@ -40,15 +78,13 @@ export interface PanelRuntime {
   bearerLabel: string; // "MCP_TOKEN" on a Worker, "personal access token" when hosted
   grants: GrantSummary[];
   hosted: boolean;
+  // Self-deployed Workers only (src/index.ts); the hosted server leaves it unset and has no
+  // Deployment page.
+  deployment?: DeploymentInfo;
   now?: () => Date;
 }
 
-const SOURCE_NAMES: Record<string, string> = {
-  "campus-moodle": "Moodle",
-  "campus-ed": "Ed",
-  "campus-canvas": "Canvas",
-  gmail: "Gmail",
-};
+
 
 export async function handlePanel(request: Request, runtime: PanelRuntime): Promise<Response> {
   const url = new URL(request.url);
@@ -62,10 +98,15 @@ export async function handlePanel(request: Request, runtime: PanelRuntime): Prom
     if (String(form.get("csrf") ?? "") !== (await computeCsrfToken(runtime.adminToken))) {
       return new Response("Invalid form token. Reload the page and try again.", { status: 403 });
     }
+    if (path === "/panel/memory/undo") return undoMemoryChange(runtime, form, url);
     const memoryMatch = path.match(/^\/panel\/memory\/(user|notes|corrections)$/);
     if (memoryMatch) {
-      return saveMemory(runtime, memoryMatch[1] as MemoryTarget, form, url);
+      return saveMemoryEntry(runtime, memoryMatch[1] as MemoryTarget, form, url);
     }
+    if (path === "/panel/briefs/read") return markBriefsRead(runtime, form, url);
+    if (path === "/panel/plans/toggle") return togglePlanItem(runtime, form, url);
+    if (path === "/panel/board") return handleBoardPost(runtime.db, form, url);
+    if (path === "/panel/access" && runtime.deployment) return saveEmailSignIn(runtime, form, url);
     return new Response("Not found.", { status: 404 });
   }
 
@@ -81,99 +122,468 @@ export async function handlePanel(request: Request, runtime: PanelRuntime): Prom
       return htmlResponse(await renderMemoryPage(runtime, url));
     case "/panel/connect":
       return htmlResponse(await renderConnect(runtime, url));
-    default:
+    case "/panel/changes":
+      return htmlResponse(await renderChanges(runtime, url));
+    case "/panel/due":
+      return htmlResponse(await renderDeadlines(runtime, url));
+    case "/panel/due.ics":
+      return renderDeadlinesIcs(runtime, url);
+    case "/panel/units":
+      return htmlResponse(await renderUnits(runtime));
+    case "/panel/briefs":
+      return htmlResponse(await renderBriefs(runtime, url));
+    case "/panel/plans":
+      return htmlResponse(await renderPlans(runtime, url));
+    case "/panel/search":
+      return htmlResponse(await renderSearch(runtime, url));
+    case "/panel/playbooks":
+      return htmlResponse(await renderPlaybooks(runtime));
+    case "/panel/export":
+      return renderExport(runtime);
+    case "/panel/deployment": {
+      const page = await renderDeployment(runtime, url);
+      return page ? htmlResponse(page) : new Response(null, { status: 303, headers: { location: new URL("/account", url).toString() } });
+    }
+    default: {
+      const unit = path.match(/^\/panel\/units\/([A-Za-z0-9._-]{2,24})$/);
+      if (unit) {
+        const page = await renderUnit(runtime, decodeURIComponent(unit[1]));
+        if (page) return htmlResponse(page);
+      }
       return new Response("Not found.", { status: 404 });
+    }
   }
 }
 
 // --- overview -----------------------------------------------------------------
+//
+// One sentence on top says the most urgent thing (overdue work, else the next deadline). Below
+// it, the board (panel-board.ts): widgets the student arranges, sizes and hides themselves.
 
 async function renderOverview(runtime: PanelRuntime): Promise<string> {
   const now = runtime.now ? runtime.now() : new Date();
-  const [courses, upcoming, unread, stats, recent, memory] = await Promise.all([
+  const zone = safeZone(runtime.timezone);
+  const week = isoWeek(now.toISOString(), zone);
+  const [courses, upcoming, unread, stats, recent, memory, csrf, changes, grades, plan, board] = await Promise.all([
     loadTermCourses(runtime.db).catch((): TermCourse[] => []),
-    runtime.repo.upcoming({ days: 7, includeOverdue: false, now }).catch((): ItemSummary[] => []),
+    runtime.repo.upcoming({ days: 14, includeOverdue: true, now }).catch((): ItemSummary[] => []),
     runtime.briefs.list({ unreadOnly: true, limit: 1000 }).catch(() => []),
     runtime.activity.stats(now),
     runtime.activity.list({ limit: 8 }),
     readAllMemory(runtime.memory),
+    computeCsrfToken(runtime.adminToken),
+    recentChanges(runtime.db, { limit: 8 }).catch(() => []),
+    recentChanges(runtime.db, { types: ["grade.changed"], limit: 5 }).catch(() => []),
+    runtime.db
+      .prepare("SELECT content, updated_at FROM plans WHERE kind = 'weekly' AND subject = ?")
+      .bind(week)
+      .first<{ content: string; updated_at: string }>()
+      .catch(() => null),
+    loadBoard(runtime.db),
   ]);
   const totalItems = Object.values(runtime.itemCounts).reduce((sum, count) => sum + count, 0);
   const user = memory.find((view) => view.target === "user")!;
+  const overdue = upcoming.filter((item) => item.dueAt && Date.parse(item.dueAt) < now.getTime() && !isHandedIn(item.state));
+  const ahead = upcoming.filter((item) => !item.dueAt || Date.parse(item.dueAt) >= now.getTime());
 
+  const content: Record<WidgetId, WidgetContent> = {
+    due: { title: WIDGETS.due, count: upcoming.length, more: { href: "/panel/due", label: "All deadlines" }, body: renderAgenda(overdue, ahead.slice(0, 12), zone, now) },
+    changes: {
+      title: WIDGETS.changes,
+      more: { href: "/panel/changes", label: "All" },
+      body: changes.length ? renderChangeDays(changes, zone, now) : empty("changes", "Nothing yet. Changes show up after each sync."),
+    },
+    units: { title: WIDGETS.units, more: { href: "/panel/units", label: "All units" }, body: renderUnitRows(courses, ahead, now) },
+    briefs: {
+      title: WIDGETS.briefs,
+      count: unread.length,
+      more: { href: "/panel/briefs", label: "Briefs" },
+      body: unread.length
+        ? `<ul class="list">${unread
+            .slice(0, 5)
+            .map((brief) => `<li><a class="grow plain brief-line" href="/panel/briefs"><span class="tile-mark sm ev ev-notice-posted">${icon("brief", "")}</span><span class="truncate">${escapeHtml(brief.title)}</span></a><span class="end">${escapeHtml(shortAgo(brief.createdAt, now))}</span></li>`)
+            .join("")}</ul>`
+        : empty("check", "You're caught up."),
+    },
+    plan: { title: WIDGETS.plan, more: { href: "/panel/plans", label: "Plans" }, body: renderPlanSummary(plan, now) },
+    grades: {
+      title: WIDGETS.grades,
+      more: { href: "/panel/changes?type=grades", label: "All" },
+      body: grades.length ? renderChangeDays(grades, zone, now) : empty("check", "No new grades."),
+    },
+    agents: { title: WIDGETS.agents, more: { href: "/panel/activity", label: "Log" }, body: renderAgentSummary(stats, now) },
+    profile: {
+      title: WIDGETS.profile,
+      more: { href: "/panel/memory", label: "Edit" },
+      body: user.entries.length
+        ? `<ul class="list profile">${user.entries
+            .slice(0, 6)
+            .map((entry) => `<li><span class="grow">${escapeHtml(entry)}</span></li>`)
+            .join("")}</ul>`
+        : emptyAsk("memory", "Your agent hasn't written a profile yet.", "Get to know me."),
+    },
+    calls: {
+      title: WIDGETS.calls,
+      more: { href: "/panel/activity", label: "Full log" },
+      body: recent.length ? renderRecentTable(recent, now) : empty("activity", "No agent calls yet."),
+    },
+  };
+
+  const connected = runtime.grants.length > 0 || stats.toolCalls24h > 0 || stats.clients7d.length > 0;
   const checklist = [
-    { done: runtime.configuredSources > 0, text: `Add a source — Ed, Moodle, Canvas or Gmail. <a href="/settings">Sources →</a>` },
-    { done: totalItems > 0, text: `First sync — unicorn pulls every hour; <a href="/settings">Sync now</a> to start immediately.` },
-    { done: runtime.grants.length > 0 || stats.toolCalls24h > 0 || stats.clients7d.length > 0, text: `Connect your AI — Claude, ChatGPT or Claude Code. <a href="/panel/connect">Connect →</a>` },
-    { done: user.entries.length > 0, text: `Say hi — ask your agent <em>“get to know me”</em>. It runs the onboard playbook and fills your profile.` },
+    // Self-deployed only: the hosted server has its own sign-in.
+    ...(runtime.deployment
+      ? [
+          {
+            done: Boolean(runtime.deployment.emailSignIn),
+            title: "Sign in with email",
+            text: "A code by email instead of the admin token.",
+            href: "/panel/deployment#email-sign-in",
+            cta: "Set up",
+          },
+        ]
+      : []),
+    {
+      done: runtime.configuredSources > 0,
+      title: "Add a source",
+      text: runtime.hosted ? "Ed, Moodle, Canvas or Gmail. Tokens are stored encrypted." : "Paste a token in Sources, or set it with wrangler secret put.",
+      href: "/settings",
+      cta: "Sources",
+    },
+    { done: totalItems > 0, title: "First sync", text: "Automatic every hour, or start it now.", href: "/settings", cta: "Sync now" },
+    {
+      done: connected,
+      title: "Connect your AI",
+      text: "Claude, ChatGPT, Claude Code or any MCP client.",
+      href: "/panel/connect",
+      cta: "Connect",
+    },
+    { done: user.entries.length > 0, title: "Introduce yourself", text: "Ask your agent “get to know me”; it writes your profile.", href: "/panel/memory", cta: "Profile" },
   ];
-  const setupDone = checklist.every((step) => step.done);
-
-  const tiles = [
-    tile("Units this term", String(courses.length), courses[0]?.term ?? (courses.length ? "" : "after the first sync")),
-    tile("Due in 7 days", String(upcoming.length), upcoming[0]?.dueAt ? `next ${relative(upcoming[0].dueAt, now)}` : "nothing due"),
-    tile("Unread briefs", String(unread.length), "your agent reads these first"),
-    tile("Agent calls · 24h", String(stats.toolCalls24h), stats.errors24h ? `${stats.errors24h} error${stats.errors24h === 1 ? "" : "s"}` : "no errors"),
-    tile("Last sync", runtime.lastCycle.at ? relative(runtime.lastCycle.at, now) : "never", runtime.schedulerRunning ? "hourly · running" : "scheduler stopped"),
-  ].join("");
-
-  const termList = courses.length
-    ? `<ul class="list">${courses
-        .map((course) => `<li><span><strong>${escapeHtml(course.code)}</strong> <span class="muted">${escapeHtml(course.title ?? "")}</span></span><span class="muted">${escapeHtml(course.sources.join(" · "))}</span></li>`)
-        .join("")}</ul>`
-    : `<p class="muted">No units yet. They appear here after the first sync, and your agent gets them in memory automatically.</p>`;
-
-  const dueList = upcoming.length
-    ? `<ul class="list">${upcoming
-        .slice(0, 8)
+  const doneCount = checklist.filter((step) => step.done).length;
+  const asks = connected ? renderAsks({ overdue, ahead, hasPlan: Boolean(plan), hasProfile: user.entries.length > 0 }) : "";
+  const setup =
+    doneCount === checklist.length
+      ? ""
+      : `<section class="card setup" aria-labelledby="setup-title">
+      <div class="card-head row">
+        <div><h2 id="setup-title">Get started</h2><p class="card-sub">${doneCount} of ${checklist.length} done</p></div>
+        <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="${checklist.length}" aria-valuenow="${doneCount}"><span style="width:${(doneCount / checklist.length) * 100}%"></span></div>
+      </div>
+      <ol class="setup-steps">${checklist
         .map(
-          (item) =>
-            `<li><span>${item.course ? `<span class="badge">${escapeHtml(item.course)}</span> ` : ""}${item.url ? `<a href="${escapeHtml(item.url)}" target="_blank" rel="noopener">${escapeHtml(item.title)}</a>` : escapeHtml(item.title)}</span><span class="muted">${item.dueAt ? timeTag(item.dueAt) : ""}</span></li>`,
+          (step) => `<li class="${step.done ? "done" : ""}">
+          <span class="setup-num" aria-hidden="true">${step.done ? icon("check") : ""}</span>
+          <div><h3>${step.title}${step.done ? '<span class="sr-only"> (done)</span>' : ""}</h3><p>${step.text}</p>${step.done ? "" : `<a class="more" href="${step.href}">${step.cta}${icon("arrow")}</a>`}</div>
+        </li>`,
         )
-        .join("")}</ul>`
-    : `<p class="muted">Nothing due in the next 7 days.</p>`;
+        .join("")}</ol>
+    </section>`;
 
-  const clients = stats.clients7d.length
-    ? `<ul class="list">${stats.clients7d.map((client) => `<li><span>${escapeHtml(client.actor)}</span><span class="muted">${client.calls} calls · ${relative(client.lastAt, now)}</span></li>`).join("")}</ul>`
-    : `<p class="muted">No agent has called unicorn in the last 7 days.</p>`;
-
-  const body = `
-    ${setupDone ? "" : `<section class="card"><div class="card-head"><h2>Get started</h2><p class="card-sub">Four steps, a few minutes.</p></div><div class="card-body"><ol class="steps">${checklist.map((step) => `<li class="${step.done ? "done" : ""}">${step.text}</li>`).join("")}</ol></div></section>`}
-    <div class="tiles">${tiles}</div>
-    <div class="grid2">
-      <section class="card"><div class="card-head"><h2>This term</h2><p class="card-sub">Detected from your sources — kept in your agent's TERM memory.</p></div><div class="card-body">${termList}</div></section>
-      <section class="card"><div class="card-head"><h2>Due this week</h2><p class="card-sub">Across every unit and system.</p></div><div class="card-body">${dueList}</div></section>
-      <section class="card"><div class="card-head"><h2>Your agents</h2><p class="card-sub">Clients that called unicorn in the last 7 days.</p></div><div class="card-body">${clients}</div></section>
-      <section class="card"><div class="card-head"><h2>What your agent knows about you</h2><p class="card-sub">${user.entries.length} profile entr${user.entries.length === 1 ? "y" : "ies"} · <a href="/panel/memory">edit memory →</a></p></div><div class="card-body">${
-        user.entries.length
-          ? `<ul class="list">${user.entries.slice(0, 6).map((entry) => `<li><span>${escapeHtml(entry)}</span></li>`).join("")}</ul>`
-          : `<p class="muted">Nothing yet. Ask your agent “get to know me”.</p>`
-      }</div></section>
-    </div>
-    <section class="card" style="margin-top:16px"><div class="card-head"><h2>Recent activity</h2><p class="card-sub"><a href="/panel/activity">Full log →</a></p></div><div class="card-body">${renderActivityTable(recent, now, false)}</div></section>
-    ${PANEL_SCRIPT}`;
+  const syncState = runtime.schedulerRunning
+    ? ""
+    : `<a class="sync-stopped" href="${runtime.hosted ? "/settings" : "/panel/deployment"}"><span class="dot" aria-hidden="true"></span>Sync stopped</a>`;
+  const actions = `${syncState}<button type="button" class="secondary" data-board-edit>${icon("edit")}Customize</button><form method="post" action="/settings/sync-now" style="margin:0"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><button type="submit" class="secondary">${icon("sync")}Sync now</button></form>`;
 
   return renderPage({
-    title: "unicorn",
+    title: "unicorn — overview",
     active: "/panel",
-    heading: "Overview",
-    subtitle: runtime.hosted ? "Your campus memory, hosted. Everything your agents read and wrote is listed under Activity." : "Your campus memory. Everything your agents read and wrote is listed under Activity.",
-    body,
+    heading: headline(overdue, ahead, zone, now),
+    subtitle: standfirst({ now, zone, overdue, ahead }),
+    body: `${setup}${asks}${renderBoard(board, content, csrf)}${PANEL_STYLE}${CAMPUS_STYLE}${BOARD_STYLE}${OVERVIEW_STYLE}${PANEL_SCRIPT}${BOARD_SCRIPT}`,
     wide: true,
+    actions,
   });
 }
 
-function tile(label: string, value: string, hint: string): string {
-  return `<div class="tile"><div class="label">${escapeHtml(label)}</div><div class="value">${escapeHtml(value)}</div><div class="hint">${escapeHtml(hint)}</div></div>`;
+// Up to three lines to say to the agent, picked from what the board shows. Each one starts a
+// playbook; the agent does the work and writes the plan or brief back here.
+function renderAsks(input: { overdue: ItemSummary[]; ahead: ItemSummary[]; hasPlan: boolean; hasProfile: boolean }): string {
+  const lines: string[] = [];
+  if (!input.hasProfile) lines.push("Get to know me.");
+  if (input.overdue.length) lines.push("Catch me up.");
+  if (!input.hasPlan) lines.push("Plan my week.");
+  const assessment = [...input.overdue, ...input.ahead].find((item) => item.kind === "assessment" && !isHandedIn(item.state));
+  if (assessment) lines.push(`Break ${assessment.course ? `${assessment.course} ` : ""}${assessment.title} into daily tasks.`);
+  lines.push("What did staff post on the forums today?");
+  return `<nav class="asks" aria-label="Ask your agent"><span class="asks-label">Ask your agent</span>${lines
+    .slice(0, 3)
+    .map(askChip)
+    .join("")}<a class="asks-more" href="/panel/playbooks">All playbooks</a></nav>`;
+}
+
+// The page's one line: what needs you first. The unit, time and the rest go in the subtitle.
+function headline(overdue: ItemSummary[], ahead: ItemSummary[], zone: string, now: Date): string {
+  if (overdue.length) {
+    const first = overdue[0];
+    return `<span class="h-overdue">${escapeHtml(first.title)}</span> is ${escapeHtml(lateBy(first.dueAt!, now))} late`;
+  }
+  const next = nextDue(ahead);
+  if (!next) return "Nothing due in the next two weeks";
+  return `${escapeHtml(next.title)}, due ${escapeHtml(dueDay(next.dueAt!, zone, now))}`;
+}
+
+function standfirst(input: { now: Date; zone: string; overdue: ItemSummary[]; ahead: ItemSummary[] }): string {
+  const { now, zone, overdue, ahead } = input;
+  const weekAhead = ahead.filter((item) => item.dueAt && !isHandedIn(item.state) && Date.parse(item.dueAt) - now.getTime() < 7 * 86_400_000);
+  const lead = overdue[0] ?? nextDue(ahead);
+  const parts: string[] = [];
+  if (lead?.dueAt) {
+    const time = formatIn(lead.dueAt, zone, { hour: "2-digit", minute: "2-digit", hour12: false });
+    parts.push(`${lead.course ? `${escapeHtml(lead.course)} at ` : "At "}${escapeHtml(time)}.`);
+  }
+  if (overdue.length > 1) parts.push(`${overdue.length - 1} more overdue.`);
+  const more = overdue.length ? weekAhead.length : Math.max(0, weekAhead.length - 1);
+  parts.push(more ? `${more} more due this week.` : lead ? "Nothing else this week." : "");
+  return parts.filter(Boolean).join(" ");
+}
+
+function nextDue(ahead: ItemSummary[]): ItemSummary | undefined {
+  return ahead.find((item) => item.dueAt && !isHandedIn(item.state));
+}
+
+// "3 days", "5 hours"
+function lateBy(iso: string, now: Date): string {
+  const hours = Math.max(1, Math.round((now.getTime() - Date.parse(iso)) / 3_600_000));
+  if (hours < 48) return `${hours} hour${hours === 1 ? "" : "s"}`;
+  const days = Math.round(hours / 24);
+  return `${days} days`;
+}
+
+// "today", "tomorrow", "Friday", "3 Dec"
+function dueDay(iso: string, zone: string, now: Date): string {
+  const day = dayKey(iso, zone);
+  if (day === dayKey(now.toISOString(), zone)) return "today";
+  if (day === dayKey(new Date(now.getTime() + 86_400_000).toISOString(), zone)) return "tomorrow";
+  if (Date.parse(iso) - now.getTime() < 6 * 86_400_000) return formatIn(iso, zone, { weekday: "long" });
+  return formatIn(iso, zone, { day: "numeric", month: "short" });
+}
+
+function renderAgenda(overdue: ItemSummary[], ahead: ItemSummary[], zone: string, now: Date): string {
+  if (overdue.length === 0 && ahead.length === 0) {
+    return empty("check", "Nothing due in the next two weeks.");
+  }
+  const row = (item: ItemSummary) => {
+    const title = item.url ? `<a class="plain" href="${escapeHtml(item.url)}" target="_blank" rel="noopener">${escapeHtml(item.title)}</a>` : escapeHtml(item.title);
+    const mark = sourceMark(item.source);
+    const left = item.dueAt ? Date.parse(item.dueAt) - now.getTime() : Infinity;
+    const urgency = isHandedIn(item.state) ? "handed-in" : left < 0 ? "late" : left < 48 * 3_600_000 ? "soon" : "";
+    return `<li class="${urgency}">
+      <span class="grow due-row"><i class="urgency" aria-hidden="true"></i>${item.course ? `<a class="badge course" href="/panel/units/${encodeURIComponent(item.course)}">${escapeHtml(item.course)}</a>` : ""}<span class="truncate" title="${escapeHtml(item.title)}${mark ? ` · ${mark.name}` : ""}">${title}</span></span>
+      <span class="end">${item.dueAt ? escapeHtml(left < 0 ? relative(item.dueAt, now) : formatIn(item.dueAt, zone, { hour: "2-digit", minute: "2-digit", hour12: false })) : ""}</span>
+    </li>`;
+  };
+  const late = overdue.length
+    ? `<div class="day late"><div class="day-label"><span class="dow">Late</span><span class="dom tabular">${overdue.length}</span></div><ul class="list">${overdue.map(row).join("")}</ul></div>`
+    : "";
+  const groups = new Map<string, ItemSummary[]>();
+  for (const item of ahead) {
+    const key = item.dueAt ? dayKey(item.dueAt, zone) : "";
+    groups.set(key, [...(groups.get(key) ?? []), item]);
+  }
+  const today = dayKey(now.toISOString(), zone);
+  const days = [...groups.entries()]
+    .map(([key, group]) => {
+      const first = group[0].dueAt ?? now.toISOString();
+      const label = key === today ? "Today" : formatIn(first, zone, { weekday: "short" });
+      return `<div class="day${key === today ? " today" : ""}">
+        <div class="day-label"><span class="dow">${escapeHtml(label)}</span><span class="dom tabular">${escapeHtml(formatIn(first, zone, { day: "numeric" }))}</span></div>
+        <ul class="list">${group.map(row).join("")}</ul>
+      </div>`;
+    })
+    .join("");
+  const nowLine = `<div class="now-line" role="separator" aria-label="Now"><span>Now ${escapeHtml(formatIn(now.toISOString(), zone, { hour: "2-digit", minute: "2-digit", hour12: false }))}</span></div>`;
+  return `<div class="agenda">${late}${nowLine}${days || empty("check", "Nothing else in the next two weeks.")}</div>`;
+}
+
+function renderUnitRows(courses: TermCourse[], ahead: ItemSummary[], now: Date): string {
+  if (!courses.length) return empty("units", "Units appear after the first sync.");
+  return `<ul class="list unit-rows">${courses
+    .map((course) => {
+      const due = ahead.filter((item) => item.course === course.code && item.dueAt && !isHandedIn(item.state));
+      const next = due[0];
+      return `<li>
+        <a class="grow plain unit-line" href="/panel/units/${encodeURIComponent(course.code)}"><span class="badge course">${escapeHtml(course.code)}</span><span class="unit-text"><span class="truncate">${escapeHtml(course.title ?? "")}</span><span class="unit-next truncate">${next ? `Next: ${escapeHtml(next.title)}, ${escapeHtml(relative(next.dueAt!, now))}` : "Nothing due in two weeks"}</span></span></a>
+        <span class="end">${due.length ? `<span class="badge tabular" title="Due in the next two weeks">${due.length} due</span>` : ""}</span>
+      </li>`;
+    })
+    .join("")}</ul>`;
+}
+
+function renderPlanSummary(plan: { content: string; updated_at: string } | null, now: Date): string {
+  if (!plan) return emptyAsk("plan", "No plan for this week.", "Plan my week.");
+  const items = listChecklistItems(plan.content);
+  const { done, total } = checklistProgress(plan.content);
+  const open = items.filter((item) => !item.checked).slice(0, 5);
+  return `<div class="plan-sum">
+      <div class="plan-meter"><strong class="tabular">${done}/${total}</strong><span class="progress" aria-hidden="true"><span style="width:${total ? (done / total) * 100 : 0}%"></span></span></div>
+      ${open.length ? `<ul class="list plan-open">${open.map((item) => `<li><span class="tick-dot" aria-hidden="true"></span><span class="grow truncate">${escapeHtml(item.text.replace(/[*_`]/g, ""))}</span></li>`).join("")}</ul>` : `<p class="muted small">All done. Updated ${escapeHtml(relative(plan.updated_at, now))}.</p>`}
+    </div>`;
+}
+
+function renderAgentSummary(stats: Awaited<ReturnType<ActivityLog["stats"]>>, now: Date): string {
+  const weekCalls = stats.daily7d.reduce((sum, day) => sum + day.calls, 0);
+  if (!weekCalls) return `${empty("agents", "No agent calls in the last 7 days.")}<a class="more" href="/panel/connect">Connect one${icon("arrow")}</a>`;
+  const clients = stats.clients7d
+    .slice(0, 3)
+    .map((client) => `<li><span class="grow client-row">${clientTile(client.actor, "sm")}<span class="truncate">${escapeHtml(clientName(client.actor))}</span></span><span class="end tabular">${client.calls} · ${escapeHtml(shortAgo(client.lastAt, now))}</span></li>`)
+    .join("");
+  return `<p class="agent-line"><strong class="tabular">${weekCalls}</strong> calls in 7 days${stats.errors24h ? `, <span class="state bad">${stats.errors24h} failed today</span>` : ""}</p>
+    ${renderWeekChart(stats.daily7d)}
+    ${clients ? `<ul class="list clients-sm">${clients}</ul>` : ""}`;
+}
+
+const OVERVIEW_STYLE = `<style>
+.asks{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 24px}
+.asks-label{margin-right:4px;color:var(--muted);font-size:13px}
+.asks-more{margin-left:4px;color:var(--muted);font-size:13px;text-decoration:underline;text-decoration-color:var(--faint);text-underline-offset:3px}
+.asks-more:hover{color:var(--fg)}
+@media (max-width:640px){.asks-label{flex-basis:100%}}
+.page-head h1{font-size:24px;line-height:32px;font-weight:600;letter-spacing:-.02em}
+.page-head .sub{margin-top:6px}
+.sync-stopped{display:inline-flex;align-items:center;gap:8px;height:36px;padding:0 12px;border-radius:999px;color:var(--fg);font-size:14px;font-weight:500}
+.sync-stopped:hover{background:var(--default)}
+.sync-stopped .dot{width:7px;height:7px;border-radius:50%;background:var(--danger)}
+.h-overdue{text-decoration:underline;text-decoration-color:var(--danger);text-decoration-thickness:2px;text-underline-offset:6px}
+.due-row .urgency{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--faint);flex:none}
+.agenda li.soon .urgency{background:var(--warning)}
+.agenda li.late .urgency{background:var(--danger)}
+.agenda li.late .end{color:var(--danger-text)}
+.agenda li.handed-in .urgency{background:var(--success)}
+.agenda li.handed-in .truncate{color:var(--muted);text-decoration:line-through;text-decoration-color:var(--faint)}
+.day.late .day-label{background:var(--danger-soft)}
+.day.late .dow,.day.late .dom{color:var(--danger-text)}
+.now-line{display:flex;align-items:center;gap:10px;margin:2px 0 10px;font-size:11.5px;font-weight:600;color:var(--fg)}
+.now-line::after{content:"";flex:1;height:1px;background:var(--fg)}
+.day.late+.now-line{margin-top:10px}
+.unit-rows>li{padding:10px 0}
+.unit-line{display:flex;align-items:center;gap:12px;min-width:0}
+.unit-line .badge.course{min-width:72px;justify-content:center}
+.unit-text{display:flex;flex-direction:column;min-width:0}
+.unit-next{font-size:12.5px;color:var(--muted)}
+.unit-line:hover .unit-text>.truncate:first-child{text-decoration:underline;text-underline-offset:3px}
+.plan-meter{display:flex;align-items:center;gap:12px;margin-bottom:8px}
+.plan-meter strong{font-size:20px;font-weight:600;letter-spacing:-.02em}
+.plan-meter .progress{flex:1}
+.plan-open>li{padding:8px 0;gap:10px}
+.tick-dot{width:14px;height:14px;border-radius:5px;box-shadow:inset 0 0 0 1.5px var(--faint);flex:none}
+.agent-line{margin:0 0 10px;color:var(--muted)}
+.agent-line strong{color:var(--fg);font-size:20px;font-weight:600;margin-right:4px}
+.widget .chart{min-height:120px}
+.clients-sm>li{padding:8px 0}
+.clients-sm .client-row{display:flex;align-items:center;gap:10px;min-width:0}
+.clients-sm .end{color:var(--muted);font-size:12.5px}
+</style>`;
+
+// Neutral on purpose: more or fewer agent calls is neither good nor bad. Failures have their own chip.
+function trendChip(current: number, previous: number): string {
+  if (!previous && !current) return "";
+  if (!previous) return `<span class="trend" title="none the day before">new</span>`;
+  const change = Math.round(((current - previous) / previous) * 100);
+  return `<span class="trend" title="vs the day before">${change > 0 ? "↑" : change < 0 ? "↓" : ""} ${Math.abs(change)}%</span>`;
+}
+
+function renderWeekChart(days: Array<{ day: string; calls: number; errors: number }>): string {
+  const peak = Math.max(...days.map((day) => day.calls), 1);
+  const step = niceStep(peak);
+  const top = Math.max(step * 4, step * Math.ceil(peak / step));
+  const ticks = Array.from({ length: Math.round(top / step) + 1 }, (_, index) => top - index * step);
+  const bars = days
+    .map((day, index) => {
+      const date = new Date(`${day.day}T12:00:00Z`);
+      const label = date.toLocaleDateString("en-AU", { weekday: "short", timeZone: "UTC" });
+      const full = date.toLocaleDateString("en-AU", { weekday: "long", day: "numeric", month: "short", timeZone: "UTC" });
+      const ok = day.calls - day.errors;
+      return `<div class="bar-col${index === days.length - 1 ? " today" : ""}" title="${escapeHtml(full)}: ${day.calls} call${day.calls === 1 ? "" : "s"}${day.errors ? `, ${day.errors} failed` : ""}">
+        <div class="bar-stack">${day.errors ? `<span class="bar-err" style="height:${(day.errors / top) * 100}%"></span>` : ""}<span class="bar-ok" style="height:${(ok / top) * 100}%"></span></div>
+        <span class="bar-label">${escapeHtml(label)}</span>
+      </div>`;
+    })
+    .join("");
+  return `<div class="chart" role="img" aria-label="Agent calls per day, last 7 days: ${days.map((day) => day.calls).join(", ")}">
+    <div class="chart-y">${ticks.map((tick) => `<span>${tick}</span>`).join("")}</div>
+    <div class="chart-plot"><div class="chart-grid">${ticks.map(() => "<i></i>").join("")}</div><div class="chart-bars">${bars}</div></div>
+  </div>`;
+}
+
+function niceStep(peak: number): number {
+  const raw = peak / 4;
+  const power = 10 ** Math.floor(Math.log10(Math.max(raw, 1)));
+  const unit = raw / power;
+  return Math.max(1, (unit <= 1 ? 1 : unit <= 2 ? 2 : unit <= 5 ? 5 : 10) * power);
+}
+
+function renderRecentTable(entries: ActivityEntry[], now: Date): string {
+  const rows = entries
+    .map((entry) => {
+      const who = entry.kind === "sync" || entry.kind === "system" ? `<span class="who">${clientTile("scheduler", "md")}<span class="who-name">Hourly sync</span></span>` : `<span class="who">${clientTile(entryActor(entry), "md")}<span class="who-name">${escapeHtml(clientName(entryActor(entry)))}</span></span>`;
+      const what =
+        entry.kind === "tool"
+          ? `<span class="tool">${escapeHtml(entry.name)}</span>`
+          : entry.kind === "sync"
+            ? `<span class="what">${sourceTile(entry.name, "sm")}${escapeHtml(SOURCE_NAMES[entry.name] ?? entry.name)}</span>`
+            : `<span class="what">${escapeHtml(memoryTitle(entry.name))}</span>`;
+      const result = entry.status === "ok" ? '<span class="state">ok</span>' : `<span class="state bad">${escapeHtml(entry.errorCode ?? "error")}</span>`;
+      return `<tr><td>${who}</td><td>${what}</td><td class="muted truncate-cell">${escapeHtml(summarize(entry))}</td><td>${result}</td><td class="num">${escapeHtml(shortAgo(entry.at, now))}</td></tr>`;
+    })
+    .join("");
+  return `<div class="table-wrap"><table><thead><tr><th>Who</th><th>What</th><th>Details</th><th>Result</th><th class="num">When</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+function renderFeed(entries: ActivityEntry[], now: Date): string {
+  if (entries.length === 0) {
+    return empty("activity", "No activity yet.");
+  }
+  return `<ul class="list feed">${entries
+    .map((entry) => {
+      const failed = entry.status !== "ok";
+      return `<li${failed ? ' class="failed"' : ""}>
+        <span class="grow feed-row">${entryMark(entry)}<span class="feed-text">${feedSentence(entry)}${failed ? ` <span class="badge error">${escapeHtml(entry.errorCode ?? "error")}</span>` : ""}</span></span>
+        <span class="end" title="${escapeHtml(entry.at)}">${escapeHtml(shortAgo(entry.at, now))}</span>
+      </li>`;
+    })
+    .join("")}</ul>`;
+}
+
+function entryActor(entry: ActivityEntry): string | null {
+  if (entry.kind === "tool") return entry.actor ?? (entry.via === "mcp_token" ? "mcp_token" : entry.via);
+  if (entry.kind === "memory") return entry.actor ?? entry.via;
+  return entry.via;
+}
+
+function entryMark(entry: ActivityEntry): string {
+  if (entry.kind === "sync") return sourceTile(entry.name, "sm");
+  if (entry.kind === "system") return clientTile("scheduler", "sm");
+  return clientTile(entryActor(entry), "sm");
+}
+
+function feedSentence(entry: ActivityEntry): string {
+  const who = `<strong>${escapeHtml(clientName(entryActor(entry)))}</strong>`;
+  const summary = summarize(entry);
+  if (entry.kind === "tool") {
+    return `${who} called <span class="tool">${escapeHtml(entry.name)}</span>${summary ? ` <span class="muted">${escapeHtml(summary)}</span>` : ""}`;
+  }
+  if (entry.kind === "sync") {
+    return `Synced <strong>${escapeHtml(SOURCE_NAMES[entry.name] ?? entry.name)}</strong> <span class="muted">${escapeHtml(summary)}</span>`;
+  }
+  if (entry.kind === "memory") {
+    return `${who} updated <strong>${escapeHtml(memoryTitle(entry.name))}</strong>${summary ? ` <span class="muted">${escapeHtml(summary)}</span>` : ""}`;
+  }
+  return `<strong>${escapeHtml(entry.name)}</strong>${summary ? ` <span class="muted">${escapeHtml(summary)}</span>` : ""}`;
+}
+
+function clientName(actor: string | null): string {
+  const mark = clientMark(actor);
+  return mark.id === "other" || mark.id === "token" || mark.id === "unicorn" || mark.id === "scheduler" || !actor ? mark.name : actor;
 }
 
 // --- activity -----------------------------------------------------------------
 
-const KIND_FILTERS: Array<{ kind: ActivityKind | null; label: string }> = [
-  { kind: null, label: "All" },
-  { kind: "tool", label: "Agent calls" },
-  { kind: "sync", label: "Syncs" },
-  { kind: "memory", label: "Memory" },
+const KIND_FILTERS: Array<{ kind: ActivityKind | null; label: string; icon: Parameters<typeof icon>[0] }> = [
+  { kind: null, label: "All", icon: "activity" },
+  { kind: "tool", label: "Agent calls", icon: "agents" },
+  { kind: "sync", label: "Syncs", icon: "sync" },
+  { kind: "memory", label: "Memory", icon: "memory" },
 ];
 
 async function renderActivity(runtime: PanelRuntime, url: URL): Promise<string> {
@@ -195,58 +605,87 @@ async function renderActivity(runtime: PanelRuntime, url: URL): Promise<string> 
     const text = params.toString();
     return `/panel/activity${text ? `?${text}` : ""}`;
   };
-  const filters = [
-    ...KIND_FILTERS.map((filter) => `<a href="${query({ kind: filter.kind ?? undefined, before: undefined })}" aria-current="${(filter.kind ?? undefined) === kind}">${filter.label}</a>`),
-    `<a href="${query({ status: errorsOnly ? undefined : "error", before: undefined })}" aria-current="${errorsOnly}">Errors only</a>`,
-  ].join("");
-  const older = entries.length === 50 ? `<div class="pager"><a class="button secondary" href="${query({ before: String(entries.at(-1)!.id) })}">Older →</a></div>` : "";
-  const top = stats.topTools7d.length
-    ? `<p class="muted" style="font-size:13px;margin:0 0 12px">Most used this week: ${stats.topTools7d.map((tool) => `<code>${escapeHtml(tool.name)}</code> ${tool.calls}`).join(" · ")}</p>`
+  const filters = KIND_FILTERS.map(
+    (filter) => `<a href="${query({ kind: filter.kind ?? undefined, before: undefined })}" aria-current="${(filter.kind ?? undefined) === kind}">${icon(filter.icon)}${filter.label}</a>`,
+  ).join("");
+  const errorsToggle = `<div class="filters"><a href="${query({ status: errorsOnly ? undefined : "error", before: undefined })}" aria-current="${errorsOnly}">${icon("alert")}Errors only</a></div>`;
+  const older = entries.length === 50 ? `<div class="pager"><a class="button secondary" href="${query({ before: String(entries.at(-1)!.id) })}">Older${icon("arrow")}</a></div>` : "";
+  const weekCalls = stats.daily7d.reduce((sum, day) => sum + day.calls, 0);
+  const week = weekCalls
+    ? `<div class="act-week">
+        <section class="card" aria-labelledby="week-title"><div class="card-head"><h2 id="week-title">This week</h2><p class="card-sub"><span class="tabular">${weekCalls}</span> agent call${weekCalls === 1 ? "" : "s"} in 7 days</p></div><div class="card-body">${renderWeekChart(stats.daily7d)}</div></section>
+        <section class="card" aria-labelledby="top-title"><div class="card-head"><h2 id="top-title">Most used tools</h2><p class="card-sub">Share of this week's calls</p></div><div class="card-body">${renderTopTools(stats.topTools7d)}</div></section>
+      </div>`
     : "";
+  const statStrip = `<div class="stats">
+      <div class="stat"><div class="stat-label">${icon("agents")}Agent calls · 24h</div><div class="stat-value">${stats.toolCalls24h}</div><div class="stat-hint">${stats.errors24h ? `<span class="state bad">${stats.errors24h} failed</span>` : '<span class="state">no errors</span>'}</div></div>
+      <div class="stat"><div class="stat-label">${icon("sync")}Syncs · 24h</div><div class="stat-value">${stats.syncs24h}</div><div class="stat-hint">one per source per hour</div></div>
+      <div class="stat"><div class="stat-label">${icon("connect")}Clients · 7 days</div><div class="stat-value">${stats.clients7d.length}</div><div class="stat-hint client-stack">${stats.clients7d
+        .slice(0, 6)
+        .map((client) => clientTile(client.actor, "sm"))
+        .join("")}${stats.clients7d.length ? "" : "none yet"}</div></div>
+    </div>`;
 
   const body = `
-    <section class="card"><div class="card-body" style="padding-top:16px">
-      <div class="filters">${filters}</div>
-      ${top}
-      ${renderActivityTable(entries, now, true)}
-      ${older}
-    </div></section>
-    <p class="muted" style="font-size:12.5px">Kept for 30 days. Long text (plan bodies, memory entries, SQL) is stored as its length only. Credentials never reach this log.</p>
+    ${statStrip}
+    ${week}
+    <div class="toolbar"><div class="filters">${filters}</div>${errorsToggle}</div>
+    ${entries.length ? renderActivityTable(entries, now) : `<section class="card">${empty("activity", "Nothing matches.")}</section>`}
+    ${older}
+    ${PANEL_STYLE}
     ${PANEL_SCRIPT}`;
   return renderPage({
     title: "unicorn — activity",
     active: "/panel/activity",
     heading: "Activity",
-    subtitle: "Every call your agents made to unicorn and every sync unicorn ran, with arguments and timing.",
+    subtitle: "Every agent call and source sync from the last 30 days, with arguments, timing and errors. Long text is stored as its length; credentials are never logged.",
     body,
     wide: true,
   });
 }
 
-function renderActivityTable(entries: ActivityEntry[], now: Date, withDetail: boolean): string {
+// One row per tool. The fill behind each row is its count against the busiest tool, so the
+// leader always spans the row; the number on the right is its share of all calls.
+function renderTopTools(tools: Array<{ name: string; calls: number }>): string {
+  if (!tools.length) return empty("spark", "No tool calls this week.");
+  const peak = tools[0].calls || 1;
+  const total = tools.reduce((sum, tool) => sum + tool.calls, 0) || 1;
+  return `<ol class="ranks">${tools
+    .slice(0, 6)
+    .map(
+      (tool, index) =>
+        `<li style="--fill:${Math.max(6, Math.round((tool.calls / peak) * 100))}%;--i:${index}"><span class="rank-name">${escapeHtml(tool.name)}</span><span class="rank-calls tabular">${tool.calls}</span><span class="rank-share tabular">${Math.round((tool.calls / total) * 100)}%</span></li>`,
+    )
+    .join("")}</ol>`;
+}
+
+function renderActivityTable(entries: ActivityEntry[], now: Date): string {
   if (entries.length === 0) {
-    return `<p class="muted">Nothing logged yet.</p>`;
+    return empty("activity", "Nothing matches.");
   }
   const rows = entries
     .map((entry) => {
-      const who = entry.kind === "tool" ? entry.actor ?? (entry.via === "mcp_token" ? "bearer token" : entry.via ?? "—") : entry.via ?? "—";
-      const name = entry.kind === "sync" ? SOURCE_NAMES[entry.name] ?? entry.name : entry.name;
+      const name = entry.kind === "sync" ? SOURCE_NAMES[entry.name] ?? entry.name : entry.kind === "memory" ? memoryTitle(entry.name) : entry.name;
+      const what =
+        entry.kind === "tool"
+          ? `<span class="tool">${escapeHtml(name)}</span>`
+          : `<span class="what">${entry.kind === "sync" ? sourceTile(entry.name, "sm") : `<span class="tile-mark sm mono">${icon(entry.kind === "memory" ? "memory" : "spark", "")}</span>`}${escapeHtml(name)}</span>`;
+      const who =
+        entry.kind === "sync" || entry.kind === "system"
+          ? `<span class="who">${clientTile("scheduler", "md")}<span class="who-name">${entry.via === "manual" || entry.via === "sync-now" ? "Sync now" : "Hourly sync"}</span></span>`
+          : `<span class="who">${clientTile(entryActor(entry), "md")}<span class="who-name">${escapeHtml(clientName(entryActor(entry)))}</span></span>`;
       const summary = summarize(entry);
-      const detail = withDetail
-        ? `<details><summary>${escapeHtml(summary || "details")}</summary><pre>${escapeHtml(JSON.stringify(entry.detail, null, 2))}</pre></details>`
-        : `<span class="muted">${escapeHtml(summary)}</span>`;
       return `<tr>
-        <td class="muted" title="${escapeHtml(entry.at)}">${relative(entry.at, now)}</td>
-        <td><span class="badge ${entry.kind === "tool" ? "tool" : ""}">${escapeHtml(entry.kind)}</span></td>
-        <td><code>${escapeHtml(name)}</code></td>
-        <td>${escapeHtml(who)}</td>
-        <td>${entry.status === "ok" ? '<span class="badge ok">ok</span>' : `<span class="badge error">${escapeHtml(entry.errorCode ?? "error")}</span>`}</td>
+        <td class="when" title="${escapeHtml(entry.at)}">${escapeHtml(shortAgo(entry.at, now))}</td>
+        <td>${who}</td>
+        <td>${what}</td>
+        <td>${entry.status === "ok" ? '<span class="state">ok</span>' : `<span class="state bad">${escapeHtml(entry.errorCode ?? "error")}</span>`}</td>
         <td class="num">${entry.durationMs === null ? "" : `${entry.durationMs} ms`}</td>
-        <td>${detail}</td>
+        <td><details><summary><span>${escapeHtml(summary || "details")}</span></summary><pre>${escapeHtml(JSON.stringify(entry.detail, null, 2))}</pre></details></td>
       </tr>`;
     })
     .join("");
-  return `<div class="table-wrap"><table><thead><tr><th>When</th><th>Kind</th><th>What</th><th>Who</th><th>Result</th><th>Time</th><th>Details</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  return `<div class="table-wrap"><table><thead><tr><th>When</th><th>Who</th><th>What</th><th>Result</th><th class="num">Time</th><th>Details</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
 function summarize(entry: ActivityEntry): string {
@@ -255,8 +694,10 @@ function summarize(entry: ActivityEntry): string {
     return `pulled ${detail.pulled ?? 0} · new ${detail.created ?? 0} · changed ${detail.updated ?? 0} · events ${detail.events ?? 0}`;
   }
   if (entry.kind === "memory") {
-    const added = Array.isArray(detail.added) ? (detail.added as string[]).join(", ") : "";
-    return detail.status ? `${detail.status}${added ? `: +${added}` : ""}` : String(detail.via ?? "");
+    const added = Array.isArray(detail.added) ? (detail.added as string[]) : [];
+    const removed = Array.isArray(detail.removed) ? (detail.removed as string[]) : [];
+    if (detail.status) return `${detail.status}${added.length ? `: +${added.join(", ")}` : ""}`;
+    return [added.length ? `${added.length} added` : "", removed.length ? `${removed.length} removed` : ""].filter(Boolean).join(", ");
   }
   const args = detail.args && typeof detail.args === "object" ? Object.entries(detail.args as Record<string, unknown>) : [];
   const argText = args
@@ -265,65 +706,6 @@ function summarize(entry: ActivityEntry): string {
     .join(", ");
   const results = typeof detail.results === "number" ? ` → ${detail.results}` : "";
   return `${argText}${results}`.slice(0, 120);
-}
-
-// --- memory -------------------------------------------------------------------
-
-async function renderMemoryPage(runtime: PanelRuntime, url: URL): Promise<string> {
-  const views = await readAllMemory(runtime.memory);
-  const csrf = await computeCsrfToken(runtime.adminToken);
-  const saved = url.searchParams.get("saved");
-  const error = url.searchParams.get("error");
-  const notes = await Promise.all(views.map(async (view) => ({ view, note: await runtime.memory.get(MEMORY_TARGETS[view.target].domain) })));
-  const cards = notes.map(({ view, note }) => renderMemoryCard(view, note.content, note.updatedAt, csrf)).join("");
-  const body = `
-    ${saved ? `<p class="notice">Saved ${escapeHtml(saved)}. Your agents see it from their next session.</p>` : ""}
-    ${error ? `<p class="notice error" role="alert">${escapeHtml(error)}</p>` : ""}
-    <section class="card"><div class="card-body" style="padding-top:16px">
-      <p style="margin:0;font-size:14px">This is everything your AI agents remember about you. Every new session — Claude on your phone, ChatGPT, Claude Code — starts by reading it. Agents keep it current themselves; you can correct anything here. Separate multi-line entries with a line containing only <code>§</code>.</p>
-    </div></section>
-    <div class="grid2">${cards}</div>`;
-  return renderPage({
-    title: "unicorn — memory",
-    active: "/panel/memory",
-    heading: "Memory",
-    subtitle: "Bounded on purpose: small enough to read in full at the start of every session.",
-    body,
-    wide: true,
-  });
-}
-
-function renderMemoryCard(view: MemoryView, content: string, updatedAt: string, csrf: string): string {
-  const warn = view.usagePercent >= 80 ? " warn" : "";
-  const meter = `<div class="meter${warn}"><span style="width:${Math.min(view.usagePercent, 100)}%"></span></div><p class="muted" style="font-size:12px;margin:0">${view.chars}/${view.limit} characters · ${view.updatedAt ? `updated ${timeTag(view.updatedAt)}` : "empty"}</p>`;
-  const editor = view.writable
-    ? `<form method="post" action="/panel/memory/${view.target}">
-        <input type="hidden" name="csrf" value="${escapeHtml(csrf)}">
-        <input type="hidden" name="updatedAt" value="${escapeHtml(content ? updatedAt : "")}">
-        <textarea name="content" aria-label="${escapeHtml(view.title)}" maxlength="${view.limit + 200}">${escapeHtml(content)}</textarea>
-        <div class="actions" style="margin-top:8px;display:flex;justify-content:flex-end"><button type="submit">Save</button></div>
-      </form>`
-    : `<pre>${escapeHtml(content || "(empty — filled after the first sync)")}</pre><p class="muted" style="font-size:12px">Maintained by unicorn from your synced sources. Tell your agent if something is wrong; it notes it under NOTES.</p>`;
-  return `<section class="card"><div class="card-head"><h2>${escapeHtml(view.title)}</h2><p class="card-sub">${escapeHtml(view.purpose)}</p></div><div class="card-body">${meter}${editor}</div></section>`;
-}
-
-async function saveMemory(runtime: PanelRuntime, target: MemoryTarget, form: FormData, url: URL): Promise<Response> {
-  const content = String(form.get("content") ?? "").replace(/\r\n/g, "\n");
-  const updatedAt = String(form.get("updatedAt") ?? "") || undefined;
-  const back = (query: string) => new Response(null, { status: 303, headers: { location: new URL(`/panel/memory?${query}`, url).toString() } });
-  try {
-    await replaceMemory(runtime.memory, target, content, updatedAt);
-    await runtime.activity.record({ kind: "memory", name: target, status: "ok", via: "panel", detail: { chars: content.length } }).catch(() => undefined);
-    return back(`saved=${encodeURIComponent(MEMORY_TARGETS[target].title)}`);
-  } catch (error) {
-    const message =
-      error instanceof MemoryOperationError
-        ? error.message
-        : error instanceof MemoryConflictError
-          ? "An agent changed this memory while you were editing. Your edit was not saved — reload to see its version."
-          : "Memory could not be saved.";
-    return back(`error=${encodeURIComponent(message)}`);
-  }
 }
 
 // --- connect ------------------------------------------------------------------
@@ -336,105 +718,96 @@ async function renderConnect(runtime: PanelRuntime, url: URL): Promise<string> {
   const revoked = url.searchParams.get("revoked");
 
   const apps = runtime.grants.length
-    ? `<ul class="list">${runtime.grants
+    ? `<ul class="list apps">${runtime.grants
         .map((grant) => {
           const metadata = grant.metadata as { clientName?: unknown } | null | undefined;
           const name = typeof metadata?.clientName === "string" && metadata.clientName.trim() ? metadata.clientName : grant.clientId;
-          return `<li><span>${escapeHtml(name)} <span class="muted">· since ${new Date(grant.createdAt * 1000).toISOString().slice(0, 10)}</span></span>
-            <form method="post" action="/settings/oauth/apps/revoke" style="margin:0"><input type="hidden" name="grantId" value="${escapeHtml(grant.id)}"><input type="hidden" name="back" value="panel"><button type="submit" class="secondary">Revoke</button></form></li>`;
+          return `<li><span class="grow">${clientLabel(name, "md")}<span class="muted small since">since ${new Date(grant.createdAt * 1000).toISOString().slice(0, 10)}</span></span>
+            <form method="post" action="/settings/oauth/apps/revoke" style="margin:0"><input type="hidden" name="grantId" value="${escapeHtml(grant.id)}"><input type="hidden" name="back" value="panel"><button type="submit" class="secondary sm danger">Revoke</button></form></li>`;
         })
         .join("")}</ul>`
-    : `<p class="muted">No apps connected yet.</p>`;
+    : empty("connect", "None yet.");
+
+  const works = ["Claude", "ChatGPT", "Claude Code", "Cursor", "Gemini", "GitHub Copilot", "VS Code", "Windsurf", "Zed"];
+  const clientCard = (actor: string, title: string, sub: string, content: string, extra = "") => `
+      <section class="card client-card">
+        <div class="card-head client-head">${extra || clientTile(actor, "lg")}<div><h2>${escapeHtml(title)}</h2><p class="card-sub">${sub}</p></div></div>
+        <div class="card-body">${content}</div>
+      </section>`;
 
   const body = `
-    ${revoked ? `<p class="notice">App disconnected.</p>` : ""}
-    <section class="card"><div class="card-head"><h2>Your unicorn address</h2><p class="card-sub">Paste it into any app that supports MCP connectors. You sign in once in a pop-up; no token to copy.</p></div>
-      <div class="card-body">${copyRow(door)}</div></section>
-    <div class="grid2">
-      <section class="card"><div class="card-head"><h2>Claude</h2><p class="card-sub">claude.ai, desktop and mobile — one connector everywhere.</p></div><div class="card-body">
-        <ol class="steps">
+    ${revoked ? `<p class="notice" role="status">App disconnected.</p>` : ""}
+    <section class="card address">
+      <div class="card-head row">
+        <div><h2>Your unicorn address</h2><p class="card-sub">Add it as a custom MCP connector. The app opens a sign-in pop-up; no token needed.</p></div>
+      </div>
+      <div class="card-body">
+        ${copyRow(door, false, true)}
+        <div class="works"><span class="muted small">Works with</span><span class="works-row">${works.map((name) => `<span title="${escapeHtml(name)}">${clientTile(name, "sm")}</span>`).join("")}<span class="muted small">and any remote MCP client</span></span></div>
+      </div>
+    </section>
+    <div class="grid2 wide-cards">
+      ${clientCard(
+        "Claude",
+        "Claude",
+        "One connector covers claude.ai, desktop and mobile.",
+        `<ol class="steps">
           <li>Open <a href="https://claude.ai/settings/connectors" target="_blank" rel="noopener">Settings → Connectors</a> and choose <strong>Add custom connector</strong>.</li>
           <li>Name it <code>unicorn</code> and paste your address.</li>
           <li>Click <strong>Connect</strong>. A pop-up opens this site: ${runtime.hosted ? "sign in" : "enter your admin password"} and approve.</li>
           <li>In a chat, enable unicorn under the tools menu and ask <em>“get to know me”</em>.</li>
-        </ol></div></section>
-      <section class="card"><div class="card-head"><h2>ChatGPT</h2><p class="card-sub">Needs a plan with connectors (developer mode).</p></div><div class="card-body">
-        <ol class="steps">
+        </ol>`,
+      )}
+      ${clientCard(
+        "ChatGPT",
+        "ChatGPT",
+        "Needs developer mode, on plans with connectors.",
+        `<ol class="steps">
           <li>Open <strong>Settings → Apps &amp; Connectors → Advanced</strong> and turn on developer mode.</li>
           <li><strong>Create</strong> a connector with your address and OAuth authentication.</li>
           <li>Sign in and approve in the pop-up.</li>
-        </ol></div></section>
-      <section class="card"><div class="card-head"><h2>Claude Code</h2><p class="card-sub">Run once in a terminal; the first call opens the browser to sign in.</p></div><div class="card-body">
-        ${copyRow(claudeCode)}
-        <p class="muted" style="font-size:13px">Or install the plugin for slash-command playbooks and a session-start hook:</p>
+        </ol>`,
+      )}
+      ${clientCard(
+        "Claude Code",
+        "Claude Code",
+        "Run once. The first call opens a browser to sign in.",
+        `${copyRow(claudeCode, true)}
+        <p class="muted small" style="margin:14px 0 0">Or the plugin, which adds playbook slash commands and a session-start hook:</p>
         ${copyRow("/plugin marketplace add TuuHub/unicorn")}
-        ${copyRow("/plugin install unicorn")}
-      </div></section>
-      <section class="card"><div class="card-head"><h2>Cursor, Codex, anything else</h2><p class="card-sub">Standard remote MCP over streamable HTTP with OAuth.</p></div><div class="card-body">
-        <pre>${escapeHtml(jsonConfig)}</pre>
-      </div></section>
+        ${copyRow("/plugin install unicorn")}`,
+      )}
+      ${clientCard(
+        "",
+        "Cursor, Codex, anything else",
+        "Remote MCP over streamable HTTP, OAuth sign-in.",
+        `<pre>${escapeHtml(jsonConfig)}</pre>`,
+        `<span class="tile-cluster">${["Cursor", "Codex", "VS Code", "Windsurf"].map((name) => clientTile(name, "md")).join("")}</span>`,
+      )}
     </div>
     ${
       claudeCodeBearer
-        ? `<section class="card" style="margin-top:16px"><div class="card-head"><h2>No OAuth? Use a token</h2><p class="card-sub">For scripts and clients without OAuth support. This is your ${escapeHtml(runtime.bearerLabel)}; treat it like a password.</p></div><div class="card-body">
-        <details><summary>Show token commands</summary>${copyRow(claudeCodeBearer)}${copyRow(`Authorization: Bearer ${runtime.bearerToken}`)}</details>
+        ? `<section class="card" style="margin-top:16px"><div class="card-head"><div class="card-title">${icon("key")}<h2>No OAuth? Use a token</h2></div><p class="card-sub">For scripts and clients without OAuth. This is your ${escapeHtml(runtime.bearerLabel)}: treat it as a password.</p></div><div class="card-body">
+        <details><summary><span>Show token commands</span></summary>${copyRow(claudeCodeBearer, true)}${copyRow(`Authorization: Bearer ${runtime.bearerToken}`)}</details>
       </div></section>`
         : ""
     }
-    <section class="card" style="margin-top:16px"><div class="card-head"><h2>Connected apps</h2><p class="card-sub">Apps you approved. Revoking signs them out immediately.</p></div><div class="card-body">${apps}</div></section>
+    ${
+      runtime.hosted
+        ? ""
+        : `<section class="card" style="margin-top:16px"><div class="card-head"><div class="card-title">${icon("server")}<h2>Admin MCP</h2></div><p class="card-sub">Raw items, relations, plugin manifests and custom tools, for maintaining this Worker. Bearer ADMIN_TOKEN only; never give it to an everyday chat.</p></div><div class="card-body">
+        ${copyRow(`claude mcp add --transport http unicorn-admin ${new URL("/mcp/admin", runtime.doorUrl).toString()} --header "Authorization: Bearer <ADMIN_TOKEN>"`, true)}
+      </div></section>`
+    }
+    <section class="card" style="margin-top:16px"><div class="card-head row"><div><div class="card-title">${icon("agents")}<h2>Connected apps</h2></div><p class="card-sub">Revoking signs an app out immediately.</p></div><span class="badge tabular">${runtime.grants.length}</span></div><div class="card-body">${apps}</div></section>
+    ${PANEL_STYLE}
     ${PANEL_SCRIPT}`;
   return renderPage({
     title: "unicorn — connect",
     active: "/panel/connect",
     heading: "Connect your AI",
-    subtitle: "unicorn works inside the AI you already use. Pick yours.",
+    subtitle: "One address works in every MCP client. Each app signs in once; revoke it at the bottom.",
     body,
     wide: true,
   });
 }
-
-function copyRow(value: string): string {
-  return `<div class="copy-row"><code>${escapeHtml(value)}</code><button type="button" class="secondary" data-copy="${escapeHtml(value)}">Copy</button></div>`;
-}
-
-// --- shared bits --------------------------------------------------------------
-
-function timeTag(iso: string): string {
-  return `<time datetime="${escapeHtml(iso)}">${escapeHtml(iso.slice(0, 16).replace("T", " "))} UTC</time>`;
-}
-
-export function relative(iso: string, now: Date): string {
-  const then = Date.parse(iso);
-  if (!Number.isFinite(then)) return iso;
-  const seconds = Math.round((then - now.getTime()) / 1000);
-  const abs = Math.abs(seconds);
-  const units: Array<[number, string]> = [
-    [86_400, "day"],
-    [3_600, "hour"],
-    [60, "minute"],
-  ];
-  for (const [size, name] of units) {
-    if (abs >= size) {
-      const value = Math.round(abs / size);
-      const label = `${value} ${name}${value === 1 ? "" : "s"}`;
-      return seconds < 0 ? `${label} ago` : `in ${label}`;
-    }
-  }
-  return "just now";
-}
-
-const PANEL_SCRIPT = `
-<script>
-(function () {
-  document.querySelectorAll("time[datetime]").forEach(function (node) {
-    try { node.textContent = new Date(node.getAttribute("datetime")).toLocaleString(undefined, { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }); } catch (_) {}
-  });
-  document.querySelectorAll("[data-copy]").forEach(function (button) {
-    button.addEventListener("click", function () {
-      var value = button.getAttribute("data-copy") || "";
-      var original = button.textContent;
-      navigator.clipboard.writeText(value).then(function () { button.textContent = "Copied"; setTimeout(function () { button.textContent = original; }, 1500); });
-    });
-  });
-})();
-</script>`;

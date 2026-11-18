@@ -10,6 +10,7 @@
 
 import type { BriefStore } from "./briefs";
 import { MEMORY_TARGETS } from "./agent-memory";
+import { normalizeCourseCode, normalizeTerm } from "./kernel/courses";
 import type { MemoryStore } from "./memory";
 
 export interface TermCourse {
@@ -36,12 +37,16 @@ export async function loadTermCourses(db: D1Database): Promise<TermCourse[]> {
     .all<{ code: string; term: string | null; title: string | null; source: string }>();
   const byCode = new Map<string, TermCourse>();
   for (const row of rows.results) {
-    const code = String(row.code).toUpperCase();
+    // Moodle's "FIT2004_S2_2026" and Ed's "FIT2004" are one unit: group by the bare code,
+    // the same one structural labelling writes to items.course.
+    const raw = String(row.code);
+    const code = normalizeCourseCode(raw) ?? raw.toUpperCase();
+    const term = normalizeTerm(row.term);
     const entry = byCode.get(code) ?? { code, title: null, term: null, sources: [] };
     entry.title ??= cleanTitle(row.title, code);
     // Prefer the latest-looking term label when sources disagree (e.g. "2026 S1" vs "2026 S2").
-    if (row.term && (!entry.term || row.term > entry.term)) {
-      entry.term = row.term;
+    if (term && (!entry.term || term > entry.term)) {
+      entry.term = term;
     }
     const label = SOURCE_LABELS[row.source] ?? row.source;
     if (!entry.sources.includes(label)) {
@@ -62,7 +67,8 @@ export async function loadTermCourses(db: D1Database): Promise<TermCourse[]> {
 
 function cleanTitle(title: string | null, code: string): string | null {
   if (!title) return null;
-  const stripped = title.replace(new RegExp(`^\\s*${code}\\s*[-–—:]?\\s*`, "i"), "").trim();
+  const escaped = code.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const stripped = title.replace(new RegExp(`^\\s*${escaped}\\s*[-–—:]?\\s*`, "i"), "").trim();
   return stripped || null;
 }
 

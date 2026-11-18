@@ -20,6 +20,7 @@ import OAuthProvider, {
   type OAuthHelpers,
   type OAuthProviderOptions,
 } from "@cloudflare/workers-oauth-provider";
+import { clientTile, icon } from "./marks";
 import { escapeHtml, htmlResponse, renderPage } from "./ui";
 
 // The library's own `describeConsent` (and `ConsentDescription` type) ship on its main branch
@@ -84,7 +85,7 @@ export interface OAuthProviderExtras<Env> {
 }
 
 // The single-user identity every grant is issued to: unicorn has one operator, authenticated by
-// ADMIN_TOKEN (via /authorize's Basic auth) or, for local dev, the MCP_TOKEN bearer directly.
+// ADMIN_TOKEN (via the sign-in in front of /authorize) or, for local dev, the MCP_TOKEN bearer directly.
 export const DOOR_USER_ID = "unicorn";
 
 export const DOOR_PATH = "/mcp";
@@ -117,7 +118,7 @@ function doorResource(origin: string): string {
 
 // Same algorithm as settings.ts's constantTimeEqual, duplicated rather than imported: this
 // module and settings.ts would otherwise import each other (index.ts gates /authorize and the
-// revoke route with settings.ts's isBasicAuthorized before calling into here), and six lines of
+// revoke route with admin-auth.ts's requireAdmin before calling into here), and six lines of
 // a well-understood loop is cheaper than a circular module dependency.
 function timingSafeEqual(left: string, right: string): boolean {
   let difference = left.length ^ right.length;
@@ -197,7 +198,7 @@ export function createOAuthProvider<Env extends OAuthServerEnv>(
 
 // --- /authorize: the consent page ------------------------------------------------------------
 //
-// Gated by the caller with the same Basic auth as /settings (index.ts checks isBasicAuthorized
+// Gated by the caller with the same sign-in as /settings (index.ts calls requireAdmin
 // before calling this) — for a single-user deployment, "signing in" to approve a connector is
 // entering ADMIN_TOKEN. CSRF on the POST is the library's job: beginConsent()/approveConsent()
 // bind the consent transaction to a single-use, `__Host-` cookie-bound handle (see
@@ -211,14 +212,20 @@ function renderConsentPage(consent: ConsentDescription, handle: string): string 
     : "";
   const body = `
     ${loopbackWarning}
-    <section class="card" aria-labelledby="consent-title">
+    <section class="card consent" aria-labelledby="consent-title">
+      <div class="consent-pair" aria-hidden="true">
+        ${clientTile(consent.clientName, "lg")}
+        <span class="consent-link"></span>
+        <span class="tile-mark lg">${icon("horn", "")}</span>
+      </div>
       <div class="card-head">
         <h2 id="consent-title">${clientName}</h2>
         <p class="card-sub">wants to connect to unicorn. Tokens will be sent to <code>${redirectHost}</code>.</p>
       </div>
       <div class="card-body">
         <ul class="rows">
-          <li class="source"><span class="source-name">Access requested</span><span class="source-state">${escapeHtml(OAUTH_SCOPE_DESCRIPTION)}</span></li>
+          <li class="consent-row">${icon("memory")}<div><span class="consent-label">Access requested</span><span class="consent-scope">${escapeHtml(OAUTH_SCOPE_DESCRIPTION)}</span></div></li>
+          <li class="consent-row">${icon("check")}<div><span class="consent-label">Read-only on your sources</span><span class="consent-scope">unicorn never posts, submits or replies anywhere. Every call is listed under Activity.</span></div></li>
         </ul>
         <form method="post" action="${AUTHORIZE_PATH}">
           <input type="hidden" name="handle" value="${escapeHtml(handle)}">
@@ -229,13 +236,26 @@ function renderConsentPage(consent: ConsentDescription, handle: string): string 
         </form>
       </div>
     </section>
-    <style>.button.secondary{background:transparent;color:var(--ink);border:1px solid var(--border);margin-right:8px}.button.secondary:hover{background:var(--card)}</style>`;
+    <style>
+      .consent-pair{display:flex;align-items:center;justify-content:center;gap:0;padding:28px 20px 8px}
+      .consent-link{width:56px;height:1px;background:repeating-linear-gradient(90deg,var(--ink-3) 0 4px,transparent 4px 8px)}
+      .consent .card-head{text-align:center}
+      .consent h2{font-size:18px}
+      .consent-row{display:flex;gap:12px;align-items:flex-start;padding:12px 0;list-style:none}
+      .consent-row .i{color:var(--ink-3);margin-top:2px}
+      .consent-label{display:block;font-weight:500;font-size:14px}
+      .consent-scope{display:block;color:var(--ink-2);font-size:13px}
+      .rows{margin:4px 0 0;padding:0}
+      .actions{display:flex;justify-content:flex-end;gap:8px;padding-top:16px;border-top:1px solid var(--rule-2);margin-top:4px}
+      .actions button{flex:1}
+    </style>`;
   return renderPage({
     title: "unicorn — connect an app",
     active: "/settings",
     heading: "Connect an app",
     subtitle: `${clientName} is requesting access to your unicorn memory.`,
     body,
+    layout: "bare",
   });
 }
 
@@ -246,6 +266,7 @@ function renderAuthorizeError(message: string): string {
     heading: "Couldn't start this connection",
     subtitle: "Ask the client to start the connection again.",
     body: `<p class="notice error" role="alert">${escapeHtml(message)}</p>`,
+    layout: "bare",
   });
 }
 
@@ -274,7 +295,7 @@ function redirectResponse(location: string, extra: Headers): Response {
 
 /**
  * GET renders the consent page; POST approves or denies it. Caller has already authenticated the
- * user (Basic auth on a self-deployed Worker, a signed-in session on the hosted server) and passes
+ * user (the ADMIN_TOKEN sign-in on a self-deployed Worker, a signed-in session on the hosted server) and passes
  * the grant's user id — DOOR_USER_ID by default, the tenant id when hosted.
  */
 export async function handleAuthorize(request: Request, helpers: OAuthHelpers, userId: string = DOOR_USER_ID): Promise<Response> {
@@ -333,7 +354,7 @@ export async function handleAuthorize(request: Request, helpers: OAuthHelpers, u
 
 // --- /settings: Connected apps ---------------------------------------------------------------
 
-/** Revokes a grant. Caller has already checked Basic auth, method and the request's origin. */
+/** Revokes a grant. Caller has already checked sign-in, method and the request's origin. */
 export async function handleRevokeApp(request: Request, helpers: OAuthHelpers, userId: string = DOOR_USER_ID): Promise<Response> {
   const form = await request.formData();
   const grantId = String(form.get("grantId") ?? "");
@@ -359,11 +380,12 @@ export function renderConnectedApps(grants: GrantSummary[]): string {
             typeof metadata?.clientName === "string" && metadata.clientName.trim() ? metadata.clientName : grant.clientId;
           const created = new Date(grant.createdAt * 1000).toISOString().slice(0, 10);
           return `<li class="source connected-app">
+            ${clientTile(name, "md")}
             <span class="source-name">${escapeHtml(name)}</span>
             <span class="source-state">Connected ${created}</span>
             <form method="post" action="/settings/oauth/apps/revoke">
               <input type="hidden" name="grantId" value="${escapeHtml(grant.id)}">
-              <button type="submit" class="button secondary">Revoke</button>
+              <button type="submit" class="button secondary sm danger">Revoke</button>
             </form>
           </li>`;
         })
@@ -375,9 +397,7 @@ export function renderConnectedApps(grants: GrantSummary[]): string {
       <div class="card-body"><ul class="rail rows">${rows}</ul></div>
     </section>
     <style>
-      .connected-app{display:flex;align-items:center;gap:10px}
+      .connected-app{display:flex;align-items:center;gap:12px}
       .connected-app form{margin:0}
-      .button.secondary{background:transparent;color:var(--ink);border:1px solid var(--border)}
-      .button.secondary:hover{background:var(--bg)}
     </style>`;
 }

@@ -2,7 +2,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { D1ActivityLog, redactDetail } from "../src/activity";
-import { applyOperations, MEMORY_TARGETS, MemoryOperationError, readAllMemory, renderMemorySnapshot, splitEntries, writeMemory } from "../src/agent-memory";
+import { applyOperations, diffEntries, MEMORY_TARGETS, memoryNudge, MemoryOperationError, readAllMemory, renderMemorySnapshot, splitEntries, undoOperations, writeMemory } from "../src/agent-memory";
 import { D1BriefStore } from "../src/briefs";
 import { recordCorrection } from "../src/corrections";
 import { D1ItemStore } from "../src/kernel/d1-item-store";
@@ -45,6 +45,33 @@ describe("memory v2 operations (pure)", () => {
   it("splits section entries on § lines and corrections on lines", () => {
     expect(splitEntries("a\n§\nb\nc\n§\nd", "section")).toEqual(["a", "b\nc", "d"]);
     expect(splitEntries("- [2026-01-01] x\n- [2026-01-02] y", "line")).toEqual(["- [2026-01-01] x", "- [2026-01-02] y"]);
+  });
+
+  it("prefers an exact whole-entry match over substring matches", () => {
+    const entries = ["FIT2004 exam", "FIT2004 exam is closed book"];
+    expect(applyOperations(spec, entries, [{ action: "remove", old_text: "FIT2004 exam" }], "x")).toEqual(["FIT2004 exam is closed book"]);
+  });
+
+  it("diffs entries and inverts a change", () => {
+    const edit = diffEntries(["b", "a"], ["c", "a"]);
+    expect(edit).toEqual({ added: ["c"], removed: ["b"] });
+    expect(applyOperations(spec, ["c", "a"], undoOperations(edit), "x")).toEqual(["b", "a"]);
+    const removal = diffEntries(["a", "b"], ["a"]);
+    expect(applyOperations(spec, ["a"], undoOperations(removal), "x")).toEqual(["a", "b"]);
+  });
+
+  it("flags dated NOTES entries older than three weeks in the snapshot and nudge", async () => {
+    const db = await createTestDb();
+    const store = new D1MemoryStore(db);
+    await writeMemory(store, "user", [{ action: "add", content: "Year 2 IT" }]);
+    await writeMemory(store, "notes", [
+      { action: "add", content: "2026-10-01: waiting on tutor re A2 extension" },
+      { action: "add", content: "2026-11-01: started A3" },
+    ]);
+    const views = await readAllMemory(store);
+    expect(renderMemorySnapshot(views, NOW)).toContain('Possibly out of date, check with the user or remove: "2026-10-01: waiting on tutor');
+    expect(renderMemorySnapshot(views, NOW)).not.toContain('"2026-11-01: started A3"');
+    expect(memoryNudge(views, NOW)).toContain("1 NOTES entry is over 21 days old");
   });
 
   it("dates a correction added through memory()", () => {
@@ -162,13 +189,17 @@ describe("door memory tools and instructions", () => {
     expect(failed.isError).toBe(true);
 
     const entries = await activity.list();
-    expect(entries.map((entry) => entry.name)).toEqual(["memory", "get_briefs", "get_memory", "memory"]);
+    expect(entries.map((entry) => `${entry.kind}:${entry.name}`)).toEqual(["tool:memory", "tool:get_briefs", "tool:get_memory", "tool:memory", "memory:notes"]);
     expect(entries[0]).toMatchObject({ kind: "tool", status: "error", errorCode: "memory_not_found", actor: "Claude", via: "oauth" });
     expect(entries[3]!.detail.args).toMatchObject({ target: "notes" });
+    expect(entries[4]).toMatchObject({ actor: "Claude", via: "oauth", detail: { added: ["Follow up: FIT3175 A2 extension"], removed: [] } });
+    const remembered = await client.callTool({ name: "remember", arguments: { text: "FIT2099 quizzes don't count" } });
+    expect(remembered.isError).toBeFalsy();
+    expect((await activity.list({ kind: "memory", limit: 1 }))[0]).toMatchObject({ name: "corrections", detail: { added: ["- [2026-11-06] FIT2099 quizzes don't count"] } });
     const stats = await activity.stats(NOW);
-    expect(stats.toolCalls24h).toBe(4);
+    expect(stats.toolCalls24h).toBe(5);
     expect(stats.errors24h).toBe(1);
-    expect(stats.clients7d[0]).toMatchObject({ actor: "Claude", calls: 4 });
+    expect(stats.clients7d[0]).toMatchObject({ actor: "Claude", calls: 5 });
   });
 });
 

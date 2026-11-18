@@ -16,16 +16,10 @@ const current: AppSettings = {
   timezone: "Australia/Melbourne",
   gmailDomains: [],
   gmailAllowlist: [],
+  disabledSources: [],
 };
 
 describe("settings", () => {
-  it("requires HTTP Basic authentication", async () => {
-    const response = await handleSettings(new Request("https://unicorn.example/settings"), runtime());
-
-    expect(response.status).toBe(401);
-    expect(response.headers.get("www-authenticate")).toContain("Basic");
-  });
-
   it("renders current non-secret settings, deployment health, and every source card", async () => {
     const response = await handleSettings(
       new Request("https://unicorn.example/settings", { headers: { authorization: basic("admin-secret") } }),
@@ -40,9 +34,7 @@ describe("settings", () => {
     expect(html).toContain("Moodle");
     expect(html).toContain("Canvas");
     expect(html).toContain("Gmail");
-    expect(html).toContain("Hourly scheduler");
-    expect(html).toContain("Running");
-    expect(html).toContain("Connect your agent");
+    expect(html).toContain("Syncing every hour");
     expect(html).toContain("Connected apps");
     expect(html).not.toContain("admin-secret");
   });
@@ -84,15 +76,14 @@ describe("settings", () => {
     expect(html).not.toContain("No connected apps yet");
   });
 
-  it("never renders the raw MCP token attribute-escaped incorrectly, but does surface it for the Claude Code command", async () => {
+  it("leaves the MCP token to the Connect page", async () => {
     const response = await handleSettings(
       new Request("https://unicorn.example/settings", { headers: { authorization: basic("admin-secret") } }),
       runtime(),
     );
     const html = await response.text();
 
-    expect(html).toContain("mcp-secret");
-    expect(html).toContain("Bearer mcp-secret");
+    expect(html).not.toContain("mcp-secret");
   });
 
   it("never renders a saved source credential value back into the page", async () => {
@@ -105,7 +96,7 @@ describe("settings", () => {
     const html = await response.text();
 
     expect(html).not.toContain("super-secret-token");
-    expect(html).toContain('value="au"'); // non-secret field still prefills
+    expect(html).toContain("Replace token");
   });
 
   it("shows a re-enter hint when a stored credential no longer decrypts", async () => {
@@ -151,8 +142,9 @@ describe("settings", () => {
     );
     const html = await response.text();
 
-    expect(html).toContain("Connected — Gmail threads sync");
-    expect(html).not.toContain("/settings/oauth/gmail/start");
+    expect(html).toContain("Reads only mail that matches your Gmail scope");
+    expect(html).not.toContain(">Connect Gmail<");
+    expect(html).toContain("Reconnect");
   });
 
   it("warns when the scheduler is stopped", async () => {
@@ -163,7 +155,7 @@ describe("settings", () => {
     );
     const html = await response.text();
 
-    expect(html).toContain("scheduler is not running");
+    expect(html).toContain("Hourly sync is stopped");
   });
 
   it("shows the last cycle time when one is recorded", async () => {
@@ -177,7 +169,7 @@ describe("settings", () => {
     expect(html).not.toContain("Never run");
   });
 
-  it("offers only Save on an unconfigured source card — nothing to test or disconnect yet", async () => {
+  it("offers only Connect on an unconfigured source card — nothing to test or remove yet", async () => {
     const response = await handleSettings(
       new Request("https://unicorn.example/settings", { headers: { authorization: basic("admin-secret") } }),
       runtime(), // default credentialStoreStub() reports every source as status "none"
@@ -185,10 +177,11 @@ describe("settings", () => {
     const html = await response.text();
 
     expect(html).not.toContain("Test connection");
-    expect(html).not.toContain("Disconnect");
+    expect(html).not.toContain("/disconnect");
+    expect(html).not.toContain('role="switch" aria-checked');
   });
 
-  it("offers Test connection and Disconnect once a source is configured", async () => {
+  it("offers Test connection, Remove and a pause switch once a source is configured", async () => {
     const credentials = credentialStoreStub();
     credentials.get = vi.fn(async (id: SourceId) => (id === "ed" ? { status: "ok" as const, fields: { token: "t", region: "us" } } : { status: "none" as const }));
     const response = await handleSettings(
@@ -198,7 +191,9 @@ describe("settings", () => {
     const html = await response.text();
 
     expect(html).toContain("Test connection");
-    expect(html).toContain("Disconnect");
+    expect(html).toContain('action="/settings/sources/ed/disconnect"');
+    expect(html).toContain('action="/settings/sources/ed/enabled"');
+    expect(html).toContain('aria-checked="true"');
   });
 
   it("renders a backticked instruction as real <code>, not raw backticks", async () => {
@@ -213,37 +208,34 @@ describe("settings", () => {
   });
 
   it("shows a compact synced/item-count line per source, and the error only when one exists", async () => {
-    const withError = { ...runtime(), lastCycle: { at: null, byPlugin: { "campus-canvas": { lastSyncAt: null, lastError: "canvas_api_401" } } } };
+    const credentials = credentialStoreStub();
+    const stored: Partial<Record<SourceId, Record<string, string>>> = { ed: { token: "t" }, canvas: { token: "t", baseUrl: "https://canvas.example" } };
+    credentials.get = vi.fn(async (id: SourceId): Promise<CredentialLookup> => (stored[id] ? { status: "ok", fields: stored[id] } : { status: "none" }));
+    const withError = { ...runtime(repositoryStub(), credentials), lastCycle: { at: null, byPlugin: { "campus-canvas": { lastSyncAt: null, lastError: "canvas_api_401" } } } };
     const response = await handleSettings(new Request("https://unicorn.example/settings", { headers: { authorization: basic("admin-secret") } }), withError);
     const html = await response.text();
 
     expect(html).toContain("Never synced · 0 items");
-    expect(html).toContain('<p class="meta-error">canvas_api_401</p>');
+    expect(html).toContain("Last sync failed");
+    expect(html).toContain('<p class="src-error">canvas_api_401</p>');
   });
 
-  it("offers a Start scheduler button and a smaller curl fallback when stopped, and neither when running", async () => {
+  it("offers Start hourly sync when stopped, and Sync now when running", async () => {
     const stopped = await handleSettings(
       new Request("https://unicorn.example/settings", { headers: { authorization: basic("admin-secret") } }),
       { ...runtime(), status: { schedulerRunning: false } },
     );
     const stoppedHtml = await stopped.text();
     expect(stoppedHtml).toContain('action="/settings/start-scheduler"');
-    expect(stoppedHtml).toContain("Start scheduler");
-    expect(stoppedHtml).toContain("curl -X POST");
+    expect(stoppedHtml).toContain("Start hourly sync");
+    expect(stoppedHtml).not.toContain("curl");
 
     const running = await handleSettings(new Request("https://unicorn.example/settings", { headers: { authorization: basic("admin-secret") } }), runtime());
     const runningHtml = await running.text();
     expect(runningHtml).not.toContain("/settings/start-scheduler");
+    expect(runningHtml).toContain('action="/settings/sync-now"');
   });
 
-  it("puts the Claude Code plugin commands first in Connect your agent, with the raw mcp add as a fallback", async () => {
-    const response = await handleSettings(new Request("https://unicorn.example/settings", { headers: { authorization: basic("admin-secret") } }), runtime());
-    const html = await response.text();
-
-    expect(html).toContain("/plugin marketplace add TuuHub/unicorn");
-    expect(html).toContain("/plugin install unicorn");
-    expect(html).toContain("claude mcp add --transport http unicorn");
-  });
 
   describe("POST /settings (maintenance)", () => {
     it("saves validated settings from the same origin with a valid csrf token", async () => {
@@ -394,7 +386,7 @@ describe("settings", () => {
       );
 
       expect(response.status).toBe(303);
-      expect(credentials.save).toHaveBeenCalledWith("ed", { token: "existing-token", region: "au" });
+      expect(credentials.save).toHaveBeenCalledWith("ed", { token: "existing-token", region: "us" });
     });
 
     it("overwrites the secret when a new one is submitted", async () => {
@@ -408,10 +400,27 @@ describe("settings", () => {
           headers: { authorization: basic("admin-secret"), "content-type": "application/x-www-form-urlencoded", origin: "https://unicorn.example" },
           body,
         }),
-        runtime(repositoryStub(), credentials),
+        { ...runtime(repositoryStub(), credentials), fetch: edAccepts("eu") },
       );
 
-      expect(credentials.save).toHaveBeenCalledWith("ed", { token: "new-token", region: "us" });
+      expect(credentials.save).toHaveBeenCalledWith("ed", { token: "new-token", region: "eu" });
+    });
+
+    it("keeps the old token when Ed rejects the new one in every region", async () => {
+      const credentials = credentialStoreStub();
+      const csrf = await computeCsrfToken("admin-secret");
+      const response = await handleSettings(
+        new Request("https://unicorn.example/settings/sources/ed", {
+          method: "POST",
+          headers: { authorization: basic("admin-secret"), "content-type": "application/x-www-form-urlencoded", origin: "https://unicorn.example" },
+          body: new URLSearchParams({ token: "bad-token", csrf }),
+        }),
+        { ...runtime(repositoryStub(), credentials), fetch: edAccepts(null) },
+      );
+
+      expect(response.status).toBe(400);
+      expect(await response.text()).toContain("Ed did not accept that token");
+      expect(credentials.save).not.toHaveBeenCalled();
     });
 
     it("rejects an unknown source id", async () => {
@@ -448,7 +457,7 @@ describe("settings", () => {
       const html = await response.text();
 
       expect(response.status).toBe(200);
-      expect(html).toContain("pulled 3 items");
+      expect(html).toContain("returned 3 items");
       expect(testSourceMock).toHaveBeenCalledWith("canvas", expect.anything(), expect.anything());
     });
 
@@ -594,6 +603,13 @@ function runtime(repository = repositoryStub(), credentials = credentialStoreStu
       schedulerRunning: true,
     },
   };
+}
+
+// A fetch where only the given Ed region's API answers 200.
+function edAccepts(region: "au" | "us" | "eu" | null): typeof fetch {
+  const hosts = { au: "https://edstem.org/api/", us: "https://us.edstem.org/api/", eu: "https://eu.edstem.org/api/" };
+  return (async (input: RequestInfo | URL) =>
+    new Response(null, { status: region && String(input).startsWith(hosts[region]) ? 200 : 401 })) as typeof fetch;
 }
 
 function repositoryStub(): SettingsRepository & { save: ReturnType<typeof vi.fn> } {

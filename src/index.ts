@@ -10,11 +10,14 @@ import { MoodleProbeError, probeMoodle } from "./moodle-probe";
 import { D1OAuthTokenStore, handleCallback, OAuthError, startAuthorization, type OAuthEnv } from "./oauth";
 import { createOAuthProvider, DOOR_USER_ID, type DoorProps, handleAuthorize, handleRevokeApp, listConnectedApps } from "./oauth-server";
 import { actorFromUserAgent, D1ActivityLog } from "./activity";
+import { ACCESS_LOGIN_PATH, loadAccessConfig } from "./access";
+import { handleAccessLogin, handleLogin, handleLogout, requireAdmin } from "./admin-auth";
 import { handlePanel, type PanelRuntime } from "./panel";
 import { D1ManifestStore } from "./plugins/declarative/store";
 import gmailPreset from "./plugins/presets/gmail.json";
 import { runCycle, Scheduler, type CycleResult, type Env } from "./runtime/cycle";
-import { constantTimeEqual, D1SettingsRepository, handleSettings, isBasicAuthorized, type LastCycleInfo } from "./settings";
+import { createBrowserRunLogin } from "./moodle-browser";
+import { constantTimeEqual, D1SettingsRepository, handleSettings, type LastCycleInfo } from "./settings";
 import { buildSourcePlugins, D1SourceCredentialStore, itemCountsByPlugin, PLUGIN_ID, SOURCE_PRESETS } from "./sources";
 
 export { Scheduler };
@@ -65,16 +68,6 @@ function bearerOk(request: Request, token: string | undefined): boolean {
     return false;
   }
   return constantTimeEqual(header.slice(7), token);
-}
-
-function requireBasicAuth(request: Request, adminToken: string): Response | null {
-  if (isBasicAuthorized(request.headers.get("authorization"), adminToken)) {
-    return null;
-  }
-  return new Response("Authentication required.", {
-    status: 401,
-    headers: { "www-authenticate": 'Basic realm="unicorn settings", charset="UTF-8"' },
-  });
 }
 
 // The door (ADR-0030/0034/0035): a memory-layer tool set for a client agent. Reachable with
@@ -162,6 +155,30 @@ export async function buildPanelRuntime(env: Env, oauthHelpers: OAuthHelpers | u
     bearerLabel: env.HOSTED ? "personal access token" : "MCP_TOKEN",
     grants,
     hosted: Boolean(env.HOSTED),
+    deployment: env.HOSTED
+      ? undefined
+      : {
+          origin,
+          database: await env.DB.prepare("SELECT 1")
+            .first()
+            .then(() => true)
+            .catch(() => false),
+          bindings: {
+            ADMIN_TOKEN: Boolean(env.ADMIN_TOKEN),
+            MCP_TOKEN: Boolean(env.MCP_TOKEN),
+            DB: Boolean(env.DB),
+            SCHEDULER: Boolean(env.SCHEDULER),
+            OAUTH_KV: Boolean(env.OAUTH_KV),
+            ED_API_TOKEN: Boolean(env.ED_API_TOKEN),
+            MOODLE_SESSION: Boolean(env.MOODLE_SESSION),
+            PLUGIN_SECRET_CANVAS_TOKEN: Boolean(env.PLUGIN_SECRET_CANVAS_TOKEN),
+            PLUGIN_SECRET_GOOGLE_CLIENT_ID: Boolean(env.PLUGIN_SECRET_GOOGLE_CLIENT_ID && env.PLUGIN_SECRET_GOOGLE_CLIENT_SECRET),
+            BROWSER: Boolean(env.BROWSER),
+          },
+          retentionDays: settings.retentionDays,
+          syncEnabled: settings.syncEnabled,
+          emailSignIn: (await loadAccessConfig(env.DB))?.email ?? null,
+        },
   };
 }
 
@@ -182,9 +199,21 @@ export async function defaultFetch(request: Request, env: Env, context: Executio
     return Response.redirect(new URL("/panel", url).toString(), 302);
   }
 
-  // The panel (ADR-0048): overview, activity log, memory, connect. Same Basic auth as /settings.
+  // Sign-in for the human pages below (admin-auth.ts): the ADMIN_TOKEN password, or "Continue
+  // with email" through Cloudflare Access once the owner has set it up (access.ts).
+  if (url.pathname === "/login") {
+    return handleLogin(request, env.ADMIN_TOKEN, await loadAccessConfig(env.DB));
+  }
+  if (url.pathname === ACCESS_LOGIN_PATH && request.method === "GET") {
+    return handleAccessLogin(request, env.ADMIN_TOKEN, await loadAccessConfig(env.DB));
+  }
+  if (url.pathname === "/logout" && request.method === "POST") {
+    return handleLogout(request, await loadAccessConfig(env.DB));
+  }
+
+  // The panel (ADR-0048): overview, activity log, memory, connect.
   if (url.pathname === "/panel" || url.pathname.startsWith("/panel/")) {
-    const authError = requireBasicAuth(request, env.ADMIN_TOKEN);
+    const authError = await requireAdmin(request, env.ADMIN_TOKEN);
     if (authError) return authError;
     return handlePanel(request, await buildPanelRuntime(env, oauthHelpers, url.origin));
   }
@@ -214,9 +243,9 @@ export async function defaultFetch(request: Request, env: Env, context: Executio
   // --- Gmail/Google OAuth (ADR-0033): begin ---
   // GET /settings/oauth/:pluginId/start redirects to Google's consent screen;
   // GET /settings/oauth/callback exchanges the code and stores the refresh token.
-  // Both are gated behind the same Basic auth as /settings itself.
+  // Both are gated behind the same sign-in as /settings itself.
   if (request.method === "GET" && url.pathname.startsWith("/settings/oauth/") && url.pathname.endsWith("/start")) {
-    const authError = requireBasicAuth(request, env.ADMIN_TOKEN);
+    const authError = await requireAdmin(request, env.ADMIN_TOKEN);
     if (authError) return authError;
     const pluginId = url.pathname.split("/")[3];
     if (!pluginId) {
@@ -233,7 +262,7 @@ export async function defaultFetch(request: Request, env: Env, context: Executio
   }
 
   if (request.method === "GET" && url.pathname === "/settings/oauth/callback") {
-    const authError = requireBasicAuth(request, env.ADMIN_TOKEN);
+    const authError = await requireAdmin(request, env.ADMIN_TOKEN);
     if (authError) return authError;
     try {
       const { pluginId } = await handleCallback(url, env as unknown as OAuthEnv);
@@ -252,18 +281,18 @@ export async function defaultFetch(request: Request, env: Env, context: Executio
   // --- Gmail/Google OAuth (ADR-0033): end ---
 
   // --- Door OAuth connectors (ADR-0035): begin ---
-  // The consent page sits behind the same Basic auth as /settings: for a single-user
+  // The consent page sits behind the same sign-in as /settings: for a single-user
   // deployment, approving a connector is entering ADMIN_TOKEN. CSRF on the POST is the
   // OAuthProvider library's job (a single-use, cookie-bound consent handle) — see
   // oauth-server.ts's module comment.
   if (url.pathname === "/authorize" && (request.method === "GET" || request.method === "POST")) {
-    const authError = requireBasicAuth(request, env.ADMIN_TOKEN);
+    const authError = await requireAdmin(request, env.ADMIN_TOKEN);
     if (authError) return authError;
     return handleAuthorize(request, oauthHelpers, doorUserId(env));
   }
 
   if (request.method === "POST" && url.pathname === "/settings/oauth/apps/revoke") {
-    const authError = requireBasicAuth(request, env.ADMIN_TOKEN);
+    const authError = await requireAdmin(request, env.ADMIN_TOKEN);
     if (authError) return authError;
     if (request.headers.get("origin") !== url.origin) {
       return new Response("Invalid request origin.", { status: 403 });
@@ -273,6 +302,8 @@ export async function defaultFetch(request: Request, env: Env, context: Executio
   // --- Door OAuth connectors (ADR-0035): end ---
 
   if (url.pathname === "/settings" || url.pathname.startsWith("/settings/")) {
+    const authError = await requireAdmin(request, env.ADMIN_TOKEN);
+    if (authError) return authError;
     return handleSettings(request, {
       adminToken: env.ADMIN_TOKEN,
       repository: new D1SettingsRepository(env.DB),
@@ -288,6 +319,8 @@ export async function defaultFetch(request: Request, env: Env, context: Executio
       },
       status: await operationalStatus(env),
       oauth: { grants: await listConnectedApps(oauthHelpers, doorUserId(env)) },
+      db: env.DB,
+      browser: env.BROWSER ? createBrowserRunLogin(env.BROWSER) : undefined,
       runSync: async () => {
         const cycle = await runCycle(env, true);
         const failed = cycle.sources.find((source) => source.lastError);

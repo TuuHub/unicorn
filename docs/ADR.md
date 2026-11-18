@@ -962,3 +962,37 @@ Unchanged from the original policy and still enforced: `SELECT`/`WITH` only as t
   It is server-rendered like `/settings`, behind Basic auth on a Worker and a session when hosted. The Worker's `/` now lands on `/panel`.
 
 **Consequences.** The panel reads data; it does not reason or write to sources. The weekend test still applies: anything that interprets data belongs to the agent.
+
+---
+
+## ADR-0049 — Memory changes are logged, reviewable and undoable
+
+**Status:** Accepted (2026-11-18; amends ADR-0047 and ADR-0048)
+
+**Context.** Agents wrote memory, but nothing showed the student what changed or who changed it. The panel's Memory page was one raw textarea per store, with a character meter that told nobody anything useful. Memory is what makes every session in every app know the student, so a wrong entry is costly and has to be easy to spot and reverse.
+
+**Decision.**
+- Every write to `user`, `notes` or `corrections` (the `memory` and `remember` tools, and the panel) logs one `memory` row in `activity_log` with the actor and the entries it added and removed. These two lists are kept whole, not reduced to their length, because the panel replays them.
+- The Memory page lists entries one by one. Clicking an entry edits it in place; each store has an add field. A Changes feed beside it shows each logged change as a diff, with Undo. Undoing an edit patches the entry back where it was.
+- A NOTES entry that opens with a date over 21 days old is flagged in the session snapshot, in the tool-result nudge and on the page, so stale follow-ups get checked or removed.
+- `get_memory` tells the agent to call it at the start of every conversation unless the snapshot is already in its instructions. Some clients drop MCP `instructions`.
+- The character meter is gone. The limits still apply and still come back to the agent in tool results.
+
+**Consequences.** Memory text now sits in `activity_log` for up to 30 days. That's the same text the panel already shows, and it's pruned with the rest of the log. Undo is only as good as the log: a change older than 30 days can't be undone from the feed, though its entries can still be edited directly.
+
+---
+
+## ADR-0050 — "Continue with email" through Cloudflare Access, beside the admin token
+
+**Status:** Accepted (2026-11-18)
+
+**Context.** Self-deployers sign in with `ADMIN_TOKEN`, a random string they saw once during setup. Cloudflare Access gives every Cloudflare account email one-time codes for free, but setting it up by hand is a dozen dashboard steps, and putting it on the whole Worker breaks `/mcp` and the OAuth endpoints, which client apps reach without a browser.
+
+**Decision.**
+- The sign-in page offers two ways in: "Continue with email" and the admin token. Both end in the same session cookie, so every other page keeps one sign-in check.
+- The Access application covers only `/login/access`. A request that arrives there with a valid `Cf-Access-Jwt-Assertion` (RS256 against the team's published keys, matching audience and issuer, not expired) gets the session cookie and goes on to `next`. The header means nothing on any other path.
+- Onboarding turns it on: a checklist step links to a card on the Deployment page that takes an email and a Cloudflare API token made from a prefilled link (Access apps and Access account settings, edit; Account Settings, read, so the token can see its account). The Worker uses the token once to find or create the Zero Trust organization, make sure the one-time PIN login exists, and create or update the "unicorn" application with a policy that lets in that one email. The token is not stored.
+- The team domain, audience tag and email live in the `settings` table under `access_login`. None of them is a secret.
+- Sign out goes through `/cdn-cgi/access/logout` when email sign-in is on, so the next "Continue with email" asks for a code again.
+
+**Consequences.** `ADMIN_TOKEN` stays the fallback and still derives the key that encrypts pasted credentials, so it must not be rotated just because nobody types it any more. Creating a Zero Trust organization through the API is untested on a fresh account; when Cloudflare refuses, the card tells the owner to open the Zero Trust dashboard once and try again.

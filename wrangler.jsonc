@@ -40,6 +40,9 @@
   // (and locally on `wrangler dev`), so `npm run upgrade` picks this up on an existing production
   // deploy with no manual `wrangler kv namespace create` step.
   "kv_namespaces": [{ "binding": "OAUTH_KV" }],
+  // Cloudflare Browser Run, for "Sign in to Moodle" on /settings (src/moodle-browser.ts).
+  // The free plan allows 10 browser minutes a day, and one sign-in takes about one.
+  "browser": { "binding": "BROWSER" },
   "d1_databases": [
     {
       "binding": "DB",

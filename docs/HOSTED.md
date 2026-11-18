@@ -57,7 +57,7 @@ Put any reverse proxy with TLS in front of port 8787. For local development, run
 | `UNICORN_DATA_DIR` | `./data` | |
 | `UNICORN_MIGRATIONS` | `./migrations` | |
 | `PORT` | `8787` | |
-| `UNICORN_OPERATOR` | "the operator of this instance" | Shown on the landing page. |
+| `UNICORN_OPERATOR` | "the operator of this instance" | Shown on the sign-in page. |
 | `UNICORN_SIGNUP` | `open` | `open`, `invite`, or `closed`. |
 | `UNICORN_SIGNUP_CODE` | | The invite code, when `invite`. |
 | `UNICORN_MAX_ACCOUNTS` | | Closes sign-up at this many accounts. |
@@ -67,7 +67,8 @@ Put any reverse proxy with TLS in front of port 8787. For local development, run
 
 ## What a student sees
 
-1. **`/`**: what unicorn does, how it works, and who runs this instance.
+1. **`/`**: the sign-in door — who runs this instance and what that means for their tokens. What
+   unicorn is and how it works lives on [unicorn.tuuhub.com](https://unicorn.tuuhub.com), which the door links to.
 2. **Sign up**: email and password. Their database is created on the spot.
 3. **Sources**: paste an Ed token and a Canvas token. For Moodle, either paste the `MoodleSession`
    cookie or run `npm run moodle:push -- --hosted https://unicorn.example.com --token <token>`

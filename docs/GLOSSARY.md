@@ -46,7 +46,7 @@ Terms as we use them in this project. When code and this file disagree, fix one 
 - **User-defined tool** — A door tool that is data, not code: name, description, input schema, one read-only SQL statement over the `v_*` views. Defined by the student's agent on the admin surface; up to 20. (ADR-0035)
 - **Tool library** — The `unicorn-tools` GitHub repository with an `index.json`; `browse_tools`, `install_tool`, `publish_tool`. No hosted registry. (ADR-0035)
 - **Widget** — A `ui://unicorn/<name>` HTML resource attached to a tool result, rendered by ChatGPT and Claude via the MCP Apps extension. Additive to the text result; actions touch unicorn state only. (ADR-0037)
-- **Settings page** — `/settings`, Basic auth with `ADMIN_TOKEN`: onboarding by source, token entry straight into secrets, OAuth consent, timezone, sync status. The only web page; not a dashboard. (ADR-0022, ADR-0038)
+- **Settings page** — `/settings`, behind the `ADMIN_TOKEN` sign-in (`/login`) or "Continue with email" through Cloudflare Access (ADR-0050): onboarding by source, token entry straight into secrets, OAuth consent, timezone, sync status. The only web page; not a dashboard. (ADR-0022, ADR-0038)
 
 ## Retired
 

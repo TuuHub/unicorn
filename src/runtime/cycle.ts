@@ -8,7 +8,8 @@ import { D1ManifestStore } from "../plugins/declarative/store";
 import { buildGmailQuery, defaultUniversityDomains, loadKnownCourseCodes, withGmailQuery } from "../plugins/gmail-query";
 import type { Plugin } from "../plugins/plugin";
 import { D1RetentionRepository, runRetention } from "../retention";
-import { buildSourcePlugins, D1SourceCredentialStore } from "../sources";
+import type { BrowserRunBinding } from "../moodle-browser";
+import { buildSourcePlugins, D1SourceCredentialStore, PLUGIN_ID } from "../sources";
 import { D1SettingsRepository, type AppSettings } from "../settings";
 import { getAccessToken } from "../oauth";
 import { MoodleProbeError } from "../moodle-probe";
@@ -22,6 +23,7 @@ export interface Env {
   DB: D1Database;
   ED_API_TOKEN?: string;
   MCP_TOKEN: string;
+  // Optional Cloudflare Access login for the human pages (src/access.ts).
   MOODLE_BASE_URL: string;
   MOODLE_SESSION?: string;
   CANVAS_BASE_URL?: string;
@@ -35,6 +37,9 @@ export interface Env {
   // that changes a few user-facing labels. A self-deployed Worker leaves both unset.
   DOOR_USER_ID?: string;
   HOSTED?: string;
+  // Cloudflare Browser Run, for "Sign in to Moodle" (src/moodle-browser.ts). Optional: without it
+  // the Sources page offers only the push command and the cookie paste.
+  BROWSER?: BrowserRunBinding;
 }
 
 export interface SourceCycleResult {
@@ -187,7 +192,9 @@ async function syncSources(env: Env, settings: AppSettings): Promise<SourceCycle
   // Ed, Moodle, Canvas: built from env-or-D1 credentials (ADR-0038 onboarding by
   // source) — see src/sources.ts for the precedence rule.
   const credentials = new D1SourceCredentialStore(env.DB, env.ADMIN_TOKEN);
-  const plugins: Plugin[] = await buildSourcePlugins(env, credentials);
+  // A paused source keeps its credential; the cycle just leaves it out.
+  const paused = new Set(settings.disabledSources.map((id) => PLUGIN_ID[id]));
+  const plugins: Plugin[] = (await buildSourcePlugins(env, credentials)).filter((plugin) => !paused.has(plugin.id));
 
   const manifests = await new D1ManifestStore(env.DB).list(true);
   const bindings = pluginBindings(env as unknown as Record<string, unknown>);

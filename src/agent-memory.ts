@@ -17,6 +17,7 @@
 // Character limits are chosen so all four together stay inside ADR-0024's 4k-token cap even
 // for CJK text (6000 chars / 1.5 chars-per-token = 4000), so a full read always fits.
 
+import type { ActivityLog } from "./activity";
 import { type MemoryNote, type MemoryStore, MemoryConflictError } from "./memory";
 
 export type MemoryTarget = "user" | "notes" | "term" | "corrections";
@@ -209,7 +210,10 @@ export function applyOperations(spec: MemoryTargetSpec, entries: string[], opera
     if (!oldText) {
       throw new MemoryOperationError("invalid", `${operation.action} needs old_text: a unique substring of the entry to change.`);
     }
-    const matches = next.map((entry, index) => ({ entry, index })).filter(({ entry }) => entry.includes(oldText));
+    // An exact whole-entry match wins over substring matches, so the panel (which sends the
+    // full entry) and an agent quoting a whole short entry never hit "ambiguous".
+    const exact = next.map((entry, index) => ({ entry, index })).filter(({ entry }) => entry === oldText);
+    const matches = exact.length === 1 ? exact : next.map((entry, index) => ({ entry, index })).filter(({ entry }) => entry.includes(oldText));
     if (matches.length === 0) {
       throw new MemoryOperationError("not_found", `No ${spec.target} entry contains "${clip(oldText, 60)}". Call get_memory to see the live entries.`);
     }
@@ -240,6 +244,7 @@ export function applyOperations(spec: MemoryTargetSpec, entries: string[], opera
 export interface MemoryWriteResult {
   view: MemoryView;
   applied: number;
+  before: string[];
 }
 
 /**
@@ -275,7 +280,7 @@ export async function writeMemory(
     }
     try {
       const saved = await store.save(spec.domain, content, note.content ? note.updatedAt : undefined);
-      return { view: toView(spec, saved), applied: operations.length };
+      return { view: toView(spec, saved), applied: operations.length, before: entries };
     } catch (error) {
       if (error instanceof MemoryConflictError && attempt < 2) {
         continue;
@@ -286,45 +291,96 @@ export async function writeMemory(
   throw new Error("Memory write conflicted three times.");
 }
 
-/** Replaces a whole target's content (the panel's edit form). Same limit and screening rules. */
-export async function replaceMemory(store: MemoryStore, target: MemoryTarget, content: string, expectedUpdatedAt?: string): Promise<MemoryView> {
-  const spec = MEMORY_TARGETS[target];
-  const entries = splitEntries(content, spec.split);
-  for (const entry of entries) {
-    screenEntry(entry);
-  }
-  const joined = joinEntries(entries, spec.split);
-  if (joined.length > spec.limit) {
-    throw new MemoryOperationError("over_limit", `${spec.title} is ${joined.length}/${spec.limit} chars — shorten it before saving.`);
-  }
-  const saved = await store.save(spec.domain, joined, expectedUpdatedAt);
-  return toView(spec, saved);
-}
-
 /** The frozen snapshot the door puts in its MCP `instructions` at session start. */
-export function renderMemorySnapshot(views: MemoryView[]): string {
+export function renderMemorySnapshot(views: MemoryView[], now: Date = new Date()): string {
   const blocks = views.map((view) => {
-    const header = `${view.title} — ${view.purpose} [${view.usagePercent}% — ${view.chars}/${view.limit} chars]`;
+    const header = `${view.title} — ${view.purpose} [${view.chars}/${view.limit} chars]`;
     if (view.entries.length === 0) {
       return `${header}\n(empty)`;
     }
-    return `${header}\n${view.entries.join(view.target === "term" || view.target === "corrections" ? "\n" : "\n§\n")}`;
+    const stale = staleEntries(view, now);
+    const staleLine = stale.length ? `\n(Possibly out of date, check with the user or remove: ${stale.map((entry) => `"${clip(entry, 50)}"`).join(", ")})` : "";
+    return `${header}\n${view.entries.join(view.target === "term" || view.target === "corrections" ? "\n" : "\n§\n")}${staleLine}`;
   });
   return blocks.join("\n\n");
 }
 
 /** One-line nudge appended to door tool results, so memory upkeep is never more than a glance away. */
-export function memoryNudge(views: MemoryView[]): string {
+export function memoryNudge(views: MemoryView[], now: Date = new Date()): string {
   const user = views.find((view) => view.target === "user");
   const notes = views.find((view) => view.target === "notes");
   if (!user || user.entries.length === 0) {
-    return 'Memory: the USER PROFILE is empty — run the onboard playbook, or save what you learn about the user with memory({target:"user", operations:[{action:"add", content:"..."}]}).';
+    return 'Memory: the USER PROFILE is empty. Run the onboard playbook, or save what you learn about the user with memory({target:"user", operations:[{action:"add", content:"..."}]}).';
   }
   const full = [user, notes].filter((view): view is MemoryView => Boolean(view) && view!.usagePercent >= 80);
   if (full.length > 0) {
-    return `Memory: ${full.map((view) => `${view.title} is ${view.usagePercent}% full`).join(", ")} — consolidate (patch/remove) before adding more.`;
+    return `Memory: ${full.map((view) => `${view.title} is ${view.usagePercent}% full`).join(", ")}. Consolidate (patch/remove) before adding more.`;
+  }
+  const stale = notes ? staleEntries(notes, now) : [];
+  if (stale.length > 0) {
+    return `Memory: ${stale.length} NOTES entr${stale.length === 1 ? "y is" : "ies are"} over ${STALE_DAYS} days old. When the conversation touches them, check they still hold, then patch or remove.`;
   }
   return 'Memory: if this turn taught you something durable (a preference, a follow-up, a decision), save it now with memory({target:"user"|"notes", ...}).';
+}
+
+// A NOTES entry that starts with a date ("2026-11-06: asked for an extension") is a follow-up;
+// after three weeks it has usually resolved one way or the other.
+export const STALE_DAYS = 21;
+
+/** The date an entry opens with, as in "2026-11-06: ..." or a correction's "- [2026-11-06] ...". */
+export function entryDate(entry: string): string | null {
+  return entry.match(/^(?:- \[)?(\d{4}-\d{2}-\d{2})\b/)?.[1] ?? null;
+}
+
+export function staleEntries(view: MemoryView, now: Date): string[] {
+  if (view.target !== "notes") return [];
+  const cutoff = now.getTime() - STALE_DAYS * 86_400_000;
+  return view.entries.filter((entry) => {
+    const date = entryDate(entry);
+    return date !== null && Date.parse(`${date}T00:00:00Z`) < cutoff;
+  });
+}
+
+export function diffEntries(before: string[], after: string[]): { added: string[]; removed: string[] } {
+  return { added: after.filter((entry) => !before.includes(entry)), removed: before.filter((entry) => !after.includes(entry)) };
+}
+
+/**
+ * Runs a write to one target and logs what it changed as a `memory` activity row, so the panel
+ * can show who changed which entries and undo it. A write that changed nothing logs nothing.
+ */
+export async function trackMemoryWrite<T>(
+  store: MemoryStore,
+  activity: ActivityLog | undefined,
+  target: MemoryTarget,
+  who: { actor: string | null; via: string | null },
+  write: () => Promise<T>,
+  extra: Record<string, unknown> = {},
+): Promise<T> {
+  const spec = MEMORY_TARGETS[target];
+  const before = splitEntries((await store.get(spec.domain)).content, spec.split);
+  const result = await write();
+  if (activity) {
+    const after = splitEntries((await store.get(spec.domain)).content, spec.split);
+    const { added, removed } = diffEntries(before, after);
+    if (added.length || removed.length) {
+      await activity.record({ kind: "memory", name: target, status: "ok", actor: who.actor, via: who.via, detail: { added, removed, ...extra } }).catch(() => undefined);
+    }
+  }
+  return result;
+}
+
+/**
+ * The operations that put back what a logged change did. An edit (added and removed side by
+ * side) is patched back in place, so the entry keeps its position; the rest is removed or re-added.
+ */
+export function undoOperations(change: { added: string[]; removed: string[] }): MemoryOperation[] {
+  const pairs = Math.min(change.added.length, change.removed.length);
+  return [
+    ...change.added.slice(0, pairs).map((entry, index): MemoryOperation => ({ action: "patch", old_text: entry, content: change.removed[index] })),
+    ...change.added.slice(pairs).map((entry): MemoryOperation => ({ action: "remove", old_text: entry })),
+    ...change.removed.slice(pairs).map((entry): MemoryOperation => ({ action: "add", content: entry })),
+  ];
 }
 
 function clip(text: string, max: number): string {

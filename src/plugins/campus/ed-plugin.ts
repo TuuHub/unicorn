@@ -5,17 +5,15 @@ import { asArray, asBoolean, asNumber, asRecord, asString, toJson } from "../sou
 import { HttpStatusError } from "../http-error";
 
 // Ed's web app is region-scoped by URL path (edstem.org/us/..., /au/..., /eu/...);
-// verified against edstem-archiver's course URLs. The JSON API, by contrast, is
-// not region-split the same way: edstem.org/api/, us.edstem.org/api/ and
-// eu.edstem.org/api/ all answer (401 without a token) but au.edstem.org has no
-// API host of its own and redirects to the marketing site — so `region` only
-// changes the course/thread web URLs below, never `apiBaseUrl`'s default.
+// verified against edstem-archiver's course URLs. The JSON API is a host per region
+// (edstem.org for AU, us.edstem.org, eu.edstem.org) and a token works on one of them;
+// src/sources.ts picks `apiBaseUrl` from the region it detected for the token.
 export type EdRegion = "us" | "au" | "eu";
 
 export interface EdPluginOptions {
   token: string;
   apiBaseUrl?: string;
-  /** Web-app region for course/thread URLs (edstem.org/<region>/...). Default "us". */
+  /** Web-app region for course/thread URLs (edstem.org/<region>/...). Default "au". */
   region?: EdRegion;
   fetch?: typeof fetch;
   now?: () => Date;
@@ -34,7 +32,7 @@ export class EdPlugin implements Plugin {
   constructor(options: EdPluginOptions) {
     this.token = options.token;
     this.apiBaseUrl = ensureTrailingSlash(options.apiBaseUrl ?? "https://edstem.org/api/");
-    this.region = options.region ?? "us";
+    this.region = options.region ?? "au";
     if (options.fetch) {
       const injectedFetch = options.fetch;
       this.fetcher = (input, init) => injectedFetch(input, init);
