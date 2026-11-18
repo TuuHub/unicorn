@@ -717,6 +717,37 @@ function summarize(entry: ActivityEntry): string {
 
 // --- connect ------------------------------------------------------------------
 
+// unicorn's own hourly cycle only pulls and diffs (no model). Reading, sorting and planning are the
+// scheduled playbooks, and those run in the user's AI client: one daily task that calls them.
+export const DAILY_RUN_PROMPT = [
+  "Daily unicorn run. Use the unicorn connector. This runs unattended, so don't ask me anything.",
+  '1. run_playbook("triage") and follow it.',
+  '2. run_playbook("forum-brief") and follow it.',
+  '3. run_playbook("decompose-assignment") and follow it.',
+  '4. On Mondays, also run_playbook("weekly-plan") and follow it.',
+  'Each playbook files its own brief. End with one line: what needs me today, or "nothing today".',
+].join("\n");
+
+function renderScheduleCard(timezone: string): string {
+  return `<section class="card schedule" id="schedule" style="margin-top:16px">
+      <div class="card-head"><div class="card-title">${icon("clock")}<h2>Run it on a schedule</h2></div>
+        <p class="card-sub">unicorn syncs every hour by itself. Sorting, forum briefs and plans need a model, and that's your AI client: give it one daily task.</p></div>
+      <div class="card-body">
+        <div class="sched-prompt"><pre>${escapeHtml(DAILY_RUN_PROMPT)}</pre><button type="button" class="ghost sm" data-copy="${escapeHtml(DAILY_RUN_PROMPT)}" aria-label="Copy the prompt">${icon("copy")}<span>Copy</span></button></div>
+        <ol class="steps">
+          <li><strong>Claude desktop:</strong> open <strong>Scheduled</strong>, add a task with this prompt, weekdays at 07:30 (${escapeHtml(timezone)}), unicorn connector on. It runs while the app is open.</li>
+          <li><strong>ChatGPT:</strong> in a chat with unicorn enabled, paste the prompt and add “do this every weekday at 7:30”. It becomes a scheduled task where your plan lets tasks use connectors.</li>
+          <li>Briefs land in <a href="/panel/briefs">Briefs</a>; your next chat reads them first.</li>
+        </ol>
+      </div>
+    </section>
+    <style>
+    .sched-prompt{position:relative;margin-bottom:14px}
+    .sched-prompt pre{margin:0;padding:14px 16px;padding-right:88px;border-radius:12px;background:var(--default);white-space:pre-wrap;font-size:13px;line-height:1.6}
+    .sched-prompt button{position:absolute;top:8px;right:8px}
+    </style>`;
+}
+
 async function renderConnect(runtime: PanelRuntime, url: URL): Promise<string> {
   const door = runtime.doorUrl;
   const claudeCode = `claude mcp add --transport http unicorn ${door}`;
@@ -792,6 +823,7 @@ async function renderConnect(runtime: PanelRuntime, url: URL): Promise<string> {
         `<span class="tile-cluster">${["Cursor", "Codex", "VS Code", "Windsurf"].map((name) => clientTile(name, "md")).join("")}</span>`,
       )}
     </div>
+    ${renderScheduleCard(runtime.timezone)}
     ${
       claudeCodeBearer
         ? `<section class="card" style="margin-top:16px"><div class="card-head"><div class="card-title">${icon("key")}<h2>No OAuth? Use a token</h2></div><p class="card-sub">For scripts and clients without OAuth. This is your ${escapeHtml(runtime.bearerLabel)}: treat it as a password.</p></div><div class="card-body">
