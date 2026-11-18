@@ -215,7 +215,7 @@ describe("settings", () => {
     const response = await handleSettings(new Request("https://unicorn.example/settings", { headers: { authorization: basic("admin-secret") } }), withError);
     const html = await response.text();
 
-    expect(html).toContain("Never synced · 0 items");
+    expect(html).toContain("Not synced yet · 0 items");
     expect(html).toContain("Last sync failed");
     expect(html).toContain('<p class="src-error">canvas_api_401</p>');
   });

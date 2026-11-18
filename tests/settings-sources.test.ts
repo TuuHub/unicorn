@@ -125,6 +125,7 @@ describe("Moodle sign-in", () => {
       closed: 0,
       open: vi.fn(async () => ({ sessionId: "s1", targetId: "t1", liveViewUrl: "https://live.example/view/s1" })),
       readMoodleCookie: vi.fn(async (): Promise<{ name: string; value: string } | null> => cookie),
+      onLoginPage: vi.fn(async () => true),
       close: vi.fn(async () => {
         browser.closed += 1;
       }),
@@ -136,10 +137,10 @@ describe("Moodle sign-in", () => {
 
   it("offers the sign-in button only when a browser is bound", async () => {
     const without = await setup();
-    expect(await (await handleSettings(new Request(`${ORIGIN}/settings`), without.runtime)).text()).not.toContain("Sign in to Moodle");
+    expect(await (await handleSettings(new Request(`${ORIGIN}/settings`), without.runtime)).text()).not.toContain("Open remote browser");
 
     const withBrowser = await setup({ browser: fakeBrowser(null) });
-    expect(await (await handleSettings(new Request(`${ORIGIN}/settings`), withBrowser.runtime)).text()).toContain("Sign in to Moodle");
+    expect(await (await handleSettings(new Request(`${ORIGIN}/settings`), withBrowser.runtime)).text()).toContain("Open remote browser");
   });
 
   it("waits on the live view, then saves the session once the dashboard loads", async () => {
@@ -159,7 +160,7 @@ describe("Moodle sign-in", () => {
     const done = await handleSettings(new Request(`${ORIGIN}/settings/sources/moodle/sign-in`), runtime);
     expect(done.status).toBe(303);
     expect(done.headers.get("location")).toContain("signedIn=moodle");
-    expect(credentials.saved.get("moodle")).toEqual({ baseUrl: "https://moodle.example.edu", session: "fresh" });
+    expect(credentials.saved.get("moodle")).toEqual({ baseUrl: "https://moodle.example.edu", session: "fresh", cookieName: "MoodleSession" });
     expect(browser.closed).toBe(1);
   });
 
