@@ -10,7 +10,7 @@
 
 import type { BriefStore } from "./briefs";
 import { MEMORY_TARGETS } from "./agent-memory";
-import { normalizeCourseCode, normalizeTerm, parseTerm } from "./kernel/courses";
+import { normalizeCourseCode, normalizeTerm, parseTerm, termOrder } from "./kernel/courses";
 import type { MemoryStore } from "./memory";
 
 export interface TermCourse {
@@ -67,12 +67,6 @@ export async function loadTermCourses(db: D1Database): Promise<TermCourse[]> {
     return courses.filter((course) => !course.term || course.term === latest);
   }
   return courses;
-}
-
-// "S2 2026" sorts as "2026 S2", so a later year always wins over a later period.
-function termOrder(term: string): string {
-  const match = term.match(/^([ST]\d) (\d{4})$/);
-  return match ? `${match[2]} ${match[1]}` : term;
 }
 
 function cleanTitle(title: string | null, code: string): string | null {

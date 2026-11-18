@@ -11,6 +11,7 @@
 // sign-in, the hosted server behind a signed-in session (ADR-0046). It never shows a
 // credential except the door bearer token on Connect, which belongs to the viewer.
 
+import { loadGrades, renderGrades, renderGradesWidget, type GradeRow } from "./panel-grades";
 import type { GrantSummary } from "@cloudflare/workers-oauth-provider";
 import type { ActivityEntry, ActivityKind, ActivityLog } from "./activity";
 import { type MemoryTarget, readAllMemory } from "./agent-memory";
@@ -135,6 +136,8 @@ export async function handlePanel(request: Request, runtime: PanelRuntime): Prom
       return renderDeadlinesIcs(runtime, url);
     case "/panel/units":
       return htmlResponse(await renderUnits(runtime));
+    case "/panel/grades":
+      return htmlResponse(await renderGrades(runtime));
     case "/panel/briefs":
       return htmlResponse(await renderBriefs(runtime, url));
     case "/panel/plans":
@@ -180,7 +183,7 @@ async function renderOverview(runtime: PanelRuntime): Promise<string> {
     readAllMemory(runtime.memory),
     computeCsrfToken(runtime.adminToken),
     recentChanges(runtime.db, { limit: 8 }).catch(() => []),
-    recentChanges(runtime.db, { types: ["grade.changed"], limit: 5 }).catch(() => []),
+    loadGrades(runtime.db).catch((): GradeRow[] => []),
     runtime.db
       .prepare("SELECT content, updated_at FROM plans WHERE kind = 'weekly' AND subject = ?")
       .bind(week)
@@ -190,11 +193,14 @@ async function renderOverview(runtime: PanelRuntime): Promise<string> {
   ]);
   const totalItems = Object.values(runtime.itemCounts).reduce((sum, count) => sum + count, 0);
   const user = memory.find((view) => view.target === "user")!;
-  const overdue = upcoming.filter((item) => item.dueAt && Date.parse(item.dueAt) < now.getTime() && !isHandedIn(item.state));
-  const ahead = upcoming.filter((item) => !item.dueAt || Date.parse(item.dueAt) >= now.getTime());
+  // Work from a unit outside this term's set (last semester's leftovers) is not on the board.
+  const termCodes = new Set(courses.map((entry) => entry.code));
+  const current = upcoming.filter((item) => termCodes.size === 0 || !item.course || termCodes.has(item.course));
+  const overdue = current.filter((item) => item.dueAt && Date.parse(item.dueAt) < now.getTime() && !isHandedIn(item.state));
+  const ahead = current.filter((item) => !item.dueAt || Date.parse(item.dueAt) >= now.getTime());
 
   const content: Record<WidgetId, WidgetContent> = {
-    due: { title: WIDGETS.due, count: upcoming.length, more: { href: "/panel/due", label: "All deadlines" }, body: renderAgenda(overdue, ahead.slice(0, 12), zone, now) },
+    due: { title: WIDGETS.due, count: overdue.length + ahead.length, more: { href: "/panel/due", label: "All deadlines" }, body: renderAgenda(overdue, ahead.slice(0, 12), zone, now) },
     changes: {
       title: WIDGETS.changes,
       more: { href: "/panel/changes", label: "All" },
@@ -215,8 +221,8 @@ async function renderOverview(runtime: PanelRuntime): Promise<string> {
     plan: { title: WIDGETS.plan, more: { href: "/panel/plans", label: "Plans" }, body: renderPlanSummary(plan, now) },
     grades: {
       title: WIDGETS.grades,
-      more: { href: "/panel/changes?type=grades", label: "All" },
-      body: grades.length ? renderChangeDays(grades, zone, now) : empty("check", "No new grades."),
+      more: { href: "/panel/grades", label: "All grades" },
+      body: renderGradesWidget(grades),
     },
     agents: { title: WIDGETS.agents, more: { href: "/panel/activity", label: "Log" }, body: renderAgentSummary(stats, now) },
     profile: {

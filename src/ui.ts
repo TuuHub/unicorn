@@ -22,6 +22,7 @@ const NAV_GROUPS: Array<{ label: string; links: NavLink[] }> = [
       { path: "/panel", label: "Overview", icon: "overview" },
       { path: "/panel/changes", label: "Changes", icon: "changes" },
       { path: "/panel/due", label: "Deadlines", icon: "calendar" },
+      { path: "/panel/grades", label: "Grades", icon: "check" },
       { path: "/panel/units", label: "Units", icon: "units" },
       { path: "/panel/briefs", label: "Briefs", icon: "brief" },
       { path: "/panel/plans", label: "Plans", icon: "plan" },
