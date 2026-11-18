@@ -177,10 +177,13 @@ export async function renderDeadlines(runtime: PanelRuntime, url: URL): Promise<
   const zone = safeZone(runtime.timezone);
   const days = [14, 30, 60].includes(Number(url.searchParams.get("days"))) ? Number(url.searchParams.get("days")) : 30;
   const course = (url.searchParams.get("course") ?? "").trim().toUpperCase() || undefined;
-  const [items, courses] = await Promise.all([
+  const [allItems, courses] = await Promise.all([
     runtime.repo.upcoming({ days, course, includeOverdue: true, now: at }).catch((): ItemSummary[] => []),
     loadTermCourses(runtime.db).catch((): TermCourse[] => []),
   ]);
+  // Work from a unit outside this term's set (last semester's leftovers) is not on the board.
+  const termCodes = new Set(courses.map((entry) => entry.code));
+  const items = allItems.filter((item) => termCodes.size === 0 || !item.course || termCodes.has(item.course));
   const overdue = items.filter((item) => item.dueAt && Date.parse(item.dueAt) < at.getTime() && !isHandedIn(item.state));
   const ahead = items.filter((item) => !item.dueAt || Date.parse(item.dueAt) >= at.getTime());
   const weeks = new Map<string, ItemSummary[]>();

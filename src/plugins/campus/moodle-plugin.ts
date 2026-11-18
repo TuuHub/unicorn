@@ -1,4 +1,4 @@
-import { normalizeTerm } from "../../kernel/courses";
+import { parseTerm } from "../../kernel/courses";
 import type { Facet, ItemInput } from "../../kernel/types";
 import { parseSesskey } from "../../moodle-probe";
 import { HttpStatusError } from "../http-error";
@@ -221,17 +221,6 @@ export class MoodlePlugin implements Plugin {
       facets,
     };
   }
-}
-
-// A Moodle shortname or full name usually names its offering: "FIT3175_S2_2026",
-// "FIT1043 - MUM S2 2025", "ATS2946 - S2 2026". When it does, that is the course's
-// term (ADR-0036), as "S2 2026"; null when it names none.
-export function parseTerm(text: string): string | null {
-  const period = text.match(/(?:^|[^A-Z0-9])(S|T|SEM|SEMESTER|TRI|TRIMESTER)[\s_-]*(\d)(?![0-9])/i);
-  const year = text.match(/(?:^|[^A-Z0-9])(20\d{2})(?![0-9])/i);
-  if (!period || !year) return null;
-  const letter = period[1]!.toUpperCase().startsWith("T") ? "T" : "S";
-  return normalizeTerm(`${letter}${period[2]} ${year[1]}`);
 }
 
 function isAssessmentEvent(event: Record<string, unknown>): boolean {

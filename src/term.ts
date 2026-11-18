@@ -10,7 +10,7 @@
 
 import type { BriefStore } from "./briefs";
 import { MEMORY_TARGETS } from "./agent-memory";
-import { normalizeCourseCode, normalizeTerm } from "./kernel/courses";
+import { normalizeCourseCode, normalizeTerm, parseTerm } from "./kernel/courses";
 import type { MemoryStore } from "./memory";
 
 export interface TermCourse {
@@ -38,14 +38,18 @@ export async function loadTermCourses(db: D1Database): Promise<TermCourse[]> {
   const byCode = new Map<string, TermCourse>();
   for (const row of rows.results) {
     // Moodle's "FIT2004_S2_2026" and Ed's "FIT2004" are one unit: group by the bare code,
-    // the same one structural labelling writes to items.course.
+    // the same one structural labelling writes to items.course. A Moodle hub or portal
+    // ("SOIT Student HUB UG") has no unit code and is not a unit.
     const raw = String(row.code);
-    const code = normalizeCourseCode(raw) ?? raw.toUpperCase();
-    const term = normalizeTerm(row.term);
+    const code = normalizeCourseCode(raw);
+    if (!code) continue;
+    // Moodle leaves the term column empty and names the offering in the code or title;
+    // Ed says "SEMESTER 2 2026" where Moodle says "S2 2026".
+    const term = parseTerm(row.term ?? "") ?? parseTerm(raw) ?? parseTerm(row.title ?? "") ?? normalizeTerm(row.term);
     const entry = byCode.get(code) ?? { code, title: null, term: null, sources: [] };
     entry.title ??= cleanTitle(row.title, code);
-    // Prefer the latest-looking term label when sources disagree (e.g. "2026 S1" vs "2026 S2").
-    if (term && (!entry.term || term > entry.term)) {
+    // Prefer the latest term when sources disagree (e.g. "S1 2026" vs "S2 2026").
+    if (term && (!entry.term || termOrder(term) > termOrder(entry.term))) {
       entry.term = term;
     }
     const label = SOURCE_LABELS[row.source] ?? row.source;
@@ -59,10 +63,16 @@ export async function loadTermCourses(db: D1Database): Promise<TermCourse[]> {
   // offering from last semester should not read as "enrolled now".
   const terms = courses.map((course) => course.term).filter((term): term is string => Boolean(term));
   if (terms.length > 0) {
-    const latest = terms.sort().at(-1)!;
+    const latest = terms.sort((left, right) => termOrder(left).localeCompare(termOrder(right))).at(-1)!;
     return courses.filter((course) => !course.term || course.term === latest);
   }
   return courses;
+}
+
+// "S2 2026" sorts as "2026 S2", so a later year always wins over a later period.
+function termOrder(term: string): string {
+  const match = term.match(/^([ST]\d) (\d{4})$/);
+  return match ? `${match[2]} ${match[1]}` : term;
 }
 
 function cleanTitle(title: string | null, code: string): string | null {

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { MoodlePlugin, parseTerm } from "../src/plugins/campus/moodle-plugin";
+import { parseTerm } from "../src/kernel/courses";
+import { MoodlePlugin } from "../src/plugins/campus/moodle-plugin";
 
 describe("MoodlePlugin.pull", () => {
   it("maps courses and timeline events into kernel items", async () => {
@@ -111,6 +112,7 @@ describe("MoodlePlugin.pull", () => {
     expect(parseTerm("FIT1008-FIT2085_S1_2026")).toBe("S1 2026");
     expect(parseTerm("FIT2094 2026 S2")).toBe("S2 2026");
     expect(parseTerm("COMP1511 T3 2025")).toBe("T3 2025");
+    expect(parseTerm("SEMESTER 2 2026")).toBe("S2 2026");
     expect(parseTerm("FIT2004")).toBeNull();
     expect(parseTerm("SOIT Student HUB UG")).toBeNull();
   });
