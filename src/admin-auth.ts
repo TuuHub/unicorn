@@ -5,6 +5,7 @@
 // A Basic header carrying the same token is still accepted: the hosted server (server/app.ts)
 // injects one after its own session check, and scripts can keep using curl -u.
 
+import { type AccessConfig, verifyAccessJwt } from "./access";
 import { constantTimeEqual, isBasicAuthorized } from "./settings";
 import { icon } from "./marks";
 import { escapeHtml, htmlResponse, renderPage } from "./ui";
@@ -12,7 +13,9 @@ import { escapeHtml, htmlResponse, renderPage } from "./ui";
 export const SESSION_COOKIE = "unicorn_session";
 const SESSION_SECONDS = 30 * 24 * 60 * 60;
 
-export async function isAdminRequest(request: Request, adminToken: string): Promise<boolean> {
+export async function isAdminRequest(request: Request, adminToken: string, access?: AccessConfig): Promise<boolean> {
+  const accessJwt = request.headers.get("cf-access-jwt-assertion");
+  if (access && accessJwt && (await verifyAccessJwt(accessJwt, access)) !== null) return true;
   if (!adminToken) return false;
   if (isBasicAuthorized(request.headers.get("authorization"), adminToken)) return true;
   const cookie = readCookie(request, SESSION_COOKIE);
@@ -23,8 +26,8 @@ export async function isAdminRequest(request: Request, adminToken: string): Prom
 }
 
 /** Null when signed in. Otherwise a page load goes to /login; anything else gets a plain 401. */
-export async function requireAdmin(request: Request, adminToken: string): Promise<Response | null> {
-  if (await isAdminRequest(request, adminToken)) return null;
+export async function requireAdmin(request: Request, adminToken: string, access?: AccessConfig): Promise<Response | null> {
+  if (await isAdminRequest(request, adminToken, access)) return null;
   const url = new URL(request.url);
   if (request.method === "GET" || request.method === "HEAD") {
     return redirect(`/login?next=${encodeURIComponent(url.pathname + url.search)}`);
@@ -32,10 +35,10 @@ export async function requireAdmin(request: Request, adminToken: string): Promis
   return new Response("Sign in first.", { status: 401, headers: { "cache-control": "no-store" } });
 }
 
-export async function handleLogin(request: Request, adminToken: string): Promise<Response> {
+export async function handleLogin(request: Request, adminToken: string, access?: AccessConfig): Promise<Response> {
   const url = new URL(request.url);
   if (request.method === "GET") {
-    if (await isAdminRequest(request, adminToken)) return redirect(safeNext(url.searchParams.get("next")));
+    if (await isAdminRequest(request, adminToken, access)) return redirect(safeNext(url.searchParams.get("next")));
     return renderLogin(safeNext(url.searchParams.get("next")));
   }
   if (request.method !== "POST") return new Response("Method not allowed.", { status: 405, headers: { allow: "GET, POST" } });
@@ -52,10 +55,11 @@ export async function handleLogin(request: Request, adminToken: string): Promise
   return redirect(next, cookie(url, value, SESSION_SECONDS));
 }
 
-export function handleLogout(request: Request): Response {
+export function handleLogout(request: Request, access?: AccessConfig): Response {
   const url = new URL(request.url);
   if (request.headers.get("origin") !== url.origin) return new Response("Invalid request origin.", { status: 403 });
-  return redirect("/login", cookie(url, "", 0));
+  // Behind Access, clearing our cookie alone would leave the browser signed in through Access.
+  return redirect(access ? "/cdn-cgi/access/logout" : "/login", cookie(url, "", 0));
 }
 
 export function safeNext(value: string | null): string {
