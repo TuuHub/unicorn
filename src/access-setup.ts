@@ -1,6 +1,7 @@
 // Onboarding step "Sign in with email": sets up Cloudflare Access on the owner's own account.
 //
-// The owner pastes an API token made from TOKEN_URL (Access apps and account settings, edit) and
+// The owner pastes an API token made from TOKEN_URL (Access apps and Access account settings, edit;
+// Account Settings, read, without which /accounts comes back empty) and
 // their email. unicorn uses the token for these calls and never stores it:
 //
 //   1. find the one account the token reaches
@@ -15,11 +16,12 @@ import { ACCESS_LOGIN_PATH, type AccessConfig } from "./access";
 
 const API = "https://api.cloudflare.com/client/v4";
 
-/** Prefills a user API token with Access apps (edit) and Access account settings (edit). */
+/** Prefills a user API token with Access apps (edit), Access account settings (edit) and Account Settings (read). */
 export const TOKEN_URL = `https://dash.cloudflare.com/profile/api-tokens?permissionGroupKeys=${encodeURIComponent(
   JSON.stringify([
     { key: "access", type: "edit" },
     { key: "access_acct", type: "edit" },
+    { key: "account_settings", type: "read" },
   ]),
 )}&accountId=*&zoneId=all&name=${encodeURIComponent("unicorn email sign-in")}`;
 
@@ -62,7 +64,9 @@ export async function setUpAccessLogin(input: { apiToken: string; email: string;
   }
   if (accounts.length !== 1) {
     throw new AccessSetupError(
-      accounts.length ? `That token reaches ${accounts.length} accounts. Make it again and include only the account unicorn runs on.` : "That token can't see any account.",
+      accounts.length
+        ? `That token reaches ${accounts.length} accounts. Make it again and include only the account unicorn runs on.`
+        : "That token can't see your account. Make it from the link so all three permissions are filled in.",
     );
   }
   const account = `/accounts/${accounts[0]!.id}/access`;
@@ -122,7 +126,7 @@ class ApiError extends Error {
 
 function permissionError(error: unknown): never {
   if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
-    throw new AccessSetupError("That token is missing an Access permission. Make it from the link so both are filled in.");
+    throw new AccessSetupError("That token is missing an Access permission. Make it from the link so all three permissions are filled in.");
   }
   throw new AccessSetupError(`Cloudflare said: ${errorText(error)}`);
 }

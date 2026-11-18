@@ -991,7 +991,7 @@ Unchanged from the original policy and still enforced: `SELECT`/`WITH` only as t
 **Decision.**
 - The sign-in page offers two ways in: "Continue with email" and the admin token. Both end in the same session cookie, so every other page keeps one sign-in check.
 - The Access application covers only `/login/access`. A request that arrives there with a valid `Cf-Access-Jwt-Assertion` (RS256 against the team's published keys, matching audience and issuer, not expired) gets the session cookie and goes on to `next`. The header means nothing on any other path.
-- Onboarding turns it on: a checklist step links to a card on the Deployment page that takes an email and a Cloudflare API token made from a prefilled link (Access apps and account settings, edit). The Worker uses the token once to find or create the Zero Trust organization, make sure the one-time PIN login exists, and create or update the "unicorn" application with a policy that lets in that one email. The token is not stored.
+- Onboarding turns it on: a checklist step links to a card on the Deployment page that takes an email and a Cloudflare API token made from a prefilled link (Access apps and Access account settings, edit; Account Settings, read, so the token can see its account). The Worker uses the token once to find or create the Zero Trust organization, make sure the one-time PIN login exists, and create or update the "unicorn" application with a policy that lets in that one email. The token is not stored.
 - The team domain, audience tag and email live in the `settings` table under `access_login`. None of them is a secret.
 - Sign out goes through `/cdn-cgi/access/logout` when email sign-in is on, so the next "Continue with email" asks for a code again.
 
