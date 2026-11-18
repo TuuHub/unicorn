@@ -19,7 +19,8 @@ const ASSESSMENT_MODULES = new Set(["assign", "choice", "lesson", "quiz", "works
 
 // Overdue work Moodle still lists as needing action stays in view for this long.
 const OVERDUE_WINDOW_DAYS = 28;
-const TIMELINE_LIMIT = 100;
+// Moodle rejects a timeline page over 50 events ("Limit must be between 1 and 50").
+const TIMELINE_LIMIT = 50;
 
 export interface MoodlePluginOptions {
   baseUrl: string;

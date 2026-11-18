@@ -101,7 +101,7 @@ describe("MoodlePlugin.pull", () => {
     const requestBody = JSON.parse(String(fetcher.mock.calls[1]?.[1]?.body)) as Array<{
       args: { limitnum?: number };
     }>;
-    expect(requestBody[1]?.args.limitnum).toBe(100);
+    expect(requestBody[1]?.args.limitnum).toBe(50);
     expect(plugin.complete()).toEqual(["course", "assessment"]);
   });
 
