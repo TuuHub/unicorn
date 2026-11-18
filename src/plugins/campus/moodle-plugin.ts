@@ -17,9 +17,17 @@ const COURSES_METHOD = "core_course_get_enrolled_courses_by_timeline_classificat
 const TIMELINE_METHOD = "core_calendar_get_action_events_by_timesort";
 const ASSESSMENT_MODULES = new Set(["assign", "choice", "lesson", "quiz", "workshop"]);
 
+// Overdue work Moodle still lists as needing action stays in view for this long.
+const OVERDUE_WINDOW_DAYS = 28;
+const TIMELINE_LIMIT = 100;
+
 export interface MoodlePluginOptions {
   baseUrl: string;
   session: string;
+  // Moodle sites may rename the cookie (MoodleSessionlearning and the like).
+  cookieName?: string;
+  // Signs in again (Okta) when Moodle has dropped the session; null when nothing can.
+  renew?: () => Promise<{ name: string; value: string } | null>;
   fetch?: typeof fetch;
   now?: () => Date;
 }
@@ -27,13 +35,18 @@ export interface MoodlePluginOptions {
 export class MoodlePlugin implements Plugin {
   readonly id = "campus-moodle";
   private readonly baseUrl: string;
-  private readonly session: string;
+  private session: string;
+  private cookieName: string;
+  private readonly renew: MoodlePluginOptions["renew"];
+  private completeKinds: string[] = [];
   private readonly fetcher: typeof fetch;
   private readonly now: () => Date;
 
   constructor(options: MoodlePluginOptions) {
     this.baseUrl = options.baseUrl.replace(/\/$/, "");
     this.session = options.session;
+    this.cookieName = options.cookieName || "MoodleSession";
+    this.renew = options.renew;
     if (options.fetch) {
       const injectedFetch = options.fetch;
       this.fetcher = (input, init) => injectedFetch(input, init);
@@ -43,12 +56,27 @@ export class MoodlePlugin implements Plugin {
     this.now = options.now ?? (() => new Date());
   }
 
+  /** Kinds the last pull listed in full: anything of these kinds it left out is gone from Moodle. */
+  complete(): string[] {
+    return this.completeKinds;
+  }
+
   async pull(): Promise<ItemInput[]> {
-    const headers = { cookie: `MoodleSession=${this.session}` };
-    const dashboard = await this.fetcher(`${this.baseUrl}/my/`, { headers, redirect: "manual" });
+    this.completeKinds = [];
+    let dashboard = await this.dashboard();
+    // A 3xx is Moodle sending a signed-out visitor to its login page.
+    if (dashboard.status >= 300 && dashboard.status < 400 && this.renew) {
+      const cookie = await this.renew();
+      if (cookie) {
+        this.session = cookie.value;
+        this.cookieName = cookie.name;
+        dashboard = await this.dashboard();
+      }
+    }
     if (!dashboard.ok) {
       throw new HttpStatusError(dashboard.status, `Moodle dashboard returned HTTP ${dashboard.status}.`);
     }
+    const headers = { cookie: `${this.cookieName}=${this.session}` };
     const sesskey = parseSesskey(await dashboard.text());
     const now = this.now();
     const nowSeconds = Math.floor(now.getTime() / 1000);
@@ -64,14 +92,14 @@ export class MoodlePlugin implements Plugin {
         {
           index: 0,
           methodname: COURSES_METHOD,
-          args: { classification: "all", limit: 100, offset: 0, sort: "fullname" },
+          args: { classification: "inprogress", limit: 100, offset: 0, sort: "fullname" },
         },
         {
           index: 1,
           methodname: TIMELINE_METHOD,
           args: {
-            limitnum: 50,
-            timesortfrom: nowSeconds,
+            limitnum: TIMELINE_LIMIT,
+            timesortfrom: nowSeconds - OVERDUE_WINDOW_DAYS * 86_400,
             timesortto: 0,
             aftereventid: 0,
             limittononsuspendedevents: true,
@@ -98,12 +126,20 @@ export class MoodlePlugin implements Plugin {
     const coursesData = asRecord(asRecord(envelope[0]).data);
     const timelineData = asRecord(asRecord(envelope[1]).data);
     const courses = asArray(coursesData.courses).map((course) => this.mapCourse(asRecord(course), now));
-    const assessments = asArray(timelineData.events)
+    const events = asArray(timelineData.events);
+    // Moodle drops an event from the timeline once it needs no action (handed in, closed).
+    // A full page may have cut some off, so only a short one says the rest are done.
+    this.completeKinds = events.length < TIMELINE_LIMIT ? ["course", "assessment"] : ["course"];
+    const assessments = events
       .map(asRecord)
       .filter(isAssessmentEvent)
       .map((event) => this.mapAssessment(event))
       .filter((item): item is ItemInput => item !== null);
     return [...courses, ...assessments];
+  }
+
+  private dashboard(): Promise<Response> {
+    return this.fetcher(`${this.baseUrl}/my/`, { headers: { cookie: `${this.cookieName}=${this.session}` }, redirect: "manual" });
   }
 
   private mapCourse(course: Record<string, unknown>, now: Date): ItemInput {
@@ -112,7 +148,7 @@ export class MoodlePlugin implements Plugin {
     const visible = asBoolean(course.visible, true);
     const status = visible ? "active" : "hidden";
     const shortname = asString(course.shortname);
-    const term = parseShortnameTerm(shortname);
+    const term = parseTerm(shortname) ?? parseTerm(asString(course.fullname));
     return {
       id: `course:${id}`,
       source: this.id,
@@ -187,12 +223,15 @@ export class MoodlePlugin implements Plugin {
   }
 }
 
-// A Moodle shortname often ends in a session+year suffix like "_S1_2026" or
-// "_T3_2025" (e.g. "FIT3175_S2_2026"); when present it is the course's term
-// (ADR-0036). Omitted when the shortname carries no such suffix.
-function parseShortnameTerm(shortname: string): string | null {
-  const match = shortname.match(/[_-]([A-Za-z]+\d*)[_-](\d{4})$/);
-  return match ? normalizeTerm(`${match[1]} ${match[2]}`) : null;
+// A Moodle shortname or full name usually names its offering: "FIT3175_S2_2026",
+// "FIT1043 - MUM S2 2025", "ATS2946 - S2 2026". When it does, that is the course's
+// term (ADR-0036), as "S2 2026"; null when it names none.
+export function parseTerm(text: string): string | null {
+  const period = text.match(/(?:^|[^A-Z0-9])(S|T|SEM|SEMESTER|TRI|TRIMESTER)[\s_-]*(\d)(?![0-9])/i);
+  const year = text.match(/(?:^|[^A-Z0-9])(20\d{2})(?![0-9])/i);
+  if (!period || !year) return null;
+  const letter = period[1]!.toUpperCase().startsWith("T") ? "T" : "S";
+  return normalizeTerm(`${letter}${period[2]} ${year[1]}`);
 }
 
 function isAssessmentEvent(event: Record<string, unknown>): boolean {

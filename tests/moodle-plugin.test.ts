@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { MoodlePlugin } from "../src/plugins/campus/moodle-plugin";
+import { MoodlePlugin, parseTerm } from "../src/plugins/campus/moodle-plugin";
 
 describe("MoodlePlugin.pull", () => {
   it("maps courses and timeline events into kernel items", async () => {
@@ -100,7 +100,42 @@ describe("MoodlePlugin.pull", () => {
     const requestBody = JSON.parse(String(fetcher.mock.calls[1]?.[1]?.body)) as Array<{
       args: { limitnum?: number };
     }>;
-    expect(requestBody[1]?.args.limitnum).toBe(50);
+    expect(requestBody[1]?.args.limitnum).toBe(100);
+    expect(plugin.complete()).toEqual(["course", "assessment"]);
+  });
+
+  it("reads the term from shortnames and full names in any common shape", () => {
+    expect(parseTerm("FIT2099_S1_2026")).toBe("S1 2026");
+    expect(parseTerm("FIT1043 - MUM S2 2025")).toBe("S2 2025");
+    expect(parseTerm("ATS2946 - S2 2026")).toBe("S2 2026");
+    expect(parseTerm("FIT1008-FIT2085_S1_2026")).toBe("S1 2026");
+    expect(parseTerm("FIT2094 2026 S2")).toBe("S2 2026");
+    expect(parseTerm("COMP1511 T3 2025")).toBe("T3 2025");
+    expect(parseTerm("FIT2004")).toBeNull();
+    expect(parseTerm("SOIT Student HUB UG")).toBeNull();
+  });
+
+  it("signs in again through renew when Moodle redirects to its login page", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(null, { status: 303, headers: { location: "https://learning.example.edu/login/index.php" } }))
+      .mockResolvedValueOnce(new Response('<script>M.cfg = {"sesskey":"k"};</script>'))
+      .mockResolvedValueOnce(Response.json([{ error: false, data: { courses: [] } }, { error: false, data: { events: [] } }]));
+    const renew = vi.fn(async () => ({ name: "MoodleSessionlearning", value: "renewed" }));
+    const plugin = new MoodlePlugin({ baseUrl: "https://learning.example.edu", session: "old", fetch: fetcher, renew });
+
+    await plugin.pull();
+
+    expect(renew).toHaveBeenCalledOnce();
+    expect(new Headers(fetcher.mock.calls[1]?.[1]?.headers).get("cookie")).toBe("MoodleSessionlearning=renewed");
+    expect(new Headers(fetcher.mock.calls[2]?.[1]?.headers).get("cookie")).toBe("MoodleSessionlearning=renewed");
+  });
+
+  it("keeps the redirect error when nothing can renew the session", async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(null, { status: 303 }));
+    const plugin = new MoodlePlugin({ baseUrl: "https://learning.example.edu", session: "old", fetch: fetcher, renew: async () => null });
+
+    await expect(plugin.pull()).rejects.toMatchObject({ status: 303 });
   });
 
   it("omits term when the shortname carries no session+year suffix", async () => {

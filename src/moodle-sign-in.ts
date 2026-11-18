@@ -32,7 +32,8 @@ export interface MoodleSignIn {
 
 export type SignInState =
   | { state: "none" }
-  | { state: "waiting"; liveViewUrl: string; expiresAt: number }
+  // `seen` is what the last check found, so the waiting page can say more than "waiting".
+  | { state: "waiting"; liveViewUrl: string; expiresAt: number; seen: "starting" | "login_page" | "rejected"; status?: number }
   | { state: "done" }
   | { state: "failed"; error: string };
 
@@ -56,7 +57,7 @@ export async function startMoodleSignIn(input: MoodleSignIn): Promise<SignInStat
     )
     .bind(KEY, JSON.stringify(attempt), new Date(now()).toISOString())
     .run();
-  return { state: "waiting", liveViewUrl: attempt.liveViewUrl, expiresAt: attempt.expiresAt };
+  return { state: "waiting", liveViewUrl: attempt.liveViewUrl, expiresAt: attempt.expiresAt, seen: "starting" };
 }
 
 export async function checkMoodleSignIn(input: MoodleSignIn): Promise<SignInState> {
@@ -75,12 +76,18 @@ export async function checkMoodleSignIn(input: MoodleSignIn): Promise<SignInStat
     return { state: "failed", error: "The remote browser closed. Start again." };
   }
   // Moodle sets a session cookie on its login page too, so only a dashboard that loads counts.
-  if (cookie && (await isSignedIn(attempt.baseUrl, cookie, input.fetch ?? fetch))) {
-    await input.credentials.save("moodle", { baseUrl: attempt.baseUrl, session: cookie.value });
+  const status = cookie ? await dashboardStatus(attempt.baseUrl, cookie, input.fetch ?? fetch) : 0;
+  if (cookie && status === 200) {
+    const previous = await input.credentials.get("moodle");
+    const kept = previous.status === "ok" ? previous.fields : {};
+    await input.credentials.save("moodle", { ...kept, baseUrl: attempt.baseUrl, session: cookie.value, cookieName: cookie.name });
     await end(input, attempt);
     return { state: "done" };
   }
-  return { state: "waiting", liveViewUrl: attempt.liveViewUrl, expiresAt: attempt.expiresAt };
+  // A cookie Moodle turns away from here, after the remote page left the login form, means
+  // Moodle tied the session to the remote browser: the user is signed in there, not here.
+  const seen = cookie && status !== 200 && (await input.browser.onLoginPage(attempt, attempt.baseUrl).catch(() => true)) === false ? "rejected" : "login_page";
+  return { state: "waiting", liveViewUrl: attempt.liveViewUrl, expiresAt: attempt.expiresAt, seen, ...(seen === "rejected" ? { status } : {}) };
 }
 
 export async function cancelMoodleSignIn(input: MoodleSignIn): Promise<void> {
@@ -88,14 +95,15 @@ export async function cancelMoodleSignIn(input: MoodleSignIn): Promise<void> {
   if (attempt) await end(input, attempt);
 }
 
-async function isSignedIn(baseUrl: string, cookie: { name: string; value: string }, fetcher: typeof fetch): Promise<boolean> {
+// 200 when Moodle's dashboard loads with a session key, its HTTP status otherwise (0 on error).
+async function dashboardStatus(baseUrl: string, cookie: { name: string; value: string }, fetcher: typeof fetch): Promise<number> {
   try {
     const response = await fetcher(`${baseUrl}/my/`, { headers: { cookie: `${cookie.name}=${cookie.value}` }, redirect: "manual" });
-    if (!response.ok) return false;
+    if (!response.ok) return response.status;
     parseSesskey(await response.text());
-    return true;
+    return 200;
   } catch {
-    return false;
+    return 0;
   }
 }
 
