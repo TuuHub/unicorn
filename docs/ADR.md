@@ -979,3 +979,15 @@ Unchanged from the original policy and still enforced: `SELECT`/`WITH` only as t
 - The character meter is gone. The limits still apply and still come back to the agent in tool results.
 
 **Consequences.** Memory text now sits in `activity_log` for up to 30 days. That's the same text the panel already shows, and it's pruned with the rest of the log. Undo is only as good as the log: a change older than 30 days can't be undone from the feed, though its entries can still be edited directly.
+
+---
+
+## ADR-0050 — Optional Cloudflare Access sign-in for the human pages
+
+**Status:** Accepted (2026-11-18)
+
+**Context.** Self-deployers sign in to the panel with `ADMIN_TOKEN`, a random string they saw once during setup. Many already have Cloudflare Zero Trust, which offers email one-time codes and social logins for free.
+
+**Decision.** When the `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` secrets are set, a request whose `Cf-Access-Jwt-Assertion` verifies (RS256 against the team's published keys, matching audience and issuer, not expired) counts as signed in. Without a valid JWT the `ADMIN_TOKEN` login and bearer auth work exactly as before. The Access application covers only `/panel*`, `/settings*`, `/login` and `/authorize*`, never the whole Worker, because client apps must reach `/mcp` and the OAuth endpoints without a browser. Sign out goes to `/cdn-cgi/access/logout` when Access is on.
+
+**Consequences.** The header is never trusted on its own: workers.dev can be reached around Access. `ADMIN_TOKEN` still derives the key that encrypts credentials pasted into `/settings`, so it must not be rotated just because nobody types it any more.
