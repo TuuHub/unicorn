@@ -18,6 +18,7 @@ import type { BriefStore } from "./briefs";
 import type { MemoryStore } from "./memory";
 import type { ItemSummary } from "./mcp/door-contracts";
 import type { DoorRepository } from "./mcp/door-repository";
+import type { EdThreadView } from "./plugins/campus/ed-plugin";
 import { computeCsrfToken, type LastCycleInfo } from "./settings";
 import { loadTermCourses, type TermCourse } from "./term";
 import { clientLabel, clientMark, clientTile, icon, sourceDot, sourceMark, sourceTile } from "./marks";
@@ -26,6 +27,7 @@ import {
   copyRow,
   emptyAsk,
   isHandedIn,
+  itemTitleLink,
   dayKey,
   empty,
   formatIn,
@@ -47,6 +49,7 @@ import {
   renderChanges,
   renderDeadlines,
   renderDeadlinesIcs,
+  renderEdThread,
   renderPlans,
   renderSearch,
   renderUnit,
@@ -81,6 +84,8 @@ export interface PanelRuntime {
   // Self-deployed Workers only (src/index.ts); the hosted server leaves it unset and has no
   // Deployment page.
   deployment?: DeploymentInfo;
+  // Reads one Ed thread live with the stored Ed token; unset when Ed isn't connected.
+  edThread?: (threadId: number) => Promise<EdThreadView>;
   now?: () => Date;
 }
 
@@ -145,6 +150,8 @@ export async function handlePanel(request: Request, runtime: PanelRuntime): Prom
       return page ? htmlResponse(page) : new Response(null, { status: 303, headers: { location: new URL("/account", url).toString() } });
     }
     default: {
+      const thread = path.match(/^\/panel\/ed\/(\d{1,12})$/);
+      if (thread) return htmlResponse(await renderEdThread(runtime, Number(thread[1])));
       const unit = path.match(/^\/panel\/units\/([A-Za-z0-9._-]{2,24})$/);
       if (unit) {
         const page = await renderUnit(runtime, decodeURIComponent(unit[1]));
@@ -364,7 +371,7 @@ function renderAgenda(overdue: ItemSummary[], ahead: ItemSummary[], zone: string
     return empty("check", "Nothing due in the next two weeks.");
   }
   const row = (item: ItemSummary) => {
-    const title = item.url ? `<a class="plain" href="${escapeHtml(item.url)}" target="_blank" rel="noopener">${escapeHtml(item.title)}</a>` : escapeHtml(item.title);
+    const title = itemTitleLink(item);
     const mark = sourceMark(item.source);
     const left = item.dueAt ? Date.parse(item.dueAt) - now.getTime() : Infinity;
     const urgency = isHandedIn(item.state) ? "handed-in" : left < 0 ? "late" : left < 48 * 3_600_000 ? "soon" : "";

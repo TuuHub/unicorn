@@ -20,6 +20,27 @@ export interface EdPluginOptions {
   threadLimit?: number;
 }
 
+// One thread as the panel's reader shows it: the question, its answers and every comment,
+// with authors resolved from the `users` list Ed sends next to the thread.
+export interface EdPost {
+  author: string;
+  role: string | null;
+  at: string;
+  body: string;
+  endorsed: boolean;
+  votes: number;
+  replies: EdPost[];
+}
+
+export interface EdThreadView {
+  title: string;
+  category: string | null;
+  url: string;
+  post: EdPost;
+  answers: EdPost[];
+  comments: EdPost[];
+}
+
 export class EdPlugin implements Plugin {
   readonly id = "campus-ed";
   private readonly token: string;
@@ -61,6 +82,40 @@ export class EdPlugin implements Plugin {
       }),
     );
     return [...courseItems, ...threadGroups.flat()];
+  }
+
+  /** Reads one thread with its answers and comments, live from Ed. */
+  async thread(threadId: number): Promise<EdThreadView> {
+    const data = await this.get(`threads/${threadId}`);
+    const thread = asRecord(data.thread);
+    const users = new Map(
+      asArray(data.users).map((entry) => {
+        const user = asRecord(entry);
+        return [asNumber(user.id), user] as const;
+      }),
+    );
+    const post = (raw: Record<string, unknown>): EdPost => {
+      const user = users.get(asNumber(raw.user_id));
+      const anonymous = asBoolean(raw.is_anonymous) || !user;
+      return {
+        author: anonymous ? "Anonymous" : asString(user.name) || "Someone",
+        role: anonymous ? null : asString(user.course_role) || asString(user.role) || null,
+        at: asString(raw.created_at),
+        body: asString(raw.document),
+        endorsed: asBoolean(raw.is_endorsed),
+        votes: asNumber(raw.vote_count),
+        replies: asArray(raw.comments).map((reply) => post(asRecord(reply))),
+      };
+    };
+    const courseId = asNumber(thread.course_id);
+    return {
+      title: asString(thread.title) || `Ed thread ${threadId}`,
+      category: asString(thread.category) || null,
+      url: `https://edstem.org/${this.region}/courses/${courseId}/discussion/${asNumber(thread.number) || threadId}`,
+      post: post(thread),
+      answers: asArray(thread.answers).map((answer) => post(asRecord(answer))),
+      comments: asArray(thread.comments).map((comment) => post(asRecord(comment))),
+    };
   }
 
   private async get(path: string, params: Record<string, string> = {}): Promise<Record<string, unknown>> {

@@ -13,7 +13,9 @@
 import type { ItemSummary, BucketGroup } from "./mcp/door-contracts";
 import { EVENT_LABELS, eventIcon, icon, sourceDot, sourceMark, sourceTile } from "./marks";
 import type { PanelRuntime } from "./panel";
-import { dayKey, empty, emptyAsk, formatIn, isHandedIn, PANEL_SCRIPT, PANEL_STYLE, relative, safeZone, shortAgo, SOURCE_NAMES } from "./panel-kit";
+import { dayKey, empty, emptyAsk, formatIn, isHandedIn, itemLinkAttrs, itemTitleLink, PANEL_SCRIPT, PANEL_STYLE, relative, safeZone, shortAgo, SOURCE_NAMES } from "./panel-kit";
+import type { EdPost } from "./plugins/campus/ed-plugin";
+import { HttpStatusError } from "./plugins/http-error";
 import { computeCsrfToken } from "./settings";
 import { loadTermCourses, type TermCourse } from "./term";
 import { escapeHtml, renderPage } from "./ui";
@@ -133,7 +135,7 @@ export function renderChangeDays(rows: ChangeRow[], zone: string, at: Date): str
 }
 
 function renderChangeRow(row: ChangeRow, zone: string): string {
-  const title = row.url ? `<a class="plain" href="${escapeHtml(row.url)}" target="_blank" rel="noopener">${escapeHtml(row.title)}</a>` : escapeHtml(row.title);
+  const title = itemTitleLink({ source: row.source, itemId: row.item_id, url: row.url, title: row.title });
   const detail = changeDetail(row, zone);
   return `<li>
     <span class="grow change-row">${eventIcon(row.type)}<span class="change-text">
@@ -258,8 +260,9 @@ function dueAgenda(items: ItemSummary[], zone: string, at: Date, inUnit = false)
 function taskCard(item: ItemSummary, zone: string, at: Date): string {
   const when = item.dueAt ? `${formatIn(item.dueAt, zone, { weekday: "short", day: "numeric", month: "short" })}, ${formatIn(item.dueAt, zone, { hour: "2-digit", minute: "2-digit", hour12: false })}` : "no date";
   const state = item.state ? `<span class="chip${/submit|done|complete|graded/i.test(item.state) ? " success" : ""}">${escapeHtml(item.state)}</span>` : "";
-  const tag = item.url ? "a" : "div";
-  return `<${tag} class="task-card plain"${item.url ? ` href="${escapeHtml(item.url)}" target="_blank" rel="noopener"` : ""}>
+  const attrs = itemLinkAttrs(item);
+  const tag = attrs ? "a" : "div";
+  return `<${tag} class="task-card plain"${attrs}>
     <div class="task-top">${item.course ? `<span class="badge course">${escapeHtml(item.course)}</span>` : "<span></span>"}<span class="task-when">${icon("clock")}${escapeHtml(when)}</span></div>
     <p class="task-title">${escapeHtml(item.title)}</p>
     <div class="task-meta">${sourceDot(item.source)}${escapeHtml(SOURCE_NAMES[item.source] ?? sourceMark(item.source)?.name ?? item.source)} · ${escapeHtml(item.kind)}${item.dueAt ? ` · ${escapeHtml(relative(item.dueAt, at))}` : ""}${state ? ` ${state}` : ""}</div>
@@ -267,7 +270,7 @@ function taskCard(item: ItemSummary, zone: string, at: Date): string {
 }
 
 function itemRow(item: ItemSummary, zone: string, at: Date, withTime: boolean, inUnit = false): string {
-  const title = item.url ? `<a class="plain" href="${escapeHtml(item.url)}" target="_blank" rel="noopener">${escapeHtml(item.title)}</a>` : escapeHtml(item.title);
+  const title = itemTitleLink(item);
   const state = item.state ? `<span class="badge${/submit|done|complete|graded/i.test(item.state) ? " ok" : ""}">${escapeHtml(item.state)}</span>` : "";
   const end = withTime && item.dueAt ? formatIn(item.dueAt, zone, { hour: "2-digit", minute: "2-digit", hour12: false }) : shortAgo(item.timestamp, at);
   return `<li>
@@ -617,7 +620,7 @@ export async function renderSearch(runtime: PanelRuntime, url: URL): Promise<str
   }
   const rows = results
     .map((item) => {
-      const title = item.url ? `<a class="plain" href="${escapeHtml(item.url)}" target="_blank" rel="noopener">${escapeHtml(item.title)}</a>` : escapeHtml(item.title);
+      const title = itemTitleLink(item);
       return `<li class="result">${sourceTile(item.source, "sm")}<div class="grow">
         <div class="result-title">${item.course ? `<a class="badge course" href="/panel/units/${encodeURIComponent(item.course)}">${escapeHtml(item.course)}</a>` : ""}<span>${title}</span>${item.staff ? '<span class="badge">staff</span>' : ""}</div>
         ${item.snippet ? `<p class="snippet">${escapeHtml(item.snippet)}</p>` : ""}
@@ -775,4 +778,78 @@ a.task-card:hover{box-shadow:var(--shadow-lg)}
 .result-title{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:14px;font-weight:500}
 .snippet{margin:4px 0 0;color:var(--muted);font-size:13px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .result-meta{margin:4px 0 0;color:var(--faint);font-size:12px}
+</style>`;
+
+// --- Ed thread reader ----------------------------------------------------------------------------
+//
+// /panel/ed/<thread id>: the question, its answers and the comments under each, read live from Ed
+// with the stored token, so a post opens here instead of on edstem.org. Ed's plain-text `document`
+// is shown as written; "Open in Ed" is there for images, code formatting and replying.
+
+export async function renderEdThread(runtime: PanelRuntime, threadId: number): Promise<string> {
+  const at = now(runtime);
+  const known = await runtime.db
+    .prepare("SELECT title, url, course FROM items WHERE source = 'campus-ed' AND item_id = ?")
+    .bind(`thread:${threadId}`)
+    .first<{ title: string; url: string | null; course: string | null }>()
+    .catch(() => null);
+  let problem: string | null = null;
+  let view = null;
+  if (!runtime.edThread) {
+    problem = 'Ed isn\'t connected. Add an Ed token in <a href="/settings#source-ed">Settings</a> to read threads here.';
+  } else {
+    try {
+      view = await runtime.edThread(threadId);
+    } catch (error) {
+      problem =
+        error instanceof HttpStatusError && (error.status === 404 || error.status === 403)
+          ? "Ed doesn't show this thread to your token any more. It may have been deleted or made private."
+          : "Couldn't reach Ed just now. Try again in a minute.";
+    }
+  }
+  const edUrl = view?.url ?? known?.url ?? null;
+  const course = known?.course ? `<a class="badge course" href="/panel/units/${encodeURIComponent(known.course)}">${escapeHtml(known.course)}</a> ` : "";
+  const post = (entry: EdPost, kind: "question" | "answer" | "comment"): string => {
+    const role = entry.role && entry.role !== "student" ? `<span class="badge">${escapeHtml(entry.role === "admin" ? "staff" : entry.role)}</span>` : "";
+    const endorsed = entry.endorsed ? `<span class="badge ok">${icon("check")}Endorsed</span>` : "";
+    const votes = entry.votes > 0 ? `<span class="muted small tabular">${entry.votes} vote${entry.votes === 1 ? "" : "s"}</span>` : "";
+    const replies = entry.replies.length ? `<ol class="ed-replies">${entry.replies.map((reply) => `<li>${post(reply, "comment")}</li>`).join("")}</ol>` : "";
+    return `<article class="ed-post ed-${kind}">
+      <header class="ed-by"><strong>${escapeHtml(entry.author)}</strong>${role}${endorsed}<span class="muted small">${entry.at ? escapeHtml(shortAgo(entry.at, at)) : ""}</span>${votes}</header>
+      <div class="ed-body">${escapeHtml(entry.body.trim()) || '<span class="muted">(no text)</span>'}</div>
+      ${replies}
+    </article>`;
+  };
+  const section = (kind: "answer" | "comment", posts: EdPost[]) => {
+    if (!posts.length) return "";
+    const heading = `${posts.length} ${kind}${posts.length === 1 ? "" : "s"}`;
+    return `<section class="card ed-thread-part" aria-label="${heading}"><div class="card-head"><h2>${heading}</h2></div><div class="card-body">${posts.map((entry) => post(entry, kind)).join("")}</div></section>`;
+  };
+  const body = view
+    ? `<section class="card"><div class="card-body">${post(view.post, "question")}</div></section>
+       ${section("answer", view.answers)}
+       ${section("comment", view.comments)}
+       ${view.answers.length + view.comments.length === 0 ? `<p class="muted ed-quiet">No replies yet.</p>` : ""}`
+    : `<section class="card"><div class="card-body"><p class="ed-problem" role="alert">${problem}</p></div></section>`;
+  return renderPage({
+    title: `unicorn — ${view?.title ?? known?.title ?? "Ed thread"}`,
+    active: "/panel/changes",
+    heading: escapeHtml(view?.title ?? known?.title ?? "Ed thread"),
+    subtitle: `${course}${view?.category ? `${escapeHtml(view.category)} · ` : ""}Ed Discussion, read live.`,
+    body: `${body}${PANEL_STYLE}${ED_STYLE}`,
+    actions: edUrl ? `<a class="button secondary" href="${escapeHtml(edUrl)}" target="_blank" rel="noopener">Open in Ed${icon("external")}</a>` : "",
+  });
+}
+
+const ED_STYLE = `<style>
+.ed-post{display:flex;flex-direction:column;gap:8px}
+.ed-thread-part .ed-post+.ed-post{margin-top:20px;padding-top:20px;box-shadow:0 -1px 0 var(--border)}
+.ed-by{display:flex;align-items:center;flex-wrap:wrap;gap:8px;font-size:14px}
+.ed-body{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.6;color:var(--fg)}
+.ed-question .ed-body{font-size:15px}
+.ed-replies{list-style:none;margin:8px 0 0;padding:0 0 0 16px;display:flex;flex-direction:column;gap:14px;box-shadow:inset 2px 0 0 var(--default)}
+.ed-replies .ed-body{font-size:14px;color:var(--fg-2)}
+.ed-quiet{margin:4px 4px 16px}
+.ed-problem{margin:0;padding:10px 12px;border-radius:10px;background:var(--danger-soft);color:var(--danger-text);font-size:14px}
+.ed-problem a{color:inherit;text-decoration:underline;text-underline-offset:3px}
 </style>`;

@@ -258,3 +258,25 @@ export const PANEL_SCRIPT = `
   });
 })();
 </script>`;
+
+type Linkable = { source: string; itemId: string; url: string | null };
+
+/** Where an item opens: an Ed thread in the panel's own reader, anything else at its source. */
+export function itemHref(item: Linkable): { href: string; external: boolean } | null {
+  const thread = item.source === "campus-ed" ? item.itemId.match(/^thread:(\d+)$/) : null;
+  if (thread) return { href: `/panel/ed/${thread[1]}`, external: false };
+  return item.url ? { href: item.url, external: true } : null;
+}
+
+/** The attributes of a link to an item, or "" when it has nowhere to go. */
+export function itemLinkAttrs(item: Linkable): string {
+  const target = itemHref(item);
+  if (!target) return "";
+  return ` href="${escapeHtml(target.href)}"${target.external ? ' target="_blank" rel="noopener"' : ""}`;
+}
+
+/** An item's title as a link, or plain text when it has nowhere to go. */
+export function itemTitleLink(item: Linkable & { title: string }): string {
+  const attrs = itemLinkAttrs(item);
+  return attrs ? `<a class="plain"${attrs}>${escapeHtml(item.title)}</a>` : escapeHtml(item.title);
+}
