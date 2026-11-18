@@ -47,10 +47,12 @@ describe("grades", () => {
         ["FIT2094", "Assignment 2 (30%)", null],
       ]),
     );
-    const widget = renderGradesWidget(rows);
+    const widget = renderGradesWidget(rows, "monash");
     expect(widget.indexOf("Class Test 2")).toBeLessThan(widget.indexOf("Assignment 1"));
     expect(widget).not.toContain("Assignment 2");
-    expect(scoreHtml(rows.find((row) => row.title === "Assignment 1 (30%)")!)).toContain('99<span class="faint"> / 100</span></span> <span class="badge ok">HD</span>');
-    expect(scoreHtml(rows.find((row) => row.title === "Assignment 2 (30%)")!)).toContain("Not marked");
+    const first = rows.find((row) => row.title === "Assignment 1 (30%)")!;
+    expect(scoreHtml(first, "monash")).toBe('<span class="score tabular" title="99.00 of 0–100">99%</span> <span class="band t1">HD</span>');
+    expect(scoreHtml(first, "percent")).not.toContain("band");
+    expect(scoreHtml(rows.find((row) => row.title === "Assignment 2 (30%)")!, "monash")).toContain("Not marked");
   });
 });

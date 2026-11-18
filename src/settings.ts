@@ -1,3 +1,4 @@
+import { BAND_STYLE, GRADE_SCALES, isGradeScale, type GradeScaleId } from "./grade-scale";
 import { renderConnectedApps } from "./oauth-server";
 import { D1OAuthTokenStore } from "./oauth";
 import { icon, sourceTile } from "./marks";
@@ -40,6 +41,8 @@ export interface AppSettings {
   addedSources: SourceId[];
   // Whether the Moodle at baseUrl sends sign-in to Okta, so the card offers Okta only there.
   moodleOkta?: { baseUrl: string; okta: boolean; checkedAt: string };
+  // How a mark reads on Grades: a percentage plus the school's band (HD, H1, First).
+  gradeScale: GradeScaleId;
 }
 
 export interface SettingsRepository {
@@ -101,6 +104,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   gmailAllowlist: [],
   disabledSources: [],
   addedSources: [],
+  gradeScale: "percent",
 };
 
 // Ids a custom manifest may not take: the built-in sources register items under these.
@@ -160,6 +164,7 @@ export async function handleSettings(request: Request, runtime: SettingsRuntime)
 
   if (path === "/settings") return handleMaintenancePost(form, runtime, url);
   if (path === "/settings/timezone") return handleTimezonePost(form, runtime, url);
+  if (path === "/settings/grade-scale") return handleGradeScalePost(form, runtime, url);
   if (path === "/settings/gmail-scope") return handleGmailScopePost(form, runtime, url);
   if (path === "/settings/sync-now") return handleSyncNowPost(runtime, url);
   if (path === "/settings/start-scheduler") return handleStartSchedulerPost(runtime, url);
@@ -251,6 +256,16 @@ async function handleTimezonePost(form: FormData, runtime: SettingsRuntime, url:
     return htmlResponse(await renderSettingsPage(current, runtime, url, { error: "Timezone must be a valid IANA name, e.g. Australia/Melbourne." }), 400);
   }
   await runtime.repository.save({ ...current, timezone });
+  return redirectToSettings(url, "saved=1");
+}
+
+async function handleGradeScalePost(form: FormData, runtime: SettingsRuntime, url: URL): Promise<Response> {
+  const current = await runtime.repository.get();
+  const gradeScale = form.get("gradeScale");
+  if (!isGradeScale(gradeScale)) {
+    return htmlResponse(await renderSettingsPage(current, runtime, url, { error: "Pick one of the grade scales." }), 400);
+  }
+  await runtime.repository.save({ ...current, gradeScale });
   return redirectToSettings(url, "saved=1");
 }
 
@@ -563,6 +578,7 @@ function parseSettings(value: unknown): AppSettings {
     disabledSources: asStringArray(record.disabledSources).filter(isValidSourceId),
     addedSources: asStringArray(record.addedSources).filter(isValidSourceId),
     ...(isMoodleOkta(record.moodleOkta) ? { moodleOkta: record.moodleOkta } : {}),
+    gradeScale: isGradeScale(record.gradeScale) ? record.gradeScale : DEFAULT_SETTINGS.gradeScale,
   };
 }
 
@@ -724,6 +740,7 @@ async function renderSettingsPage(settings: AppSettings, runtime: SettingsRuntim
     <div class="grid2">
       ${renderTimezoneCard(settings, csrf)}
       ${renderMaintenanceCard(settings, csrf)}
+      ${renderGradeScaleCard(settings, csrf)}
     </div>
     ${shown.some((entry) => entry.id === "gmail") ? renderGmailScopeCard(settings, csrf) : ""}
     ${renderConnectedApps(runtime.oauth?.grants ?? [])}
@@ -1220,6 +1237,31 @@ function renderTimezoneCard(settings: AppSettings, csrf: string): string {
     </section>`;
 }
 
+function renderGradeScaleCard(settings: AppSettings, csrf: string): string {
+  const options = (Object.keys(GRADE_SCALES) as GradeScaleId[])
+    .map((id) => `<option value="${id}"${id === settings.gradeScale ? " selected" : ""}>${escapeHtml(GRADE_SCALES[id].name)}</option>`)
+    .join("");
+  const bands = GRADE_SCALES[settings.gradeScale].bands;
+  const preview = bands.length
+    ? `<p class="band-row">${bands.map((band) => `<span class="band t${band.tier}">${escapeHtml(band.label)}${band.min ? ` ${band.min}+` : ""}</span>`).join("")}</p>`
+    : `<p class="hint">Marks show as a percentage, with no band.</p>`;
+  return `
+    <section class="card" aria-labelledby="grade-scale-title">
+      <div class="card-head"><h2 id="grade-scale-title">Grade scale</h2><p class="card-sub">What Grades calls a mark next to its percentage.</p></div>
+      <div class="card-body">
+        <form method="post" action="/settings/grade-scale" class="stack grow">
+          ${hiddenCsrf(csrf)}
+          <div class="field-stack">
+            <label for="gradeScale">Scale</label>
+            <select id="gradeScale" name="gradeScale">${options}</select>
+            ${preview}
+          </div>
+          <div class="row-end"><button class="button ghost" type="submit">Save</button></div>
+        </form>
+      </div>
+    </section>${BAND_STYLE}`;
+}
+
 function renderGmailScopeCard(settings: AppSettings, csrf: string): string {
   return `
     <section class="card" aria-labelledby="gmail-scope-title">
@@ -1294,7 +1336,8 @@ const PAGE_STYLE = `
       .cat-text{flex:1;min-width:0}
       .cat-text h3{margin:0;font-size:15px}
       .cat-text p{margin:2px 0 0;color:var(--muted);font-size:13.5px}
-      .cat-added{display:inline-flex;align-items:center;gap:6px;color:var(--muted);font-size:13px}
+      .band-row{display:flex;flex-wrap:wrap;gap:6px;margin:4px 0 0}
+.cat-added{display:inline-flex;align-items:center;gap:6px;color:var(--muted);font-size:13px}
       .cat-item form{margin:0}
       .src-body{flex:1;display:flex;flex-direction:column;gap:12px;padding:14px 16px 16px}
       .src-how{margin:0;color:var(--muted);font-size:13px;line-height:20px}

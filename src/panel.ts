@@ -11,6 +11,7 @@
 // sign-in, the hosted server behind a signed-in session (ADR-0046). It never shows a
 // credential except the door bearer token on Connect, which belongs to the viewer.
 
+import type { GradeScaleId } from "./grade-scale";
 import { loadGrades, renderGrades, renderGradesWidget, type GradeRow } from "./panel-grades";
 import type { GrantSummary } from "@cloudflare/workers-oauth-provider";
 import type { ActivityEntry, ActivityKind, ActivityLog } from "./activity";
@@ -73,6 +74,7 @@ export interface PanelRuntime {
   briefs: BriefStore;
   repo: DoorRepository;
   timezone: string;
+  gradeScale: GradeScaleId;
   lastCycle: LastCycleInfo;
   itemCounts: Record<string, number>;
   configuredSources: number;
@@ -222,7 +224,7 @@ async function renderOverview(runtime: PanelRuntime): Promise<string> {
     grades: {
       title: WIDGETS.grades,
       more: { href: "/panel/grades", label: "All grades" },
-      body: renderGradesWidget(grades),
+      body: renderGradesWidget(grades, runtime.gradeScale),
     },
     agents: { title: WIDGETS.agents, more: { href: "/panel/activity", label: "Log" }, body: renderAgentSummary(stats, now) },
     profile: {

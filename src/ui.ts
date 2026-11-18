@@ -66,7 +66,7 @@ export interface PageOptions {
   title: string;
   active: string;
   heading: string;
-  subtitle: string;
+  subtitle?: string;
   body: string;
   // Pages with side-by-side cards (the panel, /settings) take the full content column; a
   // read-through page keeps a narrower measure.
@@ -451,7 +451,7 @@ export function renderPage(options: PageOptions): string {
   <main class="bare">
     ${brand("/")}
     <h1>${options.heading}</h1>
-    <p class="sub">${options.subtitle}</p>
+    <p class="sub">${options.subtitle ?? ""}</p>
     ${options.body}
   </main>
 </body>
@@ -471,7 +471,7 @@ export function renderPage(options: PageOptions): string {
     </section>
     <main class="door-form"><div class="inner">
       <h1>${options.heading}</h1>
-      <p class="sub">${options.subtitle}</p>
+      <p class="sub">${options.subtitle ?? ""}</p>
       ${options.body}
     </div></main>
   </div>
@@ -495,7 +495,7 @@ export function renderPage(options: PageOptions): string {
     </aside>
     <main class="main${options.wide ? " wide" : ""}"><div class="inner">
       <header class="page-head">
-        <div><h1>${options.heading}</h1><p class="sub">${options.subtitle}</p></div>
+        <div><h1>${options.heading}</h1>${options.subtitle ? `<p class="sub">${options.subtitle ?? ""}</p>` : ""}</div>
         ${options.actions ? `<div class="page-actions">${options.actions}</div>` : ""}
       </header>
       ${options.body}

@@ -153,6 +153,7 @@ export async function buildPanelRuntime(env: Env, oauthHelpers: OAuthHelpers | u
     briefs: new D1BriefStore(env.DB),
     repo: new D1DoorRepository(env.DB),
     timezone: settings.timezone,
+    gradeScale: settings.gradeScale,
     lastCycle,
     itemCounts,
     configuredSources: plugins.length + (gmailConnected ? 1 : 0),

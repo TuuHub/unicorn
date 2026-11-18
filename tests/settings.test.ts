@@ -18,6 +18,7 @@ const current: AppSettings = {
   gmailAllowlist: [],
   disabledSources: [],
   addedSources: ["ed", "moodle", "canvas", "gmail"],
+  gradeScale: "percent",
 };
 
 describe("settings", () => {

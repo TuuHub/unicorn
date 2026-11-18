@@ -1,6 +1,7 @@
 // Grades from each unit's Moodle gradebook (moodle-cli reads them; the Moodle plugin stores one
 // `grade` item per activity). The overview shows the latest marks; /panel/grades shows every unit.
 
+import { BAND_STYLE, bandFor, percentOf, type GradeScaleId } from "./grade-scale";
 import { icon } from "./marks";
 import type { PanelRuntime } from "./panel";
 import { empty, PANEL_SCRIPT, PANEL_STYLE } from "./panel-kit";
@@ -46,16 +47,14 @@ export async function loadGrades(db: D1Database): Promise<GradeRow[]> {
   });
 }
 
-/** "14.25" of "0–15" reads "14.25 / 15"; "99.00 (HD)" keeps its letter as a badge. */
-export function scoreHtml(row: GradeRow): string {
+/** "27.50" of "0–28" reads "98%" and the band the scale gives it; the raw mark is the tooltip. */
+export function scoreHtml(row: GradeRow, scale: GradeScaleId): string {
   if (!row.grade) return `<span class="faint">Not marked</span>`;
-  const match = row.grade.match(/^(-?[\d.]+)\s*(?:\(([^)]+)\))?$/);
-  const max = row.range?.split(/[–—-]/).at(-1)?.trim();
-  if (!match) return `<span class="score">${escapeHtml(row.grade)}</span>`;
-  const value = String(Number(match[1]));
-  const outOf = max && /^[\d.]+$/.test(max) ? `<span class="faint"> / ${escapeHtml(String(Number(max)))}</span>` : "";
-  const letter = match[2] ? ` <span class="badge ok">${escapeHtml(match[2])}</span>` : "";
-  return `<span class="score tabular">${escapeHtml(value)}${outOf}</span>${letter}`;
+  const percent = percentOf(row.grade, row.range);
+  if (percent === null) return `<span class="score">${escapeHtml(row.grade)}</span>`;
+  const band = bandFor(percent, scale);
+  const raw = `${row.grade.replace(/\s*\(.*\)$/, "")}${row.range ? ` of ${row.range}` : ""}`;
+  return `<span class="score tabular" title="${escapeHtml(raw)}">${percent}%</span>${band ? ` <span class="band t${band.tier}">${escapeHtml(band.label)}</span>` : ""}`;
 }
 
 function titleHtml(row: GradeRow): string {
@@ -65,7 +64,7 @@ function titleHtml(row: GradeRow): string {
 }
 
 /** The newest marks first; on a first sync, where every row is new at once, the gradebook's last rows. */
-export function renderGradesWidget(rows: GradeRow[]): string {
+export function renderGradesWidget(rows: GradeRow[], scale: GradeScaleId): string {
   const marked = rows
     .filter((row) => row.grade)
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt) || right.order - left.order);
@@ -75,10 +74,10 @@ export function renderGradesWidget(rows: GradeRow[]): string {
     .map(
       (row) => `<li>
         <span class="grow due-row">${row.course ? `<a class="badge course" href="/panel/grades#unit-${encodeURIComponent(row.course)}">${escapeHtml(row.course)}</a>` : ""}${titleHtml(row)}</span>
-        <span class="end">${scoreHtml(row)}</span>
+        <span class="end">${scoreHtml(row, scale)}</span>
       </li>`,
     )
-    .join("")}</ul>${GRADES_STYLE}`;
+    .join("")}</ul>${GRADES_STYLE}${BAND_STYLE}`;
 }
 
 export async function renderGrades(runtime: PanelRuntime): Promise<string> {
@@ -99,7 +98,7 @@ export async function renderGrades(runtime: PanelRuntime): Promise<string> {
           .map(
             (row) => `<li class="${row.grade ? "" : "unmarked"}">
               <span class="grow grade-text">${titleHtml(row)}${row.feedback ? `<span class="grade-feedback">${escapeHtml(row.feedback)}</span>` : ""}</span>
-              <span class="end">${row.status ? `<span class="badge${/pass|complete/i.test(row.status) ? " ok" : ""}">${escapeHtml(row.status)}</span> ` : ""}${scoreHtml(row)}</span>
+              <span class="end">${scoreHtml(row, runtime.gradeScale)}</span>
             </li>`,
           )
           .join("")}</ul></div>
@@ -110,8 +109,7 @@ export async function renderGrades(runtime: PanelRuntime): Promise<string> {
     title: "unicorn — grades",
     active: "/panel/grades",
     heading: "Grades",
-    subtitle: "Every activity in this term's Moodle gradebooks, read by moodle-cli on each sync. A new mark also lands in Changes.",
-    body: `${cards || `<section class="card">${empty("check", "No grades yet. Connect Moodle on Sources; they show up after its next sync.")}</section>`}${PANEL_STYLE}${GRADES_STYLE}${PANEL_SCRIPT}`,
+    body: `${cards || `<section class="card">${empty("check", "No grades yet. Connect Moodle on Sources; they show up after its next sync.")}</section>`}${PANEL_STYLE}${GRADES_STYLE}${BAND_STYLE}${PANEL_SCRIPT}`,
     actions: `<a class="button secondary" href="/panel/changes?type=grades">${icon("changes")}Grade changes</a>`,
   });
 }
