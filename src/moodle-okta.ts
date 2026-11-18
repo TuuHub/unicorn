@@ -199,3 +199,33 @@ async function digest(login: OktaLogin): Promise<string> {
   const hash = await crypto.subtle.digest("SHA-256", bytes);
   return [...new Uint8Array(hash)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
+
+// Okta's own hosts, plus the markers its hosted sign-in page carries on a custom domain.
+const OKTA_HOST = /(^|\.)(okta|oktapreview|okta-emea|okta-gov)\.com$/i;
+const OKTA_PAGE = /okta-sign-in|OktaUtil|\.okta\.com\//i;
+const MAX_REDIRECTS = 8;
+
+/**
+ * Whether this Moodle sends a signed-out visitor to Okta, which is the only sign-in
+ * okta-auth-cli can do. Follows the redirects from /my/ and any SAML form on the way.
+ * False when it can't tell (Moodle's own login form, another IdP, or no answer).
+ */
+export async function moodleUsesOkta(baseUrl: string, fetcher: typeof fetch = fetch): Promise<boolean> {
+  let url = new URL(`${baseUrl.replace(/\/$/, "")}/my/`);
+  for (let hop = 0; hop < MAX_REDIRECTS; hop++) {
+    if (OKTA_HOST.test(url.hostname)) return true;
+    const response = await fetcher(url, { redirect: "manual", signal: AbortSignal.timeout(4_000) });
+    const location = response.headers.get("location");
+    if (response.status >= 300 && response.status < 400 && location) {
+      url = new URL(location, url);
+      continue;
+    }
+    const body = await response.text();
+    if (OKTA_PAGE.test(body)) return true;
+    // Moodle's SAML plugin hands off with an auto-submitting form instead of a redirect.
+    const samlAction = /SAMLRequest/.test(body) ? body.match(/<form[^>]*action="([^"]+)"/i)?.[1] : undefined;
+    if (!samlAction) return false;
+    url = new URL(samlAction.replace(/&amp;/g, "&"), url);
+  }
+  return false;
+}

@@ -328,6 +328,7 @@ export async function defaultFetch(request: Request, env: Env, context: Executio
       oauth: { grants: await listConnectedApps(oauthHelpers, doorUserId(env)) },
       db: env.DB,
       browser: env.BROWSER ? createBrowserRunLogin(env.BROWSER) : undefined,
+      fetch: (input, init) => fetch(input, init),
       runSync: async () => {
         const cycle = await runCycle(env, true);
         const failed = cycle.sources.find((source) => source.lastError);

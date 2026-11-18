@@ -4,7 +4,7 @@ const signIn = vi.fn();
 vi.mock("okta-auth-cli", async (importOriginal) => ({ ...(await importOriginal<typeof import("okta-auth-cli")>()), signIn }));
 
 const { OktaSignInError } = await import("okta-auth-cli");
-const { oktaStatus, renewMoodleSession } = await import("../src/moodle-okta");
+const { moodleUsesOkta, oktaStatus, renewMoodleSession } = await import("../src/moodle-okta");
 import type { CredentialLookup, SourceCredentialStore, SourceId } from "../src/sources";
 
 function store(fields: Record<string, string>) {
@@ -73,5 +73,27 @@ describe("renewMoodleSession", () => {
     await expect(renewMoodleSession({ baseUrl: BASE, env: {}, credentials, now: () => 10_000 })).rejects.toMatchObject({ code: "okta_backoff" });
     expect(signIn).toHaveBeenCalledOnce();
     expect(await oktaStatus({}, current())).toMatchObject({ state: "waiting", failures: 1 });
+  });
+});
+
+describe("moodleUsesOkta", () => {
+  const redirect = (location: string) => new Response(null, { status: 303, headers: { location } });
+
+  it("follows Moodle's redirects to an Okta host", async () => {
+    const pages: Record<string, Response> = {
+      "https://moodle.example.edu/my/": redirect("/login/index.php"),
+      "https://moodle.example.edu/login/index.php": redirect("https://moodle.example.edu/auth/saml2/login.php"),
+      "https://moodle.example.edu/auth/saml2/login.php": new Response('<form method="post" action="https://school.okta.com/app/sso/saml"><input name="SAMLRequest" value="x"></form>'),
+    };
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => pages[String(input)] ?? new Response("", { status: 404 }));
+    expect(await moodleUsesOkta(BASE, fetcher as unknown as typeof fetch)).toBe(true);
+    expect(fetcher).toHaveBeenCalledTimes(3);
+  });
+
+  it("says no for Moodle's own login form or another identity provider", async () => {
+    const own = vi.fn(async (input: RequestInfo | URL) => (String(input).endsWith("/my/") ? redirect("/login/index.php") : new Response('<form><input name="password"></form>')));
+    expect(await moodleUsesOkta(BASE, own as unknown as typeof fetch)).toBe(false);
+    const microsoft = vi.fn(async () => redirect("https://login.microsoftonline.com/tenant/saml2"));
+    expect(await moodleUsesOkta(BASE, microsoft as unknown as typeof fetch)).toBe(false);
   });
 });
