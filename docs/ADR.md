@@ -996,3 +996,20 @@ Unchanged from the original policy and still enforced: `SELECT`/`WITH` only as t
 - Sign out goes through `/cdn-cgi/access/logout` when email sign-in is on, so the next "Continue with email" asks for a code again.
 
 **Consequences.** `ADMIN_TOKEN` stays the fallback and still derives the key that encrypts pasted credentials, so it must not be rotated just because nobody types it any more. Creating a Zero Trust organization through the API is untested on a fresh account; when Cloudflare refuses, the card tells the owner to open the Zero Trust dashboard once and try again.
+
+---
+
+## ADR-0051 — A correction in the panel reaches the agent
+
+**Status:** Accepted (2026-11-20; amends ADR-0049)
+
+**Context.** ADR-0049 made memory changes undoable, but an undo only restored the entries. The next session read the same forum post and wrote the same wrong fact back, so the user undid it again. Briefs and labels had the same gap from the other side: an agent marks a brief read once it has shown it, and the Briefs page never listed read briefs (`list()` defaults to unread only), so a brief the user never saw was gone. A post an agent filed under the wrong assignment stayed there, with no way to move it from the panel.
+
+**Decision.**
+- Undoing an agent's memory change logs the undo with `rejected: true`. The session snapshot and `get_memory` list recent rejections ("an agent added X; the user took it out"), and `memory` and `remember` refuse to add an entry the user took out. Undoing the undo withdraws the rejection. Rejections live in `activity_log`, so they last its 30 days.
+- After a panel edit, tool results tell the agent for 24 hours to re-read memory if its snapshot predates the edit. The snapshot header carries the time, not just the date, so the agent can compare.
+- `memory` takes an optional `reason`, shown beside the change in the panel.
+- The Briefs page lists read briefs with when they were read and a Mark unread button. The export includes them too.
+- A unit page has a group picker on each item. The move is saved as `labeled_by = 'client'`, which the structure pass and the triage playbook (it only files unlabelled items) both leave alone.
+
+**Consequences.** A user label isn't distinguishable from an agent label; telling them apart would need `'user'` in the `labeled_by` CHECK constraint, which SQLite can only change by rebuilding `items`. An agent that relabels an already-labelled item on its own can still overwrite a user's move. The re-add guard matches whole entries only: an agent that rephrases a rejected entry gets past it, and the rejection text in its instructions is what stops it.
