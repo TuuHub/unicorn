@@ -43,6 +43,8 @@ export interface BriefStore {
   insert(input: BriefInput): Promise<Brief>;
   list(query?: BriefListQuery): Promise<Brief[]>;
   markRead(ids: string[]): Promise<number>;
+  // An agent marks a brief read once it has shown it; the user puts it back if they never saw it.
+  markUnread(ids: string[]): Promise<number>;
   prune(retentionDays: number): Promise<number>;
   // Cheap existence check used by the scheduler to skip re-running a playbook whose
   // brief id already exists, without paying for a full row fetch.
@@ -106,6 +108,18 @@ export class D1BriefStore implements BriefStore {
     const result = await this.db
       .prepare(`UPDATE briefs SET read_at = ? WHERE id IN (${placeholders}) AND read_at IS NULL`)
       .bind(nowIso, ...ids)
+      .run();
+    return result.meta.changes;
+  }
+
+  async markUnread(ids: string[]): Promise<number> {
+    if (ids.length === 0) {
+      return 0;
+    }
+    const placeholders = ids.map(() => "?").join(", ");
+    const result = await this.db
+      .prepare(`UPDATE briefs SET read_at = NULL WHERE id IN (${placeholders}) AND read_at IS NOT NULL`)
+      .bind(...ids)
       .run();
     return result.meta.changes;
   }

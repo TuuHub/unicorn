@@ -7,7 +7,7 @@
 //   /panel/plans            weekly and assignment plans; tick items off
 //   /panel/search           full-text search over every synced item
 //
-// Read-only on the sources like everything else. The two writes here (marking briefs read,
+// Read-only on the sources like everything else. The writes here (marking briefs read or unread,
 // ticking a plan item) touch unicorn's own tables and are CSRF-checked by the router.
 
 import type { ItemSummary, BucketGroup } from "./mcp/door-contracts";
@@ -426,13 +426,13 @@ export async function renderBriefs(runtime: PanelRuntime, url: URL): Promise<str
   const at = now(runtime);
   const zone = safeZone(runtime.timezone);
   const csrf = await computeCsrfToken(runtime.adminToken);
-  const briefs = await runtime.briefs.list({ limit: 60 }).catch(() => []);
+  const briefs = await runtime.briefs.list({ unreadOnly: false, limit: 60 }).catch(() => []);
   const unread = briefs.filter((brief) => !brief.readAt);
   const read = briefs.filter((brief) => brief.readAt);
   const card = (brief: (typeof briefs)[number], open: boolean) => {
     const meta = `<span class="badge">${escapeHtml(brief.kind)}</span><span class="muted small">${escapeHtml(formatIn(brief.createdAt, zone, { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hour12: false }))} · ${escapeHtml(relative(brief.createdAt, at))}</span>`;
     const markRead = brief.readAt
-      ? ""
+      ? `<span class="muted small">Read ${escapeHtml(relative(brief.readAt, at))}</span><form method="post" action="/panel/briefs/unread" style="margin:0"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><input type="hidden" name="id" value="${escapeHtml(brief.id)}"><button type="submit" class="secondary sm">Mark unread</button></form>`
       : `<form method="post" action="/panel/briefs/read" style="margin:0"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><input type="hidden" name="id" value="${escapeHtml(brief.id)}"><button type="submit" class="secondary sm">${icon("check")}Mark read</button></form>`;
     return `<article class="card brief${brief.readAt ? " is-read" : ""}">
       <details${open ? " open" : ""}><summary class="brief-head"><span class="brief-title"><h2>${escapeHtml(brief.title)}</h2><span class="brief-meta">${meta}</span></span></summary>
@@ -440,8 +440,10 @@ export async function renderBriefs(runtime: PanelRuntime, url: URL): Promise<str
     </article>`;
   };
   const notice = url.searchParams.get("marked");
+  const restored = url.searchParams.get("unread");
   const body = `
     ${notice ? `<p class="notice" role="status">Marked ${escapeHtml(notice)} read. Your agents skip read briefs.</p>` : ""}
+    ${restored ? `<p class="notice" role="status">Marked unread. Your agent shows it again next session.</p>` : ""}
     ${unread.length ? `<div class="section-label"><h2>Unread · ${unread.length}</h2><form method="post" action="/panel/briefs/read" style="margin:0"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><input type="hidden" name="all" value="1"><button type="submit" class="secondary sm">${icon("check")}Mark all read</button></form></div>${unread.map((brief) => card(brief, true)).join("")}` : ""}
     ${read.length ? `<div class="section-label"><h2>Read</h2></div>${read.map((brief) => card(brief, false)).join("")}` : ""}
     ${briefs.length ? "" : `<section class="card"><div class="card-body" style="padding-top:18px">${empty("brief", "No briefs yet. The daily digest and scheduled playbooks file them here.")}</div></section>`}
@@ -450,7 +452,7 @@ export async function renderBriefs(runtime: PanelRuntime, url: URL): Promise<str
     title: "unicorn — briefs",
     active: "/panel/briefs",
     heading: "Briefs",
-    subtitle: "What the daily digest and scheduled playbooks filed. An agent reads unread briefs at the start of a session, then marks them read.",
+    subtitle: "What the daily digest and scheduled playbooks filed. An agent reads unread briefs at the start of a session, then marks them read. Missed one? Mark it unread.",
     body,
     wide: false,
   });
@@ -463,6 +465,12 @@ export async function markBriefsRead(runtime: PanelRuntime, form: FormData, url:
   }
   const marked = ids.length ? await runtime.briefs.markRead(ids) : 0;
   return new Response(null, { status: 303, headers: { location: new URL(`/panel/briefs?marked=${marked}`, url).toString() } });
+}
+
+export async function markBriefsUnread(runtime: PanelRuntime, form: FormData, url: URL): Promise<Response> {
+  const ids = form.getAll("id").map(String).filter(Boolean);
+  const marked = ids.length ? await runtime.briefs.markUnread(ids) : 0;
+  return new Response(null, { status: 303, headers: { location: new URL(`/panel/briefs?unread=${marked}`, url).toString() } });
 }
 
 // --- plans --------------------------------------------------------------------------------------
@@ -744,7 +752,7 @@ a.task-card:hover{box-shadow:var(--shadow-lg)}
 .brief .card-body{border-top:1px solid var(--separator);margin:0 16px;padding:14px 0 16px}
 .brief.is-read{background:transparent;box-shadow:inset 0 0 0 1px var(--separator)}
 .brief.is-read h2{color:var(--muted);font-weight:500}
-.brief-actions{display:flex;justify-content:flex-end;margin-top:10px}
+.brief-actions{display:flex;justify-content:flex-end;align-items:center;gap:10px;margin-top:10px}
 .brief-actions:empty{display:none}
 .prose{font-size:14px;line-height:1.65;color:var(--fg)}
 .prose h1,.prose h2,.prose h3,.prose h4{font-size:14px;font-weight:600;margin:16px 0 6px}

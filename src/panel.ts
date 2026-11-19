@@ -45,6 +45,7 @@ import {
   CAMPUS_STYLE,
   isoWeek,
   markBriefsRead,
+  markBriefsUnread,
   recentChanges,
   renderChangeDays,
   renderBriefs,
@@ -112,6 +113,7 @@ export async function handlePanel(request: Request, runtime: PanelRuntime): Prom
       return saveMemoryEntry(runtime, memoryMatch[1] as MemoryTarget, form, url);
     }
     if (path === "/panel/briefs/read") return markBriefsRead(runtime, form, url);
+    if (path === "/panel/briefs/unread") return markBriefsUnread(runtime, form, url);
     if (path === "/panel/plans/toggle") return togglePlanItem(runtime, form, url);
     if (path === "/panel/board") return handleBoardPost(runtime.db, form, url);
     if (path === "/panel/access" && runtime.deployment) return saveEmailSignIn(runtime, form, url);
