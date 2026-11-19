@@ -46,6 +46,7 @@ import {
   isoWeek,
   markBriefsRead,
   markBriefsUnread,
+  moveItem,
   recentChanges,
   renderChangeDays,
   renderBriefs,
@@ -114,6 +115,7 @@ export async function handlePanel(request: Request, runtime: PanelRuntime): Prom
     }
     if (path === "/panel/briefs/read") return markBriefsRead(runtime, form, url);
     if (path === "/panel/briefs/unread") return markBriefsUnread(runtime, form, url);
+    if (path === "/panel/label") return moveItem(runtime, form, url);
     if (path === "/panel/plans/toggle") return togglePlanItem(runtime, form, url);
     if (path === "/panel/board") return handleBoardPost(runtime.db, form, url);
     if (path === "/panel/access" && runtime.deployment) return saveEmailSignIn(runtime, form, url);
@@ -161,7 +163,7 @@ export async function handlePanel(request: Request, runtime: PanelRuntime): Prom
       if (thread) return htmlResponse(await renderEdThread(runtime, Number(thread[1])));
       const unit = path.match(/^\/panel\/units\/([A-Za-z0-9._-]{2,24})$/);
       if (unit) {
-        const page = await renderUnit(runtime, decodeURIComponent(unit[1]));
+        const page = await renderUnit(runtime, decodeURIComponent(unit[1]), url);
         if (page) return htmlResponse(page);
       }
       return new Response("Not found.", { status: 404 });

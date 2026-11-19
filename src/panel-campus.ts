@@ -8,7 +8,7 @@
 //   /panel/search           full-text search over every synced item
 //
 // Read-only on the sources like everything else. The writes here (marking briefs read or unread,
-// ticking a plan item) touch unicorn's own tables and are CSRF-checked by the router.
+// ticking a plan item, moving an item to another group) touch unicorn's own tables and are CSRF-checked by the router.
 
 import type { ItemSummary, BucketGroup } from "./mcp/door-contracts";
 import { EVENT_LABELS, eventIcon, icon, sourceDot, sourceMark, sourceTile } from "./marks";
@@ -269,13 +269,13 @@ function taskCard(item: ItemSummary, zone: string, at: Date): string {
   </${tag}>`;
 }
 
-function itemRow(item: ItemSummary, zone: string, at: Date, withTime: boolean, inUnit = false): string {
+function itemRow(item: ItemSummary, zone: string, at: Date, withTime: boolean, inUnit = false, move = ""): string {
   const title = itemTitleLink(item);
   const state = item.state ? `<span class="badge${/submit|done|complete|graded/i.test(item.state) ? " ok" : ""}">${escapeHtml(item.state)}</span>` : "";
   const end = withTime && item.dueAt ? formatIn(item.dueAt, zone, { hour: "2-digit", minute: "2-digit", hour12: false }) : shortAgo(item.timestamp, at);
   return `<li>
     <span class="grow due-row">${sourceDot(item.source)}${item.course && !inUnit ? `<a class="badge course" href="/panel/units/${encodeURIComponent(item.course)}">${escapeHtml(item.course)}</a>` : ""}<span class="truncate" title="${escapeHtml(item.title)}">${title}</span>${item.staff ? '<span class="badge">staff</span>' : ""}${state}</span>
-    <span class="end">${escapeHtml(end)}</span>
+    ${move}<span class="end">${escapeHtml(end)}</span>
   </li>`;
 }
 
@@ -370,26 +370,37 @@ async function countBy(db: D1Database, sql: string, ...binds: unknown[]): Promis
   }
 }
 
-export async function renderUnit(runtime: PanelRuntime, code: string): Promise<string | null> {
+export async function renderUnit(runtime: PanelRuntime, code: string, url?: URL): Promise<string | null> {
   const at = now(runtime);
   const zone = safeZone(runtime.timezone);
   const view = await runtime.repo.course(code).catch(() => null);
   if (!view || !view.code) return null;
-  const [upcoming, changes] = await Promise.all([
+  const [upcoming, changes, csrf] = await Promise.all([
     runtime.repo.upcoming({ days: 60, course: view.code, includeOverdue: true, now: at }).catch((): ItemSummary[] => []),
     recentChanges(runtime.db, { course: view.code, limit: 12 }).catch((): ChangeRow[] => []),
+    computeCsrfToken(runtime.adminToken),
   ]);
-  const buckets = view.buckets.filter((bucket) => bucket.items.length).map((bucket) => renderBucket(bucket, zone, at)).join("");
+  const unitCode = view.code;
+  const general = `course/${unitCode}/general`;
+  const targets: Array<[string, string]> = [
+    ...view.buckets.filter((bucket) => bucket.bucket !== general).map((bucket): [string, string] => [bucket.bucket, bucket.label]),
+    [general, "General"],
+    ["life/other", "Not this unit"],
+  ];
+  const move = (item: ItemSummary) => moveControl(item, targets, csrf, unitCode);
+  const buckets = view.buckets.filter((bucket) => bucket.items.length).map((bucket) => renderBucket(bucket, zone, at, move)).join("");
   const unlabeled = view.unlabeled.length
     ? `<section class="card"><div class="card-head row"><div class="card-title">${icon("spark")}<h2>Not grouped yet</h2></div><span class="muted small tabular">${view.unlabeled.length}</span></div><div class="card-body"><p class="small muted" style="margin:0 0 8px">Your agent's triage playbook files these under an assignment or General.</p><ul class="list">${view.unlabeled
         .slice(0, 12)
-        .map((item) => itemRow(item, zone, at, false, true))
+        .map((item) => itemRow(item, zone, at, false, true, move(item)))
         .join("")}</ul></div></section>`
     : "";
+  const moved = url?.searchParams.get("moved");
   const sources = view.sources
     .map((source) => `<span class="src-chip">${sourceTile(source, "sm")}${escapeHtml(SOURCE_NAMES[source] ?? sourceMark(source)?.name ?? source)}</span>`)
     .join("");
   const body = `
+    ${moved ? `<p class="notice" role="status">${moved === "1" ? "Moved. Your agents see it there from now on." : "Couldn't move that item. Reload and try again."}</p>` : ""}
     <div class="unit-sources-row">${sources}</div>
     <div class="split">
       <div class="col">${buckets || `<section class="card"><div class="card-body" style="padding-top:18px">${empty("units", "No items in this unit yet.")}</div></section>`}${unlabeled}</div>
@@ -398,7 +409,7 @@ export async function renderUnit(runtime: PanelRuntime, code: string): Promise<s
         <section class="card"><div class="card-head row"><div class="card-title">${icon("changes")}<h2>Latest changes</h2></div><a class="more" href="/panel/changes?course=${encodeURIComponent(view.code)}">All${icon("arrow")}</a></div><div class="card-body">${changes.length ? `<ul class="list changes compact">${changes.map((row) => renderChangeRow(row, zone)).join("")}</ul>` : empty("changes", "No changes yet.")}</div></section>
       </div>
     </div>
-    ${PANEL_STYLE}${CAMPUS_STYLE}${PANEL_SCRIPT}`;
+    ${PANEL_STYLE}${CAMPUS_STYLE}${PANEL_SCRIPT}${MOVE_SCRIPT}`;
   return renderPage({
     title: `unicorn — ${view.code}`,
     active: "/panel/units",
@@ -410,14 +421,41 @@ export async function renderUnit(runtime: PanelRuntime, code: string): Promise<s
   });
 }
 
-function renderBucket(bucket: BucketGroup, zone: string, at: Date): string {
+function renderBucket(bucket: BucketGroup, zone: string, at: Date, move: (item: ItemSummary) => string): string {
   const due = bucket.dueAt
     ? `<span class="muted small">due ${escapeHtml(formatIn(bucket.dueAt, zone, { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hour12: false }))} · ${escapeHtml(relative(bucket.dueAt, at))}</span>`
     : "";
   const state = bucket.state ? `<span class="badge${/submit|done|complete|graded/i.test(bucket.state) ? " ok" : ""}">${escapeHtml(bucket.state)}</span>` : "";
   const shown = bucket.items.slice(0, 8);
   return `<section class="card"><div class="card-head row"><div><h2>${escapeHtml(bucket.label)}</h2>${due}</div><span class="bucket-end">${state}<span class="muted small tabular">${bucket.items.length}</span></span></div>
-    <div class="card-body"><ul class="list">${shown.map((item) => itemRow(item, zone, at, false, true)).join("")}</ul>${bucket.items.length > shown.length ? `<p class="muted small" style="margin:8px 0 0">${bucket.items.length - shown.length} more — ask your agent for the full bucket.</p>` : ""}</div></section>`;
+    <div class="card-body"><ul class="list">${shown.map((item) => itemRow(item, zone, at, false, true, move(item))).join("")}</ul>${bucket.items.length > shown.length ? `<p class="muted small" style="margin:8px 0 0">${bucket.items.length - shown.length} more — ask your agent for the full bucket.</p>` : ""}</div></section>`;
+}
+
+// A wrong group is fixed here rather than by asking an agent. The label is saved as "client", which
+// the structure pass and the triage playbook (it only files unlabelled items) both leave alone.
+function moveControl(item: ItemSummary, targets: Array<[string, string]>, csrf: string, code: string): string {
+  const options = targets.map(([bucket, label]) => `<option value="${escapeHtml(bucket)}"${bucket === item.bucket ? " selected" : ""}>${escapeHtml(label)}</option>`).join("");
+  const placeholder = item.bucket ? "" : `<option value="" selected disabled>Move to…</option>`;
+  return `<form method="post" action="/panel/label" class="move">
+    <input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><input type="hidden" name="source" value="${escapeHtml(item.source)}"><input type="hidden" name="itemId" value="${escapeHtml(item.itemId)}"><input type="hidden" name="code" value="${escapeHtml(code)}">
+    <select name="bucket" aria-label="Group for ${escapeHtml(item.title)}">${placeholder}${options}</select><noscript><button type="submit" class="ghost sm">Move</button></noscript>
+  </form>`;
+}
+
+const MOVE_SCRIPT = `<script>
+document.addEventListener("change", function (event) {
+  var select = event.target;
+  if (select.matches && select.matches(".move select")) select.form.requestSubmit();
+});
+</script>`;
+
+/** POST /panel/label — move one item to another group of its unit, or out of the unit. */
+export async function moveItem(runtime: PanelRuntime, form: FormData, url: URL): Promise<Response> {
+  const code = String(form.get("code") ?? "");
+  const input = { source: String(form.get("source") ?? ""), itemId: String(form.get("itemId") ?? ""), bucket: String(form.get("bucket") ?? "") };
+  const result = input.source && input.itemId && input.bucket ? await runtime.repo.labelItems([input], "client").catch(() => null) : null;
+  const moved = result?.updated === 1 ? "1" : "0";
+  return new Response(null, { status: 303, headers: { location: new URL(`/panel/units/${encodeURIComponent(code)}?moved=${moved}`, url).toString() } });
 }
 
 // --- briefs -------------------------------------------------------------------------------------
@@ -726,6 +764,9 @@ tr.linked{cursor:pointer}
 @media (max-width:760px){.units-table th:nth-child(2),.units-table td:nth-child(2),.units-table th:nth-child(3),.units-table td:nth-child(3),.units-table th:nth-child(4),.units-table td:nth-child(4),.units-table th:nth-child(6),.units-table td:nth-child(6){display:none}.u-title{max-width:180px}}
 .unit-sources-row{display:flex;gap:8px;flex-wrap:wrap;margin:-8px 0 16px}
 .bucket-end{display:inline-flex;gap:8px;align-items:center}
+.move{flex:none;margin:0}
+.move select{height:28px;max-width:150px;padding:0 6px;font-size:12.5px;color:var(--muted);background:transparent;border-color:transparent}
+.move select:hover,.move select:focus{color:var(--fg);border-color:var(--separator)}
 /* deadlines: a status board */
 .board{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(260px,100%),1fr));gap:16px;align-items:start}
 .lane{background:var(--surface-2);border-radius:20px;padding:12px 6px 6px}
