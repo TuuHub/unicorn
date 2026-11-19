@@ -123,7 +123,7 @@ function renderChanges(changes: ActivityEntry[], csrf: string, now: Date): strin
   const items = relevant.slice(0, 30).map((change) => renderChange(change, csrf, now, undone.has(change.id))).join("");
   const body = items ? `<ol class="mem-feed">${items}</ol>` : `<p class="muted mem-none">When an agent adds, edits or removes an entry, it shows up here.</p>`;
   return `<aside class="card mem-changes" aria-label="Recent memory changes">
-    <div class="card-head"><h2>Changes</h2><p class="card-sub">Who changed what. Undo puts it back.</p></div>
+    <div class="card-head"><h2>Changes</h2><p class="card-sub">Who changed what. Undo puts it back, and agents won't redo it.</p></div>
     <div class="card-body">${body}</div>
   </aside>`;
 }
@@ -150,6 +150,7 @@ function renderChange(change: ActivityEntry, csrf: string, now: Date, undone: bo
   return `<li class="mem-change">
     <div class="mem-change-head">${clientTile(actor, "sm")}<p><strong>${escapeHtml(name)}</strong> <span class="muted">${escapeHtml(verb)}</span></p><span class="muted small tabular" title="${escapeHtml(change.at)}">${escapeHtml(shortAgo(change.at, now))}</span></div>
     <ul class="mem-diff">${diff}</ul>
+    ${typeof change.detail.reason === "string" ? `<p class="muted small mem-reason">${escapeHtml(change.detail.reason)}</p>` : ""}
     ${undo}
   </li>`;
 }
@@ -189,7 +190,9 @@ export async function undoMemoryChange(runtime: PanelRuntime, form: FormData, ur
   }
   const target = change.name as MemoryTarget;
   const operations = undoOperations({ added: lines(change.detail.added), removed: lines(change.detail.removed) });
-  return applyFromPanel(runtime, target, operations, "undone", url, { undo: id });
+  // Undoing an agent's change is the user saying it was wrong: agents see it until the row ages out.
+  const rejected = change.via !== "panel";
+  return applyFromPanel(runtime, target, operations, "undone", url, rejected ? { undo: id, rejected } : { undo: id });
 }
 
 async function applyFromPanel(runtime: PanelRuntime, target: MemoryTarget, operations: MemoryOperation[], done: string, url: URL, extra: Record<string, unknown> = {}): Promise<Response> {
@@ -298,7 +301,7 @@ summary.mem-row:hover .mem-pen,summary.mem-row:focus-visible .mem-pen{opacity:1}
 .mem-diff li>span:last-child{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
 .mem-diff .sign{flex:none;width:10px;color:var(--faint);font-variant-numeric:tabular-nums}
 .mem-diff .del>span:last-child{color:var(--muted);text-decoration:line-through;text-decoration-color:var(--faint)}
-.mem-undo,.mem-undone{margin:0 0 0 34px}
+.mem-undo,.mem-undone,.mem-reason{margin:0 0 0 34px}
 .mem-undo button{margin-left:-10px;height:28px;padding:0 10px;background:none;color:var(--muted);font-size:13px}
 .mem-undo button:hover{background:var(--default);color:var(--fg)}
 </style>`;

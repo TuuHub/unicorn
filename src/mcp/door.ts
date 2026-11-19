@@ -38,12 +38,19 @@ import type { DoorRepository, LabelItemInput } from "./door-repository";
 import { registerWidgetResources, widgetToolMeta } from "../widgets";
 import { registerUserTools } from "../tools/user-tools";
 import {
+  findRejectedAdd,
   MEMORY_TARGETS,
+  type MemoryFeedback,
   MemoryOperationError,
+  type MemoryTarget,
   type MemoryView,
   memoryNudge,
+  panelEditNudge,
   readAllMemory,
+  readMemoryFeedback,
+  type Rejection,
   renderMemorySnapshot,
+  renderRejections,
   trackMemoryWrite,
   writeMemory,
 } from "../agent-memory";
@@ -79,12 +86,12 @@ export interface DoorDeps {
 // followed by a frozen snapshot of the agent memory, read once when the session's MCP server
 // is built — the same shape as Hermes Agent's MEMORY.md/USER.md injection. The door is
 // stateless (one server per request), so "session start" is whenever a client initializes.
-export function buildInstructions(views: MemoryView[], now: Date): string {
+export function buildInstructions(views: MemoryView[], now: Date, rejections: Rejection[] = []): string {
   return [
     SOUL,
     "---",
-    `# Memory snapshot (frozen at session start, ${now.toISOString().slice(0, 10)}; get_memory shows the live version)`,
-    renderMemorySnapshot(views, now),
+    `# Memory snapshot (frozen at session start, ${now.toISOString().slice(0, 16)}Z; get_memory shows the live version)`,
+    renderMemorySnapshot(views, now, rejections),
   ].join("\n\n");
 }
 
@@ -98,12 +105,15 @@ const NO_NUDGE = new Set(["get_memory", "memory", "remember"]);
 // this stays a one-line ripple, not a redesign.
 export async function createDoorMcpServer(deps: DoorDeps): Promise<McpServer> {
   const now = () => (deps.now ? deps.now() : new Date());
-  const memoryViews = await readAllMemory(deps.memory).catch((): MemoryView[] => []);
+  const [memoryViews, feedback] = await Promise.all([
+    readAllMemory(deps.memory).catch((): MemoryView[] => []),
+    readMemoryFeedback(deps.activity),
+  ]);
   const server = new McpServer(
     { name: "unicorn-door", version: "0.3.0" },
-    { instructions: buildInstructions(memoryViews, now()) },
+    { instructions: buildInstructions(memoryViews, now(), feedback.rejections) },
   );
-  instrumentTools(server, deps, memoryNudge(memoryViews, now()));
+  instrumentTools(server, deps, panelEditNudge(feedback, now()) ?? memoryNudge(memoryViews, now()));
   const who = { actor: deps.caller?.actor ?? null, via: deps.caller?.via ?? null };
 
   registerWidgetResources(server);
@@ -312,6 +322,8 @@ export async function createDoorMcpServer(deps: DoorDeps): Promise<McpServer> {
       inputSchema: { text: z.string().trim().min(1).max(500) },
     },
     async ({ text }) => {
+      const rejected = rejectedAddError(feedback, "corrections", [{ action: "add", content: text }]);
+      if (rejected) return rejected;
       try {
         const result = await trackMemoryWrite(deps.memory, deps.activity, "corrections", who, () => recordCorrection(deps.memory, text, now()));
         return toolResult({ result }, renderRememberResult(result, text));
@@ -396,8 +408,9 @@ export async function createDoorMcpServer(deps: DoorDeps): Promise<McpServer> {
       inputSchema: {},
     },
     async () => {
-      const views = await readAllMemory(deps.memory);
-      return toolResult({ memory: views }, renderMemoryViews(views));
+      const [views, live] = await Promise.all([readAllMemory(deps.memory), readMemoryFeedback(deps.activity)]);
+      const undone = renderRejections(live.rejections);
+      return toolResult({ memory: views, undoneByUser: live.rejections }, [renderMemoryViews(views), ...(undone ? [`## ${undone}`] : [])].join("\n\n"));
     },
   );
 
@@ -419,11 +432,14 @@ export async function createDoorMcpServer(deps: DoorDeps): Promise<McpServer> {
           )
           .min(1)
           .max(20),
+        reason: z.string().trim().max(160).optional().describe("Why, in a few words (e.g. \"user said so\", \"A2 extension granted\"). Shown to the user beside the change."),
       },
     },
-    async ({ target, operations }) => {
+    async ({ target, operations, reason }) => {
+      const rejected = rejectedAddError(feedback, target, operations);
+      if (rejected) return rejected;
       try {
-        const { view, applied } = await trackMemoryWrite(deps.memory, deps.activity, target, who, () => writeMemory(deps.memory, target, operations, { now: now() }));
+        const { view, applied } = await trackMemoryWrite(deps.memory, deps.activity, target, who, () => writeMemory(deps.memory, target, operations, { now: now() }), reason ? { reason } : {});
         const text = [
           `Applied ${applied} operation${applied === 1 ? "" : "s"} to ${view.title} (${view.usagePercent}% — ${view.chars}/${view.limit} chars).`,
           renderMemoryViews([view]),
@@ -492,6 +508,16 @@ export async function createDoorMcpServer(deps: DoorDeps): Promise<McpServer> {
 }
 
 // --- shared result/error helpers --------------------------------------------
+
+function rejectedAddError(feedback: MemoryFeedback, target: MemoryTarget, operations: Array<{ action: string; content?: string }>) {
+  const entry = findRejectedAdd(feedback.rejections, target, operations as Parameters<typeof findRejectedAdd>[2]);
+  if (!entry) return null;
+  return errorResult(
+    "memory_undone_by_user",
+    `The user removed "${entry}" from ${MEMORY_TARGETS[target].title} in the panel, so it was not added back.`,
+    "Leave it out. If the user tells you in this conversation that it is true after all, ask them to add it on the panel's Memory page.",
+  );
+}
 
 function toolResult(structuredContent: unknown, text: string) {
   return { content: [{ type: "text" as const, text }], structuredContent: structuredContent as Record<string, unknown> };

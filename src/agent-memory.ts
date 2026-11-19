@@ -292,7 +292,7 @@ export async function writeMemory(
 }
 
 /** The frozen snapshot the door puts in its MCP `instructions` at session start. */
-export function renderMemorySnapshot(views: MemoryView[], now: Date = new Date()): string {
+export function renderMemorySnapshot(views: MemoryView[], now: Date = new Date(), rejections: Rejection[] = []): string {
   const blocks = views.map((view) => {
     const header = `${view.title} — ${view.purpose} [${view.chars}/${view.limit} chars]`;
     if (view.entries.length === 0) {
@@ -302,7 +302,8 @@ export function renderMemorySnapshot(views: MemoryView[], now: Date = new Date()
     const staleLine = stale.length ? `\n(Possibly out of date, check with the user or remove: ${stale.map((entry) => `"${clip(entry, 50)}"`).join(", ")})` : "";
     return `${header}\n${view.entries.join(view.target === "term" || view.target === "corrections" ? "\n" : "\n§\n")}${staleLine}`;
   });
-  return blocks.join("\n\n");
+  const undone = renderRejections(rejections);
+  return [...blocks, ...(undone ? [undone] : [])].join("\n\n");
 }
 
 /** One-line nudge appended to door tool results, so memory upkeep is never more than a glance away. */
@@ -381,6 +382,85 @@ export function undoOperations(change: { added: string[]; removed: string[] }): 
     ...change.added.slice(pairs).map((entry): MemoryOperation => ({ action: "remove", old_text: entry })),
     ...change.removed.slice(pairs).map((entry): MemoryOperation => ({ action: "add", content: entry })),
   ];
+}
+
+// --- what the user did in the panel, fed back to agents -------------------------------------
+
+/** One agent change the user undid in the panel. */
+export interface Rejection {
+  target: MemoryTarget;
+  at: string;
+  // What an agent wrote that the user took out, and what an agent removed that the user put back.
+  dropped: string[];
+  restored: string[];
+}
+
+export interface MemoryFeedback {
+  rejections: Rejection[];
+  // The newest panel edit, so a session whose snapshot predates it knows to re-read memory.
+  lastPanelEditAt: string | null;
+}
+
+const FEEDBACK_ROWS = 200;
+const MAX_REJECTION_LINES = 15;
+const PANEL_EDIT_WINDOW_MS = 24 * 3_600_000;
+
+/**
+ * Reads the panel's undo history from the activity log. An undo of an agent's change is marked
+ * `rejected` when it is written (see panel-memory.ts), so the rejection lives exactly as long as
+ * the activity row: ACTIVITY_RETENTION_DAYS. Undoing the undo withdraws the rejection.
+ */
+export async function readMemoryFeedback(activity: ActivityLog | undefined): Promise<MemoryFeedback> {
+  if (!activity) return { rejections: [], lastPanelEditAt: null };
+  const rows = await activity.list({ kind: "memory", limit: FEEDBACK_ROWS }).catch(() => []);
+  const undone = new Set(rows.map((row) => row.detail.undo).filter((id): id is number => typeof id === "number"));
+  const rejections = rows
+    .filter((row) => row.detail.rejected === true && !undone.has(row.id) && row.name in MEMORY_TARGETS)
+    .map((row) => ({ target: row.name as MemoryTarget, at: row.at, dropped: strings(row.detail.removed), restored: strings(row.detail.added) }));
+  return { rejections, lastPanelEditAt: rows.find((row) => row.via === "panel")?.at ?? null };
+}
+
+/** The block agents read in the snapshot and get_memory; null when nothing was undone. */
+export function renderRejections(rejections: Rejection[]): string | null {
+  const lines = rejections.flatMap((rejection) => {
+    const where = `${rejection.target}, ${rejection.at.slice(0, 10)}`;
+    return [
+      ...rejection.dropped.map((entry) => `- ${where}: an agent added "${clip(entry, 160)}"; the user took it out.`),
+      ...rejection.restored.map((entry) => `- ${where}: an agent removed "${clip(entry, 160)}"; the user put it back.`),
+    ];
+  });
+  if (lines.length === 0) return null;
+  return [
+    "UNDONE BY THE USER — agent memory changes the user reverted in the panel. Do not make them again; if you think one was right, ask the user.",
+    ...lines.slice(0, MAX_REJECTION_LINES),
+  ].join("\n");
+}
+
+/** The entry an add would bring back after the user took it out, if any. */
+export function findRejectedAdd(rejections: Rejection[], target: MemoryTarget, operations: MemoryOperation[]): string | null {
+  const dropped = rejections.filter((rejection) => rejection.target === target).flatMap((rejection) => rejection.dropped);
+  for (const operation of operations) {
+    if (operation.action !== "add" || !operation.content) continue;
+    const match = dropped.find((entry) => comparable(entry) === comparable(operation.content!));
+    if (match) return match;
+  }
+  return null;
+}
+
+/** Tells a session whose frozen snapshot may predate a panel edit to re-read memory. */
+export function panelEditNudge(feedback: MemoryFeedback, now: Date): string | null {
+  const at = feedback.lastPanelEditAt;
+  if (!at || now.getTime() - Date.parse(at) > PANEL_EDIT_WINDOW_MS) return null;
+  return `Memory: the user edited memory in the panel at ${at}. If your snapshot is older than that, call get_memory before relying on it.`;
+}
+
+// A correction's date prefix and spacing don't make two entries different.
+function comparable(entry: string): string {
+  return entry.replace(/^- \[\d{4}-\d{2}-\d{2}\]\s*/, "").replace(/^-\s*/, "").replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function strings(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }
 
 function clip(text: string, max: number): string {

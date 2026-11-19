@@ -2,7 +2,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { D1ActivityLog, redactDetail } from "../src/activity";
-import { applyOperations, diffEntries, MEMORY_TARGETS, memoryNudge, MemoryOperationError, readAllMemory, renderMemorySnapshot, splitEntries, undoOperations, writeMemory } from "../src/agent-memory";
+import { applyOperations, diffEntries, MEMORY_TARGETS, memoryNudge, MemoryOperationError, readAllMemory, readMemoryFeedback, renderMemorySnapshot, splitEntries, undoOperations, writeMemory } from "../src/agent-memory";
 import { D1BriefStore } from "../src/briefs";
 import { recordCorrection } from "../src/corrections";
 import { D1ItemStore } from "../src/kernel/d1-item-store";
@@ -10,7 +10,8 @@ import { Kernel } from "../src/kernel/kernel";
 import { D1MemoryStore } from "../src/memory";
 import { createDoorMcpServer } from "../src/mcp/door";
 import { D1DoorRepository } from "../src/mcp/door-repository";
-import { D1SettingsRepository } from "../src/settings";
+import { handlePanel, type PanelRuntime } from "../src/panel";
+import { computeCsrfToken, D1SettingsRepository } from "../src/settings";
 import { SOUL } from "../src/soul.generated";
 import { loadTermCourses, refreshTermMemory } from "../src/term";
 import { buildMixedDataset } from "./support/dataset";
@@ -200,6 +201,44 @@ describe("door memory tools and instructions", () => {
     expect(stats.toolCalls24h).toBe(5);
     expect(stats.errors24h).toBe(1);
     expect(stats.clients7d[0]).toMatchObject({ actor: "Claude", calls: 5 });
+  });
+
+  it("tells agents what the user undid, refuses to re-add it, and flags the stale snapshot", async () => {
+    const db = await createTestDb();
+    const activity = new D1ActivityLog(db, () => NOW);
+    const agent = await connect(db, activity);
+    await agent.callTool({ name: "memory", arguments: { target: "user", operations: [{ action: "add", content: "Year 3 IT" }], reason: "read it off the forum" } });
+    const [change] = await activity.list({ kind: "memory", limit: 1 });
+    expect(change!.detail.reason).toBe("read it off the forum");
+
+    const runtime = { db, adminToken: "admin-secret", memory: new D1MemoryStore(db, () => NOW), activity, now: () => NOW } as unknown as PanelRuntime;
+    const undo = async (id: number) =>
+      handlePanel(
+        new Request("https://unicorn.example/panel/memory/undo", {
+          method: "POST",
+          headers: { origin: "https://unicorn.example", "content-type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({ csrf: await computeCsrfToken("admin-secret"), id: String(id) }),
+        }),
+        runtime,
+      );
+    await undo(change!.id);
+    const page = await (await handlePanel(new Request("https://unicorn.example/panel/memory"), runtime)).text();
+    expect(page).toContain("read it off the forum");
+
+    const next = await connect(db, activity);
+    expect(next.getInstructions()).toContain('an agent added "Year 3 IT"; the user took it out.');
+    const again = await next.callTool({ name: "memory", arguments: { target: "user", operations: [{ action: "add", content: "year 3  IT" }] } });
+    expect(again.isError).toBe(true);
+    expect((again.content as Array<{ text: string }>)[0]!.text).toContain("memory_undone_by_user");
+    const status = await next.callTool({ name: "status", arguments: {} });
+    expect((status.content as Array<{ text: string }>)[0]!.text).toContain(`Memory: the user edited memory in the panel at ${NOW.toISOString()}`);
+    const live = await next.callTool({ name: "get_memory", arguments: {} });
+    expect((live.content as Array<{ text: string }>)[0]!.text).toContain("UNDONE BY THE USER");
+
+    // Undoing the undo withdraws the rejection.
+    const [undoRow] = await activity.list({ kind: "memory", limit: 1 });
+    await undo(undoRow!.id);
+    expect((await readMemoryFeedback(activity)).rejections).toEqual([]);
   });
 });
 
