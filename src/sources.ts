@@ -12,6 +12,7 @@ import { CanvasPlugin, type CanvasPluginOptions } from "./plugins/campus/canvas-
 import { EdPlugin, type EdPluginOptions, type EdRegion } from "./plugins/campus/ed-plugin";
 import { MoodlePlugin, type MoodlePluginOptions } from "./plugins/campus/moodle-plugin";
 import type { Plugin } from "./plugins/plugin";
+import { oktaLogin, renewMoodleSession, type OktaEnv } from "./moodle-okta";
 
 export type SourceId = "ed" | "moodle" | "canvas" | "gmail";
 
@@ -231,7 +232,7 @@ function fieldsOf(lookup: CredentialLookup): Record<string, string> | undefined 
 //
 // Env slice this module needs. A plain object (not the full Worker Env) so tests
 // don't have to fake bindings this module never touches.
-export interface SourceEnv {
+export interface SourceEnv extends OktaEnv {
   ED_API_TOKEN?: string;
   MOODLE_BASE_URL: string;
   MOODLE_SESSION?: string;
@@ -295,13 +296,21 @@ export async function detectEdRegion(token: string, fetcher: typeof fetch = fetc
   return regions.find((_, index) => accepted[index]) ?? null;
 }
 
+// A Moodle session is the one credential that expires, and D1 only ever holds one written by a
+// sign-in (browser, Okta or pasted) after the deploy, so here the stored session beats the
+// MOODLE_SESSION secret: the secret is only the starting point. With an Okta login and no session
+// yet, the plugin starts signed out and signs in on its first pull.
 export function resolveMoodleCredentials(env: SourceEnv, lookup: CredentialLookup): MoodlePluginOptions | null {
   const stored = fieldsOf(lookup);
-  const session = secretWins(env.MOODLE_SESSION, stored?.session);
-  if (!session) {
+  const session = stored?.session || env.MOODLE_SESSION || "";
+  if (!session && !oktaLogin(env, stored)) {
     return null;
   }
-  return { baseUrl: configWins(stored?.baseUrl, env.MOODLE_BASE_URL), session };
+  return {
+    baseUrl: configWins(stored?.baseUrl, env.MOODLE_BASE_URL),
+    session,
+    ...(stored?.session && stored.cookieName ? { cookieName: stored.cookieName } : {}),
+  };
 }
 
 export function resolveCanvasCredentials(env: SourceEnv, lookup: CredentialLookup): CanvasPluginOptions | null {
@@ -340,7 +349,9 @@ async function buildPlugin(id: SourceId, env: SourceEnv, credentials: SourceCred
   }
   if (id === "moodle") {
     const options = resolveMoodleCredentials(env, await credentials.get("moodle"));
-    return options ? new MoodlePlugin(options) : null;
+    if (!options) return null;
+    const renew = () => renewMoodleSession({ baseUrl: options.baseUrl.replace(/\/$/, ""), env, credentials });
+    return new MoodlePlugin({ ...options, renew });
   }
   if (id === "canvas") {
     const options = resolveCanvasCredentials(env, await credentials.get("canvas"));

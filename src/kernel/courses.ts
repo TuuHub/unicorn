@@ -37,6 +37,24 @@ export function normalizeTerm(raw: string | null | undefined): string | null {
   return cleaned || null;
 }
 
+// Reads the offering a label names: Moodle's "FIT3175_S2_2026" or "ATS2946 - S2 2026",
+// Ed's "SEMESTER 2 2026" or "FIT2094 2026 S2". Returns the canonical "S2 2026" (or
+// "T3 2025" for a trimester), so labels from different sources compare equal; null
+// when the label names no period and year.
+export function parseTerm(text: string): string | null {
+  const period = text.match(/(?:^|[^A-Z0-9])(S|T|SEM|SEMESTER|TRI|TRIMESTER)[\s_-]*(\d)(?![0-9])/i);
+  const year = text.match(/(?:^|[^A-Z0-9])(20\d{2})(?![0-9])/i);
+  if (!period || !year) return null;
+  const letter = period[1]!.toUpperCase().startsWith("T") ? "T" : "S";
+  return `${letter}${period[2]} ${year[1]}`;
+}
+
+// "S2 2026" sorts as "2026 S2", so a later year always wins over a later period.
+export function termOrder(term: string): string {
+  const match = term.match(/^([ST]\d) (\d{4})$/);
+  return match ? `${match[2]} ${match[1]}` : term;
+}
+
 // Lowercase kebab-case slug for an assessment title, used as the leaf of a
 // `course/<CODE>/<slug>` bucket path. Capped at 48 chars (buckets are ids,
 // not display labels).
@@ -204,7 +222,8 @@ export async function labelStructure(db: D1Database): Promise<{ labeled: number 
     }
 
     let bucket: string;
-    if (ASSESSMENT_KINDS.has(row.kind)) {
+    // A grade shares its assessment's bucket: both are named after the activity.
+    if (ASSESSMENT_KINDS.has(row.kind) || row.kind === "grade") {
       bucket = `course/${code}/${bucketSlug(row.title)}`;
     } else if (row.kind === "thread") {
       const category = categoryByItem.get(key);

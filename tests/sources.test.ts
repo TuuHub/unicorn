@@ -170,10 +170,17 @@ describe("credential resolution precedence", () => {
   });
 
   describe("resolveMoodleCredentials", () => {
-    it("prefers the env session secret over a stored one", () => {
-      const options = resolveMoodleCredentials(sourceEnv({ MOODLE_SESSION: "env-session" }), ok({ session: "stored-session" }));
+    it("prefers a stored session over the env secret, since only a later sign-in writes one", () => {
+      const options = resolveMoodleCredentials(sourceEnv({ MOODLE_SESSION: "env-session" }), ok({ session: "stored-session", cookieName: "MoodleSessionx" }));
 
-      expect(options?.session).toBe("env-session");
+      expect(options?.session).toBe("stored-session");
+      expect(options?.cookieName).toBe("MoodleSessionx");
+    });
+
+    it("falls back to the env session, and builds with only an Okta login", () => {
+      expect(resolveMoodleCredentials(sourceEnv({ MOODLE_SESSION: "env-session" }), ok({}))?.session).toBe("env-session");
+      const okta = resolveMoodleCredentials(sourceEnv({}), ok({ oktaUsername: "u", oktaPassword: "p", oktaTotpSecret: "JBSWY3DP" }));
+      expect(okta?.session).toBe("");
     });
 
     it("lets a stored baseUrl override the shipped MOODLE_BASE_URL default", () => {

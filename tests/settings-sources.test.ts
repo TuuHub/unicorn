@@ -119,27 +119,31 @@ describe("pausing a built-in source", () => {
   });
 });
 
+function fakeBrowser(cookie: { name: string; value: string } | null) {
+  const browser = {
+    closed: 0,
+    open: vi.fn(async () => ({ sessionId: "s1", targetId: "t1", liveViewUrl: "https://live.example/view/s1" })),
+    readMoodleCookie: vi.fn(async (): Promise<{ name: string; value: string } | null> => cookie),
+    onLoginPage: vi.fn(async () => true),
+    close: vi.fn(async () => {
+      browser.closed += 1;
+    }),
+  };
+  return browser satisfies LoginBrowser;
+}
+
 describe("Moodle sign-in", () => {
-  function fakeBrowser(cookie: { name: string; value: string } | null) {
-    const browser = {
-      closed: 0,
-      open: vi.fn(async () => ({ sessionId: "s1", targetId: "t1", liveViewUrl: "https://live.example/view/s1" })),
-      readMoodleCookie: vi.fn(async (): Promise<{ name: string; value: string } | null> => cookie),
-      close: vi.fn(async () => {
-        browser.closed += 1;
-      }),
-    };
-    return browser satisfies LoginBrowser;
-  }
 
   const dashboard = vi.fn<typeof fetch>(async () => new Response('<script>M.cfg = {"sesskey":"abc"}</script>', { status: 200 }));
 
   it("offers the sign-in button only when a browser is bound", async () => {
     const without = await setup();
-    expect(await (await handleSettings(new Request(`${ORIGIN}/settings`), without.runtime)).text()).not.toContain("Sign in to Moodle");
+    await post("/settings/sources/moodle/add", {}, without.runtime);
+    expect(await (await handleSettings(new Request(`${ORIGIN}/settings`), without.runtime)).text()).not.toContain("Open remote browser");
 
     const withBrowser = await setup({ browser: fakeBrowser(null) });
-    expect(await (await handleSettings(new Request(`${ORIGIN}/settings`), withBrowser.runtime)).text()).toContain("Sign in to Moodle");
+    await post("/settings/sources/moodle/add", {}, withBrowser.runtime);
+    expect(await (await handleSettings(new Request(`${ORIGIN}/settings`), withBrowser.runtime)).text()).toContain("Open remote browser");
   });
 
   it("waits on the live view, then saves the session once the dashboard loads", async () => {
@@ -159,7 +163,7 @@ describe("Moodle sign-in", () => {
     const done = await handleSettings(new Request(`${ORIGIN}/settings/sources/moodle/sign-in`), runtime);
     expect(done.status).toBe(303);
     expect(done.headers.get("location")).toContain("signedIn=moodle");
-    expect(credentials.saved.get("moodle")).toEqual({ baseUrl: "https://moodle.example.edu", session: "fresh" });
+    expect(credentials.saved.get("moodle")).toEqual({ baseUrl: "https://moodle.example.edu", session: "fresh", cookieName: "MoodleSession" });
     expect(browser.closed).toBe(1);
   });
 
@@ -174,5 +178,46 @@ describe("Moodle sign-in", () => {
     expect(browser.closed).toBe(1);
     const after = await handleSettings(new Request(`${ORIGIN}/settings/sources/moodle/sign-in`), runtime);
     expect(after.headers.get("location")).toBe(`${ORIGIN}/settings#source-moodle`);
+  });
+});
+
+describe("adding sources", () => {
+  const page = async (runtime: SettingsRuntime, path = "/settings") => (await handleSettings(new Request(`${ORIGIN}${path}`), runtime)).text();
+
+  it("starts empty, lists every built-in source in the catalog, and adds one with a way back", async () => {
+    const { runtime } = await setup({ sourceEnv: { MOODLE_BASE_URL: "" } });
+    expect(await page(runtime)).toContain("No sources yet");
+    const catalog = await page(runtime, "/settings/sources/add");
+    for (const name of ["Moodle", "Ed Discussion", "Gmail", "Canvas"]) expect(catalog).toContain(name);
+    expect(catalog).toContain('action="/settings/sources/canvas/add"');
+
+    const added = await post("/settings/sources/canvas/add", {}, runtime);
+    expect(added.headers.get("location")).toContain("added=canvas#source-canvas");
+    const html = await page(runtime);
+    expect(html).toContain('id="source-canvas"');
+    expect(html).not.toContain('id="source-ed"');
+    expect(await page(runtime, "/settings/sources/add")).toContain('href="/settings#source-canvas"');
+
+    await post("/settings/sources/canvas/disconnect", {}, runtime);
+    expect(await page(runtime)).toContain("No sources yet");
+  });
+
+  it("leads with Okta only on a Moodle that sends sign-in to Okta", async () => {
+    const okta = vi.fn(async () => new Response(null, { status: 303, headers: { location: "https://school.okta.com/app/moodle/sso/saml" } }));
+    const viaOkta = await setup({ fetch: okta as unknown as typeof fetch });
+    await post("/settings/sources/moodle/add", {}, viaOkta.runtime);
+    const oktaHtml = await page(viaOkta.runtime);
+    expect(oktaHtml).toContain("Your school signs in through Okta");
+    expect(oktaHtml).not.toContain("My school signs in through Okta");
+    await page(viaOkta.runtime);
+    expect(okta).toHaveBeenCalledOnce(); // checked once, then remembered
+
+    const plain = vi.fn(async () => new Response('<form><input name="password"></form>'));
+    const elsewhere = await setup({ fetch: plain as unknown as typeof fetch, browser: fakeBrowser(null) });
+    await post("/settings/sources/moodle/add", {}, elsewhere.runtime);
+    const plainHtml = await page(elsewhere.runtime);
+    expect(plainHtml).not.toContain("Your school signs in through Okta");
+    expect(plainHtml).toContain("My school signs in through Okta");
+    expect(plainHtml.indexOf("Open remote browser")).toBeLessThan(plainHtml.indexOf("My school signs in through Okta"));
   });
 });

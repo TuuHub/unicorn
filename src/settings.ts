@@ -1,8 +1,10 @@
+import { BAND_STYLE, GRADE_SCALES, isGradeScale, type GradeScaleId } from "./grade-scale";
 import { renderConnectedApps } from "./oauth-server";
 import { D1OAuthTokenStore } from "./oauth";
 import { icon, sourceTile } from "./marks";
 import type { LoginBrowser } from "./moodle-browser";
-import { cancelMoodleSignIn, checkMoodleSignIn, startMoodleSignIn, type MoodleSignIn } from "./moodle-sign-in";
+import { cancelMoodleSignIn, checkMoodleSignIn, startMoodleSignIn, type MoodleSignIn, type SignInState } from "./moodle-sign-in";
+import { moodleUsesOkta, oktaStatus, renewMoodleSession, type OktaStatus } from "./moodle-okta";
 import { relative } from "./panel-kit";
 import { D1ManifestStore, type StoredPluginManifest } from "./plugins/declarative/store";
 import { escapeHtml, htmlResponse, renderPage } from "./ui";
@@ -34,6 +36,13 @@ export interface AppSettings {
   gmailAllowlist: string[];
   // Built-in sources the user paused. Their credentials stay saved; the cycle skips them.
   disabledSources: SourceId[];
+  // Built-in sources picked from "Add a source" that may not be connected yet. A connected
+  // source shows on /settings whether or not it is listed here.
+  addedSources: SourceId[];
+  // Whether the Moodle at baseUrl sends sign-in to Okta, so the card offers Okta only there.
+  moodleOkta?: { baseUrl: string; okta: boolean; checkedAt: string };
+  // How a mark reads on Grades: a percentage plus the school's band (HD, H1, First).
+  gradeScale: GradeScaleId;
 }
 
 export interface SettingsRepository {
@@ -94,6 +103,8 @@ const DEFAULT_SETTINGS: AppSettings = {
   gmailDomains: [],
   gmailAllowlist: [],
   disabledSources: [],
+  addedSources: [],
+  gradeScale: "percent",
 };
 
 // Ids a custom manifest may not take: the built-in sources register items under these.
@@ -133,6 +144,11 @@ export async function handleSettings(request: Request, runtime: SettingsRuntime)
     return htmlResponse(await renderSettingsPage(settings, runtime, url, { saved: url.searchParams.has("saved") }));
   }
 
+  if (path === "/settings/sources/add" && request.method === "GET") {
+    const settings = await runtime.repository.get();
+    return htmlResponse(await renderCatalogPage(settings, runtime, {}));
+  }
+
   if (path === "/settings/sources/moodle/sign-in" && request.method === "GET") {
     return handleMoodleSignInGet(runtime, url);
   }
@@ -148,13 +164,15 @@ export async function handleSettings(request: Request, runtime: SettingsRuntime)
 
   if (path === "/settings") return handleMaintenancePost(form, runtime, url);
   if (path === "/settings/timezone") return handleTimezonePost(form, runtime, url);
+  if (path === "/settings/grade-scale") return handleGradeScalePost(form, runtime, url);
   if (path === "/settings/gmail-scope") return handleGmailScopePost(form, runtime, url);
   if (path === "/settings/sync-now") return handleSyncNowPost(runtime, url);
   if (path === "/settings/start-scheduler") return handleStartSchedulerPost(runtime, url);
   if (path === "/settings/sources/moodle/sign-in") return handleMoodleSignInPost(form, runtime, url);
   if (path === "/settings/sources/moodle/sign-in/cancel") return handleMoodleSignInCancel(runtime, url);
+  if (path === "/settings/sources/moodle/okta") return handleMoodleOktaPost(form, runtime, url);
 
-  const sourceMatch = /^\/settings\/sources\/([a-z]+)(\/test|\/disconnect|\/enabled)?$/.exec(path);
+  const sourceMatch = /^\/settings\/sources\/([a-z]+)(\/test|\/disconnect|\/enabled|\/add)?$/.exec(path);
   if (sourceMatch) {
     const [, rawId, action] = sourceMatch;
     if (!isValidSourceId(rawId!)) {
@@ -164,6 +182,7 @@ export async function handleSettings(request: Request, runtime: SettingsRuntime)
     if (action === "/test") return handleSourceTestPost(runtime, url, id);
     if (action === "/disconnect") return handleSourceRemovePost(runtime, url, id);
     if (action === "/enabled") return handleSourceEnabledPost(form, runtime, url, id);
+    if (action === "/add") return handleSourceAddPost(runtime, url, id);
     return handleSourceSavePost(form, runtime, url, id);
   }
 
@@ -240,6 +259,16 @@ async function handleTimezonePost(form: FormData, runtime: SettingsRuntime, url:
   return redirectToSettings(url, "saved=1");
 }
 
+async function handleGradeScalePost(form: FormData, runtime: SettingsRuntime, url: URL): Promise<Response> {
+  const current = await runtime.repository.get();
+  const gradeScale = form.get("gradeScale");
+  if (!isGradeScale(gradeScale)) {
+    return htmlResponse(await renderSettingsPage(current, runtime, url, { error: "Pick one of the grade scales." }), 400);
+  }
+  await runtime.repository.save({ ...current, gradeScale });
+  return redirectToSettings(url, "saved=1");
+}
+
 async function handleGmailScopePost(form: FormData, runtime: SettingsRuntime, url: URL): Promise<Response> {
   const current = await runtime.repository.get();
   const gmailDomains = parseLines(String(form.get("gmailDomains") ?? ""));
@@ -294,11 +323,46 @@ async function handleSourceSavePost(form: FormData, runtime: SettingsRuntime, ur
 async function handleSourceTestPost(runtime: SettingsRuntime, url: URL, id: SourceId): Promise<Response> {
   const result = await testSource(id, runtime.sourceEnv, runtime.credentials);
   const settings = await runtime.repository.get();
-  const label = presetFor(id).label;
-  const message = result.ok
-    ? `${label} works. It returned ${result.count} item${result.count === 1 ? "" : "s"}.`
-    : `${label} test failed: ${result.error}`;
-  return htmlResponse(await renderSettingsPage(settings, runtime, url, result.ok ? { notice: message } : { error: message }));
+  const text = result.ok
+    ? `Works. It returned ${result.count} item${result.count === 1 ? "" : "s"} just now.`
+    : `Didn't work: ${describeSourceError(id, result.error)}`;
+  return htmlResponse(await renderSettingsPage(settings, runtime, url, { cardResult: { id, ok: result.ok, text } }));
+}
+
+// Saves the Okta login on the Moodle credential and signs in once, so a wrong password shows
+// here, on the card, instead of at the next hourly sync.
+async function handleMoodleOktaPost(form: FormData, runtime: SettingsRuntime, url: URL): Promise<Response> {
+  const baseUrl = await moodleBaseUrl(runtime, String(form.get("baseUrl") ?? ""));
+  const settings = await runtime.repository.get();
+  const fail = async (text: string) => htmlResponse(await renderSettingsPage(settings, runtime, url, { cardResult: { id: "moodle", ok: false, text } }), 400);
+  if (!baseUrl) return fail("Enter your Moodle address, starting with https://.");
+  const lookup = await runtime.credentials.get("moodle");
+  const stored = lookup.status === "ok" ? lookup.fields : {};
+  const username = String(form.get("oktaUsername") ?? "").trim();
+  const password = String(form.get("oktaPassword") ?? "");
+  const totpSecret = String(form.get("oktaTotpSecret") ?? "").replace(/\s+/g, "");
+  const next = {
+    ...stored,
+    baseUrl,
+    oktaUsername: username || stored.oktaUsername || "",
+    oktaPassword: password || stored.oktaPassword || "",
+    oktaTotpSecret: totpSecret || stored.oktaTotpSecret || "",
+  };
+  if (!next.oktaUsername || !next.oktaPassword || !next.oktaTotpSecret) {
+    return fail("Okta needs all three: username, password and the authenticator setup key.");
+  }
+  await runtime.credentials.save("moodle", next);
+  try {
+    const cookie = await renewMoodleSession({ baseUrl, env: runtime.sourceEnv, credentials: runtime.credentials, fetch: runtime.fetch, manual: true });
+    if (!cookie) return fail("Okta login wasn't saved. Try again.");
+  } catch (error) {
+    return fail(error instanceof Error ? error.message : String(error));
+  }
+  return htmlResponse(
+    await renderSettingsPage(settings, runtime, url, {
+      cardResult: { id: "moodle", ok: true, text: "Signed in through Okta. When Moodle's session runs out, unicorn signs in again by itself." },
+    }),
+  );
 }
 
 async function handleSourceRemovePost(runtime: SettingsRuntime, url: URL, id: SourceId): Promise<Response> {
@@ -308,10 +372,20 @@ async function handleSourceRemovePost(runtime: SettingsRuntime, url: URL, id: So
   }
   await runtime.credentials.delete(id);
   const settings = await runtime.repository.get();
-  if (settings.disabledSources.includes(id)) {
-    await runtime.repository.save({ ...settings, disabledSources: settings.disabledSources.filter((entry) => entry !== id) });
+  await runtime.repository.save({
+    ...settings,
+    disabledSources: settings.disabledSources.filter((entry) => entry !== id),
+    addedSources: settings.addedSources.filter((entry) => entry !== id),
+  });
+  return redirectToSettings(url, `disconnected=${id}#sources`);
+}
+
+async function handleSourceAddPost(runtime: SettingsRuntime, url: URL, id: SourceId): Promise<Response> {
+  const settings = await runtime.repository.get();
+  if (!settings.addedSources.includes(id)) {
+    await runtime.repository.save({ ...settings, addedSources: [...settings.addedSources, id] });
   }
-  return redirectToSettings(url, `disconnected=${id}#source-${id}`);
+  return redirectToSettings(url, `added=${id}#source-${id}`);
 }
 
 async function handleSourceEnabledPost(form: FormData, runtime: SettingsRuntime, url: URL, id: SourceId): Promise<Response> {
@@ -331,7 +405,8 @@ async function handlePluginSavePost(form: FormData, runtime: SettingsRuntime, ur
   const draft = String(form.get("manifest") ?? "").trim();
   const fail = async (error: string) => {
     const settings = await runtime.repository.get();
-    return htmlResponse(await renderSettingsPage(settings, runtime, url, { manifestDraft: { id: editing, text: draft, error } }), 400);
+    const flags = { manifestDraft: { id: editing, text: draft, error } };
+    return htmlResponse(editing ? await renderSettingsPage(settings, runtime, url, flags) : await renderCatalogPage(settings, runtime, flags), 400);
   };
   let value: unknown;
   try {
@@ -420,7 +495,7 @@ async function handleMoodleSignInGet(runtime: SettingsRuntime, url: URL): Promis
   }
   const csrf = await computeCsrfToken(runtime.adminToken);
   const now = runtime.now?.() ?? new Date();
-  const response = htmlResponse(renderMoodleWaitingPage(state.liveViewUrl, relative(new Date(state.expiresAt).toISOString(), now), csrf));
+  const response = htmlResponse(renderMoodleWaitingPage(state, relative(new Date(state.expiresAt).toISOString(), now), csrf));
   // The CSP allows no fetch, so the page polls by reloading itself.
   response.headers.set("refresh", "4");
   return response;
@@ -432,7 +507,18 @@ async function handleMoodleSignInCancel(runtime: SettingsRuntime, url: URL): Pro
   return redirectToSettings(url, "#source-moodle");
 }
 
-function renderMoodleWaitingPage(liveViewUrl: string, closesIn: string, csrf: string): string {
+function renderMoodleWaitingPage(state: Extract<SignInState, { state: "waiting" }>, closesIn: string, csrf: string): string {
+  const liveViewUrl = state.liveViewUrl;
+  const steps = [
+    { label: "Remote browser open", done: true },
+    { label: "You sign in to Moodle there", done: state.seen === "rejected", now: state.seen !== "rejected" },
+    { label: "unicorn checks the session from Cloudflare", done: false, now: state.seen === "rejected" },
+  ];
+  const stepList = `<ol class="signin-steps">${steps.map((step) => `<li class="${step.done ? "done" : step.now ? "now" : ""}"><span class="step-dot" aria-hidden="true"></span>${step.label}</li>`).join("")}</ol>`;
+  const problem =
+    state.seen === "rejected"
+      ? `<p class="signin-problem" role="alert">You're signed in in the remote browser, but Moodle turns that session away from unicorn's server (HTTP ${state.status ?? "error"}). Some Moodle sites tie a session to one network. Cancel this and use <strong>Sign in with Okta</strong> on the Moodle card instead.</p>`
+      : "";
   const body = `
     <section class="card signin" aria-labelledby="signin-title">
       <div class="card-body">
@@ -443,7 +529,9 @@ function renderMoodleWaitingPage(liveViewUrl: string, closesIn: string, csrf: st
           <a class="button lg" href="${escapeHtml(liveViewUrl)}" target="_blank" rel="noopener">${icon("external")}<span>Open Moodle sign-in</span></a>
           <form method="post" action="/settings/sources/moodle/sign-in/cancel"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><button class="button ghost lg" type="submit">Cancel</button></form>
         </div>
-        <p class="signin-wait"><span class="pulse" aria-hidden="true"></span>Waiting for Moodle. The window closes ${escapeHtml(closesIn)}.</p>
+        ${stepList}
+        ${problem}
+        <p class="signin-wait"><span class="pulse" aria-hidden="true"></span>This page checks every few seconds. The window closes ${escapeHtml(closesIn)}.</p>
       </div>
     </section>
     <style>
@@ -454,6 +542,14 @@ function renderMoodleWaitingPage(liveViewUrl: string, closesIn: string, csrf: st
       .signin-actions{display:flex;gap:8px;justify-content:center;flex-wrap:wrap}
       .signin-actions form{margin:0}
       .signin-wait{display:flex;align-items:center;justify-content:center;gap:8px;margin:24px 0 0;color:var(--muted);font-size:13px}
+      .signin-steps{list-style:none;display:flex;flex-direction:column;gap:8px;margin:24px auto 0;padding:0;text-align:left;font-size:13.5px;color:var(--muted)}
+      .signin-steps li{display:flex;align-items:center;gap:10px}
+      .signin-steps li.now{color:var(--fg);font-weight:500}
+      .signin-steps li.done{color:var(--fg)}
+      .step-dot{width:8px;height:8px;border-radius:50%;box-shadow:inset 0 0 0 1.5px var(--faint)}
+      .signin-steps li.done .step-dot{background:var(--success);box-shadow:none}
+      .signin-steps li.now .step-dot{background:var(--warning);box-shadow:none;animation:pulse 1.4s ease-in-out infinite}
+      .signin-problem{margin:16px 0 0;padding:10px 12px;border-radius:12px;background:var(--danger-soft);color:var(--danger-text);font-size:13px;line-height:19px;text-align:left}
       .pulse{width:7px;height:7px;border-radius:50%;background:var(--fg);animation:pulse 1.4s ease-in-out infinite}
       @keyframes pulse{50%{opacity:.25}}
       @media (prefers-reduced-motion:reduce){.pulse{animation:none}}
@@ -480,7 +576,15 @@ function parseSettings(value: unknown): AppSettings {
     gmailDomains: asStringArray(record.gmailDomains),
     gmailAllowlist: asStringArray(record.gmailAllowlist),
     disabledSources: asStringArray(record.disabledSources).filter(isValidSourceId),
+    addedSources: asStringArray(record.addedSources).filter(isValidSourceId),
+    ...(isMoodleOkta(record.moodleOkta) ? { moodleOkta: record.moodleOkta } : {}),
+    gradeScale: isGradeScale(record.gradeScale) ? record.gradeScale : DEFAULT_SETTINGS.gradeScale,
   };
+}
+
+function isMoodleOkta(value: unknown): value is AppSettings["moodleOkta"] {
+  const record = value as { baseUrl?: unknown; okta?: unknown; checkedAt?: unknown } | null;
+  return Boolean(record) && typeof record!.baseUrl === "string" && typeof record!.okta === "boolean" && typeof record!.checkedAt === "string";
 }
 
 function asStringArray(value: unknown): string[] {
@@ -568,6 +672,8 @@ const COMMON_TIMEZONES = [
 
 interface RenderFlags {
   saved?: boolean;
+  // The outcome of an action on one source card (Test connection, Okta sign-in), shown in that card.
+  cardResult?: { id: SourceId; ok: boolean; text: string };
   notice?: string;
   error?: string;
   // A manifest that failed to save, put back in the box it came from (null id = the add card).
@@ -582,6 +688,7 @@ interface PageContext {
   hosted: boolean;
   manifests: StoredPluginManifest[];
   draft?: RenderFlags["manifestDraft"];
+  cardResult?: RenderFlags["cardResult"];
 }
 
 async function renderSettingsPage(settings: AppSettings, runtime: SettingsRuntime, url: URL, flags: RenderFlags): Promise<string> {
@@ -597,8 +704,10 @@ async function renderSettingsPage(settings: AppSettings, runtime: SettingsRuntim
     hosted: Boolean((runtime.sourceEnv as { HOSTED?: string }).HOSTED),
     manifests,
     draft: flags.manifestDraft,
+    cardResult: flags.cardResult,
   };
 
+  const shown = shownSources(sourceStatuses, settings, runtime);
   const disconnected = url.searchParams.get("disconnected");
   const removed = url.searchParams.get("removed");
   const syncError = url.searchParams.get("syncError");
@@ -611,6 +720,8 @@ async function renderSettingsPage(settings: AppSettings, runtime: SettingsRuntim
         ? "Hourly sync is on."
         : url.searchParams.get("signedIn") === "moodle"
           ? "Signed in to Moodle."
+          : url.searchParams.get("added") && isValidSourceId(url.searchParams.get("added")!)
+            ? `Added ${escapeHtml(presetFor(url.searchParams.get("added") as SourceId).label)}. Set it up below.`
           : disconnected && isValidSourceId(disconnected)
             ? `Removed ${escapeHtml(presetFor(disconnected).label)}.`
             : removed
@@ -623,14 +734,15 @@ async function renderSettingsPage(settings: AppSettings, runtime: SettingsRuntim
   const body = `
     ${notice ? `<p class="notice" role="status">${notice}</p>` : ""}
     ${error ? `<p class="notice error" role="alert">${escapeHtml(error)}</p>` : ""}
-    ${renderSyncBar(status, lastCycle, csrf, context.now)}
-    ${await renderSourcesSection(sourceStatuses, context)}
+    ${renderSyncBar(status, lastCycle, sourceStatuses, csrf, context.now)}
+    ${await renderSourcesSection(shown, context)}
     <h2 class="group-title">Settings</h2>
     <div class="grid2">
       ${renderTimezoneCard(settings, csrf)}
       ${renderMaintenanceCard(settings, csrf)}
+      ${renderGradeScaleCard(settings, csrf)}
     </div>
-    ${renderGmailScopeCard(settings, csrf)}
+    ${shown.some((entry) => entry.id === "gmail") ? renderGmailScopeCard(settings, csrf) : ""}
     ${renderConnectedApps(runtime.oauth?.grants ?? [])}
     ${PAGE_STYLE}
     ${PAGE_SCRIPT}`;
@@ -639,14 +751,25 @@ async function renderSettingsPage(settings: AppSettings, runtime: SettingsRuntim
     title: "unicorn — sources",
     active: "/settings",
     heading: "Sources",
-    subtitle: "Where unicorn reads from.",
+    subtitle: "Where unicorn reads from. Switch one off to pause it; its login stays saved.",
     body,
     wide: true,
+    actions: `<a class="button" href="/settings/sources/add">${icon("plus")}Add source</a>`,
+  });
+}
+
+// What /settings lists: a source the user added, or one already connected (a Worker secret or
+// a saved credential), so an existing deploy keeps its cards. Everything else waits in the catalog.
+function shownSources(statuses: SourceStatus[], settings: AppSettings, runtime: SettingsRuntime): SourceStatus[] {
+  return statuses.filter((status) => {
+    if (settings.addedSources.includes(status.id)) return true;
+    if (status.id === "gmail") return runtime.connections.gmailConnected === true;
+    return status.configured || status.needsReentry;
   });
 }
 
 // One line for the scheduler: calm when it runs, the page's only red when it doesn't.
-function renderSyncBar(status: SettingsRuntime["status"], lastCycle: LastCycleInfo, csrf: string, now: Date): string {
+function renderSyncBar(status: SettingsRuntime["status"], lastCycle: LastCycleInfo, sources: SourceStatus[], csrf: string, now: Date): string {
   const last = lastCycle.at ? `Last ran <time datetime="${escapeHtml(lastCycle.at)}">${escapeHtml(relative(lastCycle.at, now))}</time>.` : "It has not run yet.";
   const hidden = `<input type="hidden" name="csrf" value="${escapeHtml(csrf)}">`;
   if (!status.schedulerRunning) {
@@ -657,10 +780,14 @@ function renderSyncBar(status: SettingsRuntime["status"], lastCycle: LastCycleIn
         <form method="post" action="/settings/start-scheduler">${hidden}<button class="button sm" type="submit">Start hourly sync</button></form>
       </div>`;
   }
+  const failing = sources.filter((source) => source.configured && source.lastError).map((source) => source.label);
+  const stale = lastCycle.at && now.getTime() - Date.parse(lastCycle.at) > 2 * 3_600_000;
+  const tone = failing.length ? "warn" : stale ? "warn" : "ok";
+  const detail = failing.length ? ` ${escapeHtml(failing.join(" and "))} ${failing.length === 1 ? "is" : "are"} failing.` : stale ? " That's later than it should be." : "";
   return `
     <div class="sync-bar">
-      <span class="dot" aria-hidden="true"></span>
-      <p>Syncing every hour. ${last}</p>
+      <span class="dot ${tone}" aria-hidden="true"></span>
+      <p>Syncing every hour. ${last}${detail}</p>
       <form method="post" action="/settings/sync-now">${hidden}<button class="button ghost sm" type="submit">${icon("sync")}<span>Sync now</span></button></form>
     </div>`;
 }
@@ -671,7 +798,8 @@ function renderInlineCode(text: string): string {
   return escapeHtml(text).replace(/`([^`]+)`/g, "<code>$1</code>");
 }
 
-type Tone = "ok" | "bad" | "idle";
+// Green works, amber needs a look soon, red is broken, a hollow ring is off or not set up.
+type Tone = "ok" | "warn" | "bad" | "idle";
 
 interface CardState {
   tone: Tone;
@@ -681,8 +809,24 @@ interface CardState {
 function syncState(input: { lastSyncAt: string | null; lastError: string | null; items: number }, now: Date): CardState {
   if (input.lastError) return { tone: "bad", text: "Last sync failed" };
   const items = `${input.items} item${input.items === 1 ? "" : "s"}`;
-  if (input.lastSyncAt) return { tone: "ok", text: `Synced ${relative(input.lastSyncAt, now)} · ${items}` };
-  return { tone: "ok", text: `Never synced · ${items}` };
+  if (input.lastSyncAt) {
+    const stale = now.getTime() - Date.parse(input.lastSyncAt) > 2 * 3_600_000;
+    return { tone: stale ? "warn" : "ok", text: `Synced ${relative(input.lastSyncAt, now)} · ${items}` };
+  }
+  return { tone: "warn", text: `Not synced yet · ${items}` };
+}
+
+// Sync errors are stored as codes ("pull:http_303"). Say what they mean for this source.
+export function describeSourceError(id: SourceId | string, raw: string): string {
+  const code = raw.replace(/^(pull|ingest):/, "");
+  const redirect = /^http_30\d$/.test(code) || /HTTP 30\d/.test(code);
+  if (id === "moodle" && redirect) return "Moodle signed this session out. Sign in again, or let Okta do it for you.";
+  if (code.startsWith("okta_")) return raw.includes(" ") ? raw : `Okta sign-in failed (${code.slice(5).replace(/_/g, " ")}).`;
+  if (code === "unauthorized" || /HTTP 40[13]/.test(code)) return "The source refused the saved credential. Replace it.";
+  if (code === "timeout" || code === "network") return "The source didn't answer. unicorn tries again next hour.";
+  if (code === "sesskey_missing") return "Moodle's page loaded without a session key, which usually means it signed you out.";
+  if (/^http_5\d\d$/.test(code)) return `The source had a server error (${code.slice(5)}). unicorn tries again next hour.`;
+  return raw;
 }
 
 function builtInState(status: SourceStatus, enabled: boolean, now: Date): CardState {
@@ -695,9 +839,69 @@ function builtInState(status: SourceStatus, enabled: boolean, now: Date): CardSt
 async function renderSourcesSection(statuses: SourceStatus[], context: PageContext): Promise<string> {
   const builtIns = await Promise.all(statuses.map((status) => renderBuiltInCard(status, context)));
   const custom = context.manifests.filter((stored) => !RESERVED_PLUGIN_IDS.has(stored.id)).map((stored) => renderPluginCard(stored, context));
-  const add = context.runtime.db ? renderAddPluginCard(context) : "";
+  const cards = [...builtIns, ...custom];
+  if (cards.length === 0) {
+    return `<section id="sources" class="card src-empty" aria-label="Sources">
+      <h2>No sources yet</h2>
+      <p class="muted">Start with Moodle and Ed: deadlines, units and forum posts. Add more whenever you like.</p>
+      <a class="button" href="/settings/sources/add">${icon("plus")}Add source</a>
+    </section>`;
+  }
   return `
-    <section id="sources" class="src-grid" aria-label="Sources">${[...builtIns, ...custom, add].join("")}</section>`;
+    <section id="sources" class="src-grid" aria-label="Sources">${cards.join("")}</section>`;
+}
+
+const CATALOG_COPY: Record<SourceId, string> = {
+  moodle: "Your units, deadlines, submissions and grades.",
+  ed: "Threads, answers and announcements from your units' forums.",
+  gmail: "Mail from your university and people you allow, never the whole inbox.",
+  canvas: "Only if your school runs Canvas, instead of or next to Moodle.",
+};
+
+// GET /settings/sources/add: every source unicorn knows, built in or your own. Adding one puts
+// its card on /settings, where it is set up and switched on or off.
+async function renderCatalogPage(settings: AppSettings, runtime: SettingsRuntime, flags: RenderFlags): Promise<string> {
+  const csrf = await computeCsrfToken(runtime.adminToken);
+  const statuses = await buildSourceStatuses(runtime.sourceEnv, runtime.credentials, runtime.lastCycle.byPlugin, runtime.itemCounts, runtime.connections.google === true);
+  const shown = new Set(shownSources(statuses, settings, runtime).map((status) => status.id));
+  const order: SourceId[] = ["moodle", "ed", "gmail", "canvas"];
+  const entries = order.map((id) => {
+    const added = shown.has(id);
+    const action = added
+      ? `<a class="button ghost sm" href="/settings#source-${id}">Open</a>`
+      : `<form method="post" action="/settings/sources/${id}/add">${hiddenCsrf(csrf)}<button class="button sm" type="submit">${icon("plus")}Add</button></form>`;
+    return `<li class="cat-item">
+      ${sourceTile(id, "lg")}
+      <div class="cat-text"><h3>${escapeHtml(presetFor(id).label)}</h3><p>${escapeHtml(CATALOG_COPY[id])}</p></div>
+      ${added ? `<span class="cat-added"><span class="dot ok" aria-hidden="true"></span>Added</span>` : ""}
+      ${action}
+    </li>`;
+  });
+  const context: PageContext = {
+    settings,
+    runtime,
+    csrf,
+    now: runtime.now?.() ?? new Date(),
+    hosted: Boolean((runtime.sourceEnv as { HOSTED?: string }).HOSTED),
+    manifests: [],
+    draft: flags.manifestDraft,
+  };
+  const body = `
+    <section class="card"><div class="card-head"><h2>Built in</h2><p class="card-sub">Made for university life. Each one asks for its login after you add it.</p></div>
+      <ul class="cat-list">${entries.join("")}</ul>
+    </section>
+    ${runtime.db ? `<h2 class="group-title">Your own</h2><div class="src-grid">${renderAddPluginCard(context)}</div>` : ""}
+    ${PAGE_STYLE}
+    ${PAGE_SCRIPT}`;
+  return renderPage({
+    title: "unicorn — add a source",
+    active: "/settings",
+    heading: "Add a source",
+    subtitle: "Pick what unicorn reads. You can pause or remove any of them later.",
+    body,
+    wide: true,
+    actions: `<a class="button secondary" href="/settings">Back to sources</a>`,
+  });
 }
 
 function renderCard(input: {
@@ -713,6 +917,7 @@ function renderCard(input: {
   extraClass?: string;
   // The card the user just submitted with a problem: the page scrolls to it.
   focus?: boolean;
+  result?: { ok: boolean; text: string };
 }): string {
   const paused = input.toggle && !input.toggle.enabled;
   const toggle = input.toggle
@@ -723,7 +928,7 @@ function renderCard(input: {
       </form>`
     : "";
   return `
-    <article class="card src${paused ? " paused" : ""}${input.extraClass ? ` ${input.extraClass}` : ""}" id="${input.id}" aria-labelledby="${input.id}-title"${input.focus ? " data-focus" : ""}>
+    <article class="card src${paused ? " paused" : ""}${input.extraClass ? ` ${input.extraClass}` : ""}" id="${input.id}" aria-labelledby="${input.id}-title"${input.focus || input.result ? " data-focus" : ""}>
       <div class="src-head">
         ${input.tile}
         <div class="src-title">
@@ -733,9 +938,10 @@ function renderCard(input: {
         ${toggle}
       </div>
       <div class="src-body">
-        ${input.error ? `<p class="src-error">${escapeHtml(input.error)}</p>` : ""}
+        ${input.error && !input.result ? `<p class="src-error">${escapeHtml(input.error)}</p>` : ""}
         ${input.body}
       </div>
+      ${input.result ? `<p class="src-result ${input.result.ok ? "ok" : "bad"}" role="${input.result.ok ? "status" : "alert"}"><span class="dot ${input.result.ok ? "ok" : "bad"}" aria-hidden="true"></span>${escapeHtml(input.result.text)}</p>` : ""}
       ${input.foot ? `<div class="src-foot">${input.foot}</div>` : ""}
     </article>`;
 }
@@ -759,38 +965,106 @@ async function renderBuiltInCard(status: SourceStatus, context: PageContext): Pr
   const instructions = context.hosted && preset.hostedInstructions ? preset.hostedInstructions : preset.instructions;
   const how = `<p class="src-how">${renderInlineCode(instructions)} <a href="${escapeHtml(preset.instructionsUrl)}" target="_blank" rel="noopener">${status.id === "moodle" ? "How" : "Get one"}</a></p>`;
   const credentialForm = renderCredentialForm(status, preset, prefill, csrf);
+  const result = context.cardResult?.id === status.id ? context.cardResult : undefined;
 
   let body: string;
-  if (status.id === "moodle" && runtime.browser && runtime.db) {
-    const signIn = `
-      <form method="post" action="/settings/sources/moodle/sign-in" class="stack">
-        ${hiddenCsrf(csrf)}
-        ${status.configured ? `<input type="hidden" name="baseUrl" value="${escapeHtml(prefill.baseUrl ?? "")}">` : fieldHtml(`src-moodle-signin-base`, "baseUrl", "Moodle address", "text", prefill.baseUrl ?? "", "https://learning.monash.edu")}
-        <div class="row-end"><button class="button${status.configured ? " ghost" : ""}" type="submit">${status.configured ? "Sign in again" : "Sign in to Moodle"}</button></div>
-      </form>`;
-    body = status.configured
-      ? `<p class="src-how">Moodle sessions expire after a few days of no use. Sign in again when sync starts failing.</p>${signIn}${details("Paste a session cookie instead", `${how}${credentialForm}`)}`
-      : `<p class="src-how">Sign in as usual. unicorn keeps the session.</p>${signIn}${details("Other ways to connect", `${how}${credentialForm}`)}`;
+  let state = builtInState(status, enabled, now);
+  if (status.id === "moodle") {
+    const okta = await oktaStatus(runtime.sourceEnv, lookup.status === "ok" ? lookup.fields : undefined);
+    const usesOkta = okta.state !== "off" || (await moodleOktaHint(context, prefill.baseUrl ?? ""));
+    body = renderMoodleBody(status, okta, usesOkta, prefill, `${how}${credentialForm}`, context);
+    if (okta.state === "blocked") state = { tone: "bad", text: "Okta sign-in stopped" };
+    else if (okta.state === "waiting" && state.tone !== "bad") state = { tone: "warn", text: `Okta failed ${okta.failures}× · retrying` };
   } else {
     body = status.configured ? details(status.id === "ed" ? "Replace token" : "Change details", `${how}${credentialForm}`) : `${how}${credentialForm}`;
   }
 
   const foot = status.configured
-    ? `<form method="post" action="/settings/sources/${status.id}/test">${hiddenCsrf(csrf)}<button class="button ghost sm" type="submit">Test connection</button></form>
+    ? `<form method="post" action="/settings/sources/${status.id}/test">${hiddenCsrf(csrf)}<button class="button ghost sm" type="submit" data-pending="Testing…">Test connection</button></form>
        ${stored ? removeForm(`/settings/sources/${status.id}/disconnect`, preset.label, csrf, "Its saved credential is deleted. Items already synced stay.") : `<span class="src-note">Set by a Worker secret</span>`}`
-    : "";
+    : `<span></span>${removeForm(`/settings/sources/${status.id}/disconnect`, preset.label, csrf, "It goes back to Add source.")}`;
 
   return renderCard({
     id: `source-${status.id}`,
     tile: sourceTile(status.id, "lg"),
     name: preset.label,
-    state: builtInState(status, enabled, now),
+    state,
     toggle: status.configured ? { action: `/settings/sources/${status.id}/enabled`, enabled } : undefined,
-    error: status.needsReentry ? "Saved credential no longer decrypts (ADMIN_TOKEN may have rotated). Paste it again." : enabled ? status.lastError : null,
+    error: status.needsReentry
+      ? "Saved credential no longer decrypts (ADMIN_TOKEN may have rotated). Paste it again."
+      : enabled && status.lastError
+        ? describeSourceError(status.id, status.lastError)
+        : null,
     body,
     foot,
     csrf,
+    result,
   });
+}
+
+const OKTA_RECHECK_MS = 7 * 86_400_000;
+
+// Whether this Moodle signs in through Okta, checked once a week per address and kept in settings.
+// Without an outbound fetch (tests) or an answer from Moodle, it says no: Okta stays tucked away.
+async function moodleOktaHint(context: PageContext, baseUrl: string): Promise<boolean> {
+  const { settings, runtime, now } = context;
+  if (!/^https:\/\//.test(baseUrl)) return false;
+  const cached = settings.moodleOkta;
+  if (cached && cached.baseUrl === baseUrl && now.getTime() - Date.parse(cached.checkedAt) < OKTA_RECHECK_MS) return cached.okta;
+  if (!runtime.fetch) return false;
+  try {
+    const okta = await moodleUsesOkta(baseUrl, runtime.fetch);
+    await runtime.repository.save({ ...settings, moodleOkta: { baseUrl, okta, checkedAt: now.toISOString() } });
+    return okta;
+  } catch {
+    return false;
+  }
+}
+
+// Moodle signs in three ways. On a school that uses Okta, Okta comes first: it is the only one
+// that keeps working on its own. Elsewhere okta-auth can't sign in, so the remote browser leads
+// and Okta waits at the bottom in case the check got it wrong.
+function renderMoodleBody(status: SourceStatus, okta: OktaStatus, usesOkta: boolean, prefill: Record<string, string>, pasteForm: string, context: PageContext): string {
+  const { runtime, csrf, now } = context;
+  const lookupBase = prefill.baseUrl ?? "";
+  const oktaForm = (submit: string) => `
+    <form method="post" action="/settings/sources/moodle/okta" class="stack">
+      ${hiddenCsrf(csrf)}
+      ${status.configured ? `<input type="hidden" name="baseUrl" value="${escapeHtml(lookupBase)}">` : fieldHtml("src-moodle-okta-base", "baseUrl", "Moodle address", "text", lookupBase, "https://moodle.your-school.edu")}
+      ${fieldHtml("src-moodle-okta-user", "oktaUsername", "Okta username", "text", "", okta.state === "off" ? "you@student.your-school.edu" : "Saved. Type to replace")}
+      ${fieldHtml("src-moodle-okta-pass", "oktaPassword", "Password", "password", "", okta.state === "off" ? "" : "Saved. Type to replace")}
+      ${fieldHtml("src-moodle-okta-totp", "oktaTotpSecret", "Authenticator setup key", "password", "", okta.state === "off" ? "The base32 key behind the QR code" : "Saved. Type to replace")}
+      <p class="hint">Add a new authenticator app in Okta, choose "Can't scan?", and paste that key here. Everything is encrypted in your D1.</p>
+      <div class="row-end"><button class="button" type="submit" data-pending="Signing in…">${submit}</button></div>
+    </form>`;
+  const browser =
+    runtime.browser && runtime.db
+      ? `<form method="post" action="/settings/sources/moodle/sign-in" class="stack">
+          ${hiddenCsrf(csrf)}
+          ${status.configured ? `<input type="hidden" name="baseUrl" value="${escapeHtml(lookupBase)}">` : fieldHtml("src-moodle-signin-base", "baseUrl", "Moodle address", "text", lookupBase, "https://moodle.your-school.edu")}
+          <p class="hint">Opens Moodle in a private Chrome on Cloudflare. Sign in there yourself. It lasts until Moodle drops the session, usually a few days.</p>
+          <div class="row-end"><button class="button ghost" type="submit" data-pending="Opening browser…">Open remote browser</button></div>
+        </form>`
+      : "";
+  const others = [browser ? details("Sign in in a remote browser", browser) : "", details("Paste a session cookie", pasteForm)].join("");
+
+  if (okta.state === "off" && usesOkta) {
+    return `<p class="src-how">Your school signs in through Okta, so unicorn can sign in by itself whenever Moodle's session runs out.</p>
+      ${status.configured ? details("Sign in with Okta", oktaForm("Save and sign in")) : oktaForm("Sign in with Okta")}${others}`;
+  }
+  if (okta.state === "off") {
+    const intro = `<p class="src-how">Sign in once. When Moodle's session runs out, this card turns red and you sign in again.</p>`;
+    const first = browser ? (status.configured ? details("Sign in again", browser) : browser) : "";
+    const rest = [browser ? details("Paste a session cookie", pasteForm) : status.configured ? details("Paste a new session cookie", pasteForm) : pasteForm, details("My school signs in through Okta", oktaForm("Sign in with Okta"))].join("");
+    return `${intro}${first}${rest}`;
+  }
+  const line =
+    okta.state === "ready"
+      ? `Signs in through Okta by itself.${okta.lastSignInAt ? ` Last signed in ${escapeHtml(relative(okta.lastSignInAt, now))}.` : ""}`
+      : okta.state === "waiting"
+        ? `Okta sign-in failed ${okta.failures} time${okta.failures === 1 ? "" : "s"} in a row.${okta.nextAttemptAt ? ` Next try ${escapeHtml(relative(new Date(okta.nextAttemptAt).toISOString(), now))}.` : ""}`
+        : escapeHtml(okta.message);
+  return `<p class="src-how">${line}</p>${details("Change Okta login", oktaForm("Save and sign in"))}${others}`;
 }
 
 function details(summary: string, content: string): string {
@@ -841,7 +1115,7 @@ function renderGmailCard(status: SourceStatus, context: PageContext): string {
       : `<p class="src-how">Reads only mail from your university, from senders you allow, or that mentions a unit code.</p><div class="row-end"><a class="button" href="/settings/oauth/gmail/start">Connect Gmail</a></div>`;
   const foot = connected
     ? `<a class="button ghost sm" href="/settings/oauth/gmail/start">Reconnect</a>${runtime.db ? removeForm("/settings/sources/gmail/disconnect", "Gmail", csrf, "unicorn forgets its Google token. Items already synced stay.") : ""}`
-    : "";
+    : `<span></span>${removeForm("/settings/sources/gmail/disconnect", "Gmail", csrf, "It goes back to Add source.")}`;
   return renderCard({
     id: "source-gmail",
     tile: sourceTile("gmail", "lg"),
@@ -955,12 +1229,37 @@ function renderTimezoneCard(settings: AppSettings, csrf: string): string {
           <div class="field-stack">
             <label for="timezone">Timezone</label>
             <select id="timezone" name="timezone" data-timezone-select>${optionsHtml}</select>
-            <p class="hint" data-detected-hint></p>
+            <p class="hint tz-hint" data-detected-hint></p>
           </div>
           <div class="row-end"><button class="button ghost" type="submit">Save</button></div>
         </form>
       </div>
     </section>`;
+}
+
+function renderGradeScaleCard(settings: AppSettings, csrf: string): string {
+  const options = (Object.keys(GRADE_SCALES) as GradeScaleId[])
+    .map((id) => `<option value="${id}"${id === settings.gradeScale ? " selected" : ""}>${escapeHtml(GRADE_SCALES[id].name)}</option>`)
+    .join("");
+  const bands = GRADE_SCALES[settings.gradeScale].bands;
+  const preview = bands.length
+    ? `<p class="band-row">${bands.map((band) => `<span class="band t${band.tier}">${escapeHtml(band.label)}${band.min ? ` ${band.min}+` : ""}</span>`).join("")}</p>`
+    : `<p class="hint">Marks show as a percentage, with no band.</p>`;
+  return `
+    <section class="card" aria-labelledby="grade-scale-title">
+      <div class="card-head"><h2 id="grade-scale-title">Grade scale</h2><p class="card-sub">What Grades calls a mark next to its percentage.</p></div>
+      <div class="card-body">
+        <form method="post" action="/settings/grade-scale" class="stack grow">
+          ${hiddenCsrf(csrf)}
+          <div class="field-stack">
+            <label for="gradeScale">Scale</label>
+            <select id="gradeScale" name="gradeScale">${options}</select>
+            ${preview}
+          </div>
+          <div class="row-end"><button class="button ghost" type="submit">Save</button></div>
+        </form>
+      </div>
+    </section>${BAND_STYLE}`;
 }
 
 function renderGmailScopeCard(settings: AppSettings, csrf: string): string {
@@ -973,12 +1272,12 @@ function renderGmailScopeCard(settings: AppSettings, csrf: string): string {
           <div class="scope-grid">
             <div class="field-stack">
               <label for="gmailDomains">University domains</label>
-              <textarea id="gmailDomains" name="gmailDomains" rows="3" placeholder="monash.edu&#10;student.monash.edu">${escapeHtml(settings.gmailDomains.join("\n"))}</textarea>
+              <textarea id="gmailDomains" name="gmailDomains" rows="3" placeholder="your-school.edu&#10;student.your-school.edu">${escapeHtml(settings.gmailDomains.join("\n"))}</textarea>
               <p class="hint">One per line. Blank uses the domain of your Moodle or Canvas address.</p>
             </div>
             <div class="field-stack">
               <label for="gmailAllowlist">Allowed senders</label>
-              <textarea id="gmailAllowlist" name="gmailAllowlist" rows="3" placeholder="unit-convenor@example.edu">${escapeHtml(settings.gmailAllowlist.join("\n"))}</textarea>
+              <textarea id="gmailAllowlist" name="gmailAllowlist" rows="3" placeholder="convenor@your-school.edu">${escapeHtml(settings.gmailAllowlist.join("\n"))}</textarea>
               <p class="hint">One per line. Mail that mentions a unit code is always read.</p>
             </div>
           </div>
@@ -1016,9 +1315,11 @@ const PAGE_STYLE = `
       .sync-bar strong{color:var(--fg);font-weight:500}
       .sync-bar form{margin:0}
       .sync-bar.stopped p{color:var(--fg-2)}
-      .dot{flex:none;width:7px;height:7px;border-radius:50%;background:var(--fg)}
-      .dot.idle{background:transparent;box-shadow:inset 0 0 0 1.5px var(--faint)}
+      .dot{flex:none;width:8px;height:8px;border-radius:50%;background:var(--faint)}
+      .dot.ok{background:var(--success)}
+      .dot.warn{background:var(--warning)}
       .dot.bad{background:var(--danger)}
+      .dot.idle{background:transparent;box-shadow:inset 0 0 0 1.5px var(--faint)}
 
       .src-grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fill,minmax(min(360px,100%),1fr));align-items:stretch;margin:0 0 40px}
       .src{display:flex;flex-direction:column;height:auto;margin:0}
@@ -1027,6 +1328,17 @@ const PAGE_STYLE = `
       .src-title h3{margin:0;font-size:15px;line-height:22px;font-weight:600;letter-spacing:-.01em}
       .src-state{display:flex;align-items:center;gap:7px;margin:1px 0 0;color:var(--muted);font-size:12.5px;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
       .src.paused .tile-mark{filter:grayscale(1);opacity:.55}
+      .src-empty{display:flex;flex-direction:column;align-items:flex-start;gap:10px;padding:28px 24px}
+      .src-empty h2,.src-empty p{margin:0}
+      .cat-list{list-style:none;margin:0;padding:0 8px 8px}
+      .cat-item{display:flex;align-items:center;gap:14px;padding:14px 12px;border-radius:12px}
+      .cat-item+.cat-item{box-shadow:0 -1px 0 var(--separator)}
+      .cat-text{flex:1;min-width:0}
+      .cat-text h3{margin:0;font-size:15px}
+      .cat-text p{margin:2px 0 0;color:var(--muted);font-size:13.5px}
+      .band-row{display:flex;flex-wrap:wrap;gap:6px;margin:4px 0 0}
+.cat-added{display:inline-flex;align-items:center;gap:6px;color:var(--muted);font-size:13px}
+      .cat-item form{margin:0}
       .src-body{flex:1;display:flex;flex-direction:column;gap:12px;padding:14px 16px 16px}
       .src-how{margin:0;color:var(--muted);font-size:13px;line-height:20px}
       .src-how a,.hint a{color:var(--fg);text-decoration:underline;text-decoration-color:var(--faint);text-underline-offset:3px}
@@ -1036,6 +1348,16 @@ const PAGE_STYLE = `
       .src-foot>:last-child{margin-left:auto}
       .src-foot>:only-child{margin-left:0}
       .src-note{color:var(--faint);font-size:12.5px}
+      .src-result{display:flex;align-items:flex-start;gap:8px;margin:0 16px 16px;padding:10px 12px;border-radius:12px;font-size:13px;line-height:19px;animation:reveal .2s var(--ease-out) both}
+      .src-result .dot{margin-top:6px}
+      .src-result.ok{background:var(--success-soft);color:var(--success-text)}
+      .src-result.bad{background:var(--danger-soft);color:var(--danger-text)}
+      @keyframes reveal{from{opacity:0;transform:translateY(-4px)}}
+      .src-compact .src-body{gap:8px}
+      button[aria-busy=true]{opacity:.7;cursor:progress}
+      .tz-hint{display:flex;align-items:center;flex-wrap:wrap;gap:4px 8px}
+      .link-btn{appearance:none;height:auto;padding:0;border:0;background:none;color:var(--fg);font:inherit;font-weight:500;text-decoration:underline;text-decoration-color:var(--faint);text-underline-offset:3px;cursor:pointer}
+      .link-btn:hover{text-decoration-color:var(--fg);background:none}
       .button.quiet-danger{background:transparent;color:var(--danger-text)}
       .button.quiet-danger:hover{background:var(--danger-soft)}
 
@@ -1100,6 +1422,19 @@ const PAGE_SCRIPT = `
           });
         });
 
+        // A slow action (testing a source, signing in) says it is working instead of sitting still.
+        document.querySelectorAll("button[data-pending]").forEach(function (button) {
+          var form = button.form;
+          if (!form) return;
+          form.addEventListener("submit", function () {
+            setTimeout(function () {
+              button.setAttribute("aria-busy", "true");
+              button.disabled = true;
+              button.textContent = button.getAttribute("data-pending");
+            }, 0);
+          });
+        });
+
         document.querySelectorAll("form[data-confirm]").forEach(function (form) {
           form.addEventListener("submit", function (event) {
             if (!window.confirm(form.getAttribute("data-confirm") || "Are you sure?")) {
@@ -1119,8 +1454,8 @@ const PAGE_SCRIPT = `
             if (detected && detected !== select.value) {
               var button = document.createElement("button");
               button.type = "button";
-              button.className = "button ghost xs";
-              button.textContent = "Use " + detected;
+              button.className = "link-btn";
+              button.textContent = "Use it";
               button.addEventListener("click", function () {
                 if (![].slice.call(select.options).some(function (option) { return option.value === detected; })) {
                   var option = document.createElement("option");
@@ -1131,7 +1466,10 @@ const PAGE_SCRIPT = `
                 select.value = detected;
                 hint.textContent = "Save to switch to " + detected + ".";
               });
-              hint.textContent = "Your browser is in " + detected + ". ";
+              var said = document.createElement("span");
+              said.textContent = "Your browser is in " + detected + ".";
+              hint.textContent = "";
+              hint.appendChild(said);
               hint.appendChild(button);
             }
           }

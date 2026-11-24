@@ -32,6 +32,8 @@ export interface LoginBrowser {
   open(url: string, liveViewTtlMs: number): Promise<LoginBrowserHandle & { liveViewUrl: string }>;
   // Throws when the browser is gone, so the caller can end the attempt.
   readMoodleCookie(handle: LoginBrowserHandle, moodleOrigin: string): Promise<MoodleCookie | null>;
+  // True while the remote page is anywhere but Moodle past its login form (Okta, the login page).
+  onLoginPage(handle: LoginBrowserHandle, baseUrl: string): Promise<boolean>;
   close(handle: LoginBrowserHandle): Promise<void>;
 }
 
@@ -80,6 +82,14 @@ export function createBrowserRunLogin(binding: BrowserRunBinding): LoginBrowser 
         return typeof cookie?.name === "string" && typeof cookie.value === "string" && cookie.value
           ? { name: cookie.name, value: cookie.value }
           : null;
+      });
+    },
+
+    onLoginPage(handle, baseUrl) {
+      return withPage(handle, async (send) => {
+        const result = await send("Runtime.evaluate", { expression: "location.href", returnByValue: true }) as { result?: { value?: unknown } };
+        const href = typeof result.result?.value === "string" ? result.result.value : "";
+        return !href.startsWith(baseUrl) || /\/login\//.test(href);
       });
     },
 

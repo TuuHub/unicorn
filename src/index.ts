@@ -18,7 +18,8 @@ import gmailPreset from "./plugins/presets/gmail.json";
 import { runCycle, Scheduler, type CycleResult, type Env } from "./runtime/cycle";
 import { createBrowserRunLogin } from "./moodle-browser";
 import { constantTimeEqual, D1SettingsRepository, handleSettings, type LastCycleInfo } from "./settings";
-import { buildSourcePlugins, D1SourceCredentialStore, itemCountsByPlugin, PLUGIN_ID, SOURCE_PRESETS } from "./sources";
+import { EdPlugin } from "./plugins/campus/ed-plugin";
+import { buildSourcePlugins, D1SourceCredentialStore, itemCountsByPlugin, PLUGIN_ID, resolveEdCredentials, SOURCE_PRESETS } from "./sources";
 
 export { Scheduler };
 
@@ -130,22 +131,29 @@ function doorUserId(env: Env): string {
 
 export async function buildPanelRuntime(env: Env, oauthHelpers: OAuthHelpers | undefined, origin: string): Promise<PanelRuntime> {
   const settings = await new D1SettingsRepository(env.DB).get();
-  const [plugins, gmailConnected, grants, lastCycle, itemCounts, status] = await Promise.all([
-    buildSourcePlugins(env, new D1SourceCredentialStore(env.DB, env.ADMIN_TOKEN)).catch(() => []),
+  const credentials = new D1SourceCredentialStore(env.DB, env.ADMIN_TOKEN);
+  const [plugins, gmailConnected, grants, lastCycle, itemCounts, status, ed] = await Promise.all([
+    buildSourcePlugins(env, credentials).catch(() => []),
     new D1OAuthTokenStore(env.DB).has("gmail").catch(() => false),
     oauthHelpers ? listConnectedApps(oauthHelpers, doorUserId(env)).catch(() => []) : Promise.resolve([]),
     loadLastCycle(env.DB),
     itemCountsByPlugin(env.DB),
     operationalStatus(env),
+    credentials
+      .get("ed")
+      .then((lookup) => resolveEdCredentials(env, lookup))
+      .catch(() => null),
   ]);
   return {
     db: env.DB,
+    ...(ed ? { edThread: (threadId: number) => new EdPlugin(ed).thread(threadId) } : {}),
     adminToken: env.ADMIN_TOKEN,
     memory: new D1MemoryStore(env.DB),
     activity: new D1ActivityLog(env.DB),
     briefs: new D1BriefStore(env.DB),
     repo: new D1DoorRepository(env.DB),
     timezone: settings.timezone,
+    gradeScale: settings.gradeScale,
     lastCycle,
     itemCounts,
     configuredSources: plugins.length + (gmailConnected ? 1 : 0),
@@ -321,6 +329,7 @@ export async function defaultFetch(request: Request, env: Env, context: Executio
       oauth: { grants: await listConnectedApps(oauthHelpers, doorUserId(env)) },
       db: env.DB,
       browser: env.BROWSER ? createBrowserRunLogin(env.BROWSER) : undefined,
+      fetch: (input, init) => fetch(input, init),
       runSync: async () => {
         const cycle = await runCycle(env, true);
         const failed = cycle.sources.find((source) => source.lastError);

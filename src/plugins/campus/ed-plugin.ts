@@ -1,8 +1,11 @@
+import { EdApiError, EdClient, type Comment, type Course, type Thread } from "edstem-cli/core";
 import { normalizeTerm } from "../../kernel/courses";
 import type { Facet, ItemInput } from "../../kernel/types";
 import type { Plugin } from "../plugin";
-import { asArray, asBoolean, asNumber, asRecord, asString, toJson } from "../source-values";
+import { toJson } from "../source-values";
 import { HttpStatusError } from "../http-error";
+
+// edstem-cli's EdClient talks to Ed; this plugin maps what it returns into kernel items.
 
 // Ed's web app is region-scoped by URL path (edstem.org/us/..., /au/..., /eu/...);
 // verified against edstem-archiver's course URLs. The JSON API is a host per region
@@ -20,81 +23,93 @@ export interface EdPluginOptions {
   threadLimit?: number;
 }
 
+// One thread as the panel's reader shows it: the question, its answers and every comment,
+// with authors resolved from the `users` list Ed sends next to the thread.
+export interface EdPost {
+  author: string;
+  role: string | null;
+  at: string;
+  body: string;
+  endorsed: boolean;
+  votes: number;
+  replies: EdPost[];
+}
+
+export interface EdThreadView {
+  title: string;
+  category: string | null;
+  url: string;
+  post: EdPost;
+  answers: EdPost[];
+  comments: EdPost[];
+}
+
 export class EdPlugin implements Plugin {
   readonly id = "campus-ed";
-  private readonly token: string;
-  private readonly apiBaseUrl: string;
+  private readonly client: EdClient;
   private readonly region: EdRegion;
-  private readonly fetcher: typeof fetch;
   private readonly now: () => Date;
   private readonly threadLimit: number;
 
   constructor(options: EdPluginOptions) {
-    this.token = options.token;
-    this.apiBaseUrl = ensureTrailingSlash(options.apiBaseUrl ?? "https://edstem.org/api/");
+    const injectedFetch = options.fetch;
+    this.client = new EdClient({
+      token: options.token,
+      apiBaseUrl: options.apiBaseUrl ?? "https://edstem.org/api/",
+      ...(injectedFetch ? { fetch: (input, init) => injectedFetch(input, init) } : {}),
+    });
     this.region = options.region ?? "au";
-    if (options.fetch) {
-      const injectedFetch = options.fetch;
-      this.fetcher = (input, init) => injectedFetch(input, init);
-    } else {
-      this.fetcher = globalThis.fetch.bind(globalThis);
-    }
     this.now = options.now ?? (() => new Date());
     this.threadLimit = Math.min(Math.max(options.threadLimit ?? 30, 1), 100);
   }
 
   async pull(): Promise<ItemInput[]> {
-    const identity = await this.get("user");
-    const courses = asArray(identity.courses)
-      .map((enrollment) => asRecord(asRecord(enrollment).course))
-      .filter((course) => asNumber(course.id) > 0 && asString(course.status) !== "archived");
-    const courseItems = courses.map((course) => this.mapCourse(course));
+    const identity = await edCall(() => this.client.fetchUser());
+    const courses = identity.courses.filter((course) => course.id > 0 && course.status !== "archived");
     const threadGroups = await Promise.all(
       courses.map(async (course) => {
-        const courseId = asNumber(course.id);
-        const data = await this.get(`courses/${courseId}/threads`, {
-          limit: String(this.threadLimit),
-          offset: "0",
-          sort: "new",
-        });
-        return asArray(data.threads).map((thread) => this.mapThread(asRecord(thread), courseId));
+        const threads = await edCall(() => this.client.fetchThreads(course.id, { limit: this.threadLimit, sort: "new" }));
+        return threads.map((thread) => this.mapThread(thread, course.id));
       }),
     );
-    return [...courseItems, ...threadGroups.flat()];
+    return [...courses.map((course) => this.mapCourse(course)), ...threadGroups.flat()];
   }
 
-  private async get(path: string, params: Record<string, string> = {}): Promise<Record<string, unknown>> {
-    const url = new URL(path, this.apiBaseUrl);
-    for (const [name, value] of Object.entries(params)) {
-      url.searchParams.set(name, value);
-    }
-    const response = await this.fetcher(url, {
-      headers: { Accept: "application/json", Authorization: `Bearer ${this.token}` },
-      redirect: "manual",
-      signal: AbortSignal.timeout(15_000),
-    });
-    if (response.status === 401) {
-      throw new HttpStatusError(401, "Ed authentication failed.");
-    }
-    if (!response.ok) {
-      throw new HttpStatusError(response.status, `Ed API returned HTTP ${response.status}.`);
-    }
-    return asRecord(await response.json());
+  /** Reads one thread with its answers and comments, live from Ed. */
+  async thread(threadId: number): Promise<EdThreadView> {
+    const thread = await edCall(() => this.client.fetchThread(threadId));
+    const post = (raw: Thread | Comment): EdPost => {
+      const anonymous = raw.isAnonymous || !raw.author;
+      return {
+        author: anonymous ? "Anonymous" : raw.author!.name || "Someone",
+        role: anonymous ? null : raw.author!.courseRole || raw.author!.role || null,
+        at: raw.createdAt,
+        body: raw.document,
+        endorsed: raw.isEndorsed,
+        votes: "voteCount" in raw ? raw.voteCount : raw.metrics.voteCount,
+        replies: raw.comments.map(post),
+      };
+    };
+    return {
+      title: thread.title || `Ed thread ${threadId}`,
+      category: thread.category || null,
+      url: `https://edstem.org/${this.region}/courses/${thread.courseId}/discussion/${thread.number || threadId}`,
+      post: post(thread),
+      answers: thread.answers.map(post),
+      comments: thread.comments.map(post),
+    };
   }
 
-  private mapCourse(course: Record<string, unknown>): ItemInput {
-    const id = asNumber(course.id);
-    const status = asString(course.status) || "active";
-    const year = asString(course.year);
+  private mapCourse(course: Course): ItemInput {
+    const { id, year } = course;
     // Ed reports the offering as separate `session` ("S1") and `year` ("2026")
     // fields; either alone is still a usable term (ADR-0036).
-    const session = asString(course.session);
-    const term = normalizeTerm(session && year ? `${session} ${year}` : session || year || null);
+    const term = normalizeTerm(course.session && year ? `${course.session} ${year}` : course.session || year || null);
     return {
       id: `course:${id}`,
       source: this.id,
       kind: "course",
-      title: asString(course.name) || asString(course.code) || `Ed course ${id}`,
+      title: course.name || course.code || `Ed course ${id}`,
       timestamp: /^\d{4}$/.test(year) ? `${year}-01-01T00:00:00.000Z` : "1970-01-01T00:00:00.000Z",
       url: `https://edstem.org/${this.region}/courses/${id}/discussion/`,
       raw: toJson(course),
@@ -104,8 +119,8 @@ export class EdPlugin implements Plugin {
           data: {
             platform: "ed",
             platformId: String(id),
-            code: asString(course.code),
-            status,
+            code: course.code,
+            status: course.status || "active",
             ...(term ? { term } : {}),
           },
           capabilities: [{ name: "has-course-status", primitive: "state", field: "status" }],
@@ -114,12 +129,12 @@ export class EdPlugin implements Plugin {
     };
   }
 
-  private mapThread(thread: Record<string, unknown>, fallbackCourseId: number): ItemInput {
-    const id = asNumber(thread.id);
-    const number = asNumber(thread.number);
-    const courseId = asNumber(thread.course_id) || fallbackCourseId;
-    const userId = asNumber(thread.user_id);
-    const role = threadAuthorRole(thread);
+  private mapThread(thread: Thread, fallbackCourseId: number): ItemInput {
+    const courseId = thread.courseId || fallbackCourseId;
+    // ADR-0031: authorRole feeds the forum-brief playbook's staff detection
+    // (list_staff_posts). Ed gives the poster's course role (student/tutor/admin)
+    // or, in older payloads, only a role; either is trusted when present.
+    const role = thread.author?.courseRole || thread.author?.role || "";
     const facets: Facet[] = [
       {
         type: "course-membership",
@@ -128,19 +143,15 @@ export class EdPlugin implements Plugin {
       },
       {
         type: "author",
-        // ADR-0031: authorRole feeds the forum-brief playbook's staff detection
-        // (list_staff_posts). Ed embeds the poster's role on the thread as
-        // `user.course_role` (course-scoped: student/tutor/admin) or, in older
-        // payloads, `user.role`; either is trusted when present.
-        data: { actor: `ed-user:${userId}`, ...(role ? { authorRole: role } : {}) },
+        data: { actor: `ed-user:${thread.userId}`, ...(role ? { authorRole: role } : {}) },
         capabilities: [{ name: "has-author", primitive: "actor", field: "actor" }],
       },
       {
         type: "discussion-state",
         data: {
-          answerStatus: asBoolean(thread.is_answered) ? "answered" : "unanswered",
-          lockStatus: asBoolean(thread.is_locked) ? "locked" : "open",
-          pinStatus: asBoolean(thread.is_pinned) ? "pinned" : "normal",
+          answerStatus: thread.isAnswered ? "answered" : "unanswered",
+          lockStatus: thread.isLocked ? "locked" : "open",
+          pinStatus: thread.isPinned ? "pinned" : "normal",
         },
         capabilities: [
           { name: "has-answer-status", primitive: "state", field: "answerStatus" },
@@ -151,9 +162,9 @@ export class EdPlugin implements Plugin {
       {
         type: "engagement",
         data: {
-          replies: asNumber(thread.reply_count),
-          votes: asNumber(thread.vote_count),
-          stars: asNumber(thread.star_count),
+          replies: thread.metrics.replyCount,
+          votes: thread.metrics.voteCount,
+          stars: thread.metrics.starCount,
         },
         capabilities: [
           { name: "has-reply-count", primitive: "scalar", field: "replies" },
@@ -165,28 +176,36 @@ export class EdPlugin implements Plugin {
     // ADR-0036: Ed's thread category (e.g. "Assignments") feeds structural
     // bucket labelling by matching it against a course's assessment titles.
     // No capabilities — this is structure, not a behavior primitive.
-    const category = asString(thread.category);
-    if (category) {
-      const subcategory = asString(thread.subcategory);
+    if (thread.category) {
       facets.push({
         type: "discussion-category",
-        data: { category, ...(subcategory ? { subcategory } : {}) },
+        data: { category: thread.category, ...(thread.subcategory ? { subcategory: thread.subcategory } : {}) },
         capabilities: [],
       });
     }
-    const createdAt = asString(thread.created_at) || this.now().toISOString();
-    const body = asString(thread.document);
+    const createdAt = thread.createdAt || this.now().toISOString();
     return {
-      id: `thread:${id}`,
+      id: `thread:${thread.id}`,
       source: this.id,
       kind: "thread",
-      title: asString(thread.title) || `Ed thread ${number || id}`,
+      title: thread.title || `Ed thread ${thread.number || thread.id}`,
       timestamp: new Date(createdAt).toISOString(),
-      url: `https://edstem.org/${this.region}/courses/${courseId}/discussion/${number}`,
-      ...(body ? { body } : {}),
+      url: `https://edstem.org/${this.region}/courses/${courseId}/discussion/${thread.number}`,
+      ...(thread.document ? { body: thread.document } : {}),
       raw: toJson(stableThread(thread)),
       facets,
     };
+  }
+}
+
+// Ed's errors become HttpStatusError, which the scheduler and the thread reader already
+// read (401 means the token needs replacing, 403/404 a thread the user can't see).
+async function edCall<T>(read: () => Promise<T>): Promise<T> {
+  try {
+    return await read();
+  } catch (error) {
+    if (!(error instanceof EdApiError) || error.statusCode === 0) throw error;
+    throw new HttpStatusError(error.statusCode, error.statusCode === 401 ? "Ed authentication failed." : error.message);
   }
 }
 
@@ -195,21 +214,8 @@ export class EdPlugin implements Plugin {
 // ~a third of threads per hour with no reply/vote/state change). Keeping them
 // would make every sync see a "changed" thread and rewrite the item and its
 // facets for nothing; any real change still moves a field that stays.
-const VOLATILE_THREAD_FIELDS = ["view_count", "unique_view_count", "is_seen", "glanced_at", "new_reply_count", "updated_at"];
-
-function stableThread(thread: Record<string, unknown>): Record<string, unknown> {
-  const stable = { ...thread };
-  for (const field of VOLATILE_THREAD_FIELDS) {
-    delete stable[field];
-  }
-  return stable;
-}
-
-function ensureTrailingSlash(value: string): string {
-  return value.endsWith("/") ? value : `${value}/`;
-}
-
-function threadAuthorRole(thread: Record<string, unknown>): string {
-  const user = asRecord(thread.user);
-  return asString(user.course_role) || asString(user.role);
+function stableThread(thread: Thread): Record<string, unknown> {
+  const { updatedAt: _updatedAt, isSeen: _isSeen, metrics, ...stable } = thread;
+  const { viewCount: _views, uniqueViewCount: _uniqueViews, newReplyCount: _newReplies, ...counts } = metrics;
+  return { ...stable, metrics: counts };
 }

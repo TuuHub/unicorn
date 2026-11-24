@@ -168,6 +168,12 @@ export const BOARD_STYLE = `<style>
 .board-tray .muted{margin-right:4px}
 .board-actions{display:flex;gap:8px;margin-left:auto}
 @media (prefers-reduced-motion:no-preference){.widget{transition:box-shadow .15s,opacity .15s}}
+${Object.keys(WIDGETS)
+  .map((id) => `.widget[data-widget=${id}]{view-transition-name:w-${id}}`)
+  .join("\n")}
+::view-transition-group(*){animation-duration:.24s;animation-timing-function:cubic-bezier(.23,1,.32,1)}
+::view-transition-image-pair(*){overflow:hidden;border-radius:16px}
+::view-transition-old(*),::view-transition-new(*){height:100%;object-fit:none;object-position:left top}
 </style>`;
 
 export const BOARD_SCRIPT = `<script>
@@ -178,6 +184,12 @@ export const BOARD_SCRIPT = `<script>
   if (!board || !bar || !toggle) return;
   var widgets = function () { return Array.prototype.slice.call(board.querySelectorAll(".widget")); };
   var shown = function () { return widgets().filter(function (w) { return !w.hidden; }); };
+  // Resizing, moving, hiding and adding glide each widget to its new place where the browser can.
+  var still = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  function morph(change) {
+    if (still || !document.startViewTransition) return change();
+    document.startViewTransition(change);
+  }
   function start() {
     board.classList.add("editing"); bar.hidden = false; toggle.hidden = true;
     widgets().forEach(function (w) { w.draggable = true; });
@@ -187,24 +199,33 @@ export const BOARD_SCRIPT = `<script>
     var button = event.target.closest("button"); if (!button) return;
     var w = button.closest(".widget"); if (!w) return;
     if (button.dataset.size) {
-      w.dataset.size = button.dataset.size;
-      w.querySelectorAll(".w-sizes button").forEach(function (b) { b.setAttribute("aria-pressed", String(b === button)); });
+      if (w.dataset.size === button.dataset.size) return;
+      morph(function () {
+        w.dataset.size = button.dataset.size;
+        w.querySelectorAll(".w-sizes button").forEach(function (b) { b.setAttribute("aria-pressed", String(b === button)); });
+      });
     } else if (button.dataset.move) {
       var list = shown(); var i = list.indexOf(w); var j = i + Number(button.dataset.move);
       if (j < 0 || j >= list.length) return;
-      if (j < i) board.insertBefore(w, list[j]); else board.insertBefore(w, list[j].nextSibling);
-      button.focus();
+      morph(function () {
+        if (j < i) board.insertBefore(w, list[j]); else board.insertBefore(w, list[j].nextSibling);
+        button.focus();
+      });
     } else if (button.hasAttribute("data-hide")) {
-      w.hidden = true;
-      var add = bar.querySelector('[data-add="' + w.dataset.widget + '"]'); if (add) add.hidden = false;
+      morph(function () {
+        w.hidden = true;
+        var add = bar.querySelector('[data-add="' + w.dataset.widget + '"]'); if (add) add.hidden = false;
+      });
     }
   });
   bar.addEventListener("click", function (event) {
     var add = event.target.closest("[data-add]"); if (!add) return;
     var w = board.querySelector('[data-widget="' + add.dataset.add + '"]'); if (!w) return;
     var list = shown(); var last = list[list.length - 1];
-    board.insertBefore(w, last ? last.nextSibling : board.firstChild);
-    w.hidden = false; add.hidden = true; w.scrollIntoView({ block: "nearest" });
+    morph(function () {
+      board.insertBefore(w, last ? last.nextSibling : board.firstChild);
+      w.hidden = false; add.hidden = true; w.scrollIntoView({ block: "nearest" });
+    });
   });
   bar.addEventListener("submit", function () {
     bar.elements.layout.value = JSON.stringify(shown().map(function (w) { return { id: w.dataset.widget, size: w.dataset.size }; }));
@@ -226,8 +247,9 @@ export const BOARD_SCRIPT = `<script>
   board.addEventListener("drop", function (event) {
     var w = event.target.closest(".widget"); if (!dragged || !w || w === dragged) return;
     event.preventDefault();
-    board.insertBefore(dragged, w.classList.contains("drop-before") ? w : w.nextSibling);
+    var moved = dragged; var before = w.classList.contains("drop-before");
     clearMarks();
+    morph(function () { board.insertBefore(moved, before ? w : w.nextSibling); });
   });
   board.addEventListener("dragend", function () { if (dragged) dragged.classList.remove("dragging"); dragged = null; clearMarks(); });
 })();

@@ -93,7 +93,7 @@ export async function renderPlaybooks(runtime: PanelRuntime): Promise<string> {
     title: "unicorn — playbooks",
     active: "/panel/playbooks",
     heading: "Playbooks",
-    subtitle: "Step-by-step procedures your agent follows. Say the line, or pick the prompt from your app's prompt menu. Scheduled ones run on their own and file a brief.",
+    subtitle: "Step-by-step procedures your agent follows. Say the line, or pick the prompt from your app's prompt menu. Scheduled ones run in your AI client and file a brief: <a href=\"/panel/connect#schedule\">set that up once</a>.",
     body,
     wide: true,
   });
@@ -325,7 +325,7 @@ export async function renderExport(runtime: PanelRuntime): Promise<Response> {
   const [memory, plans, briefs, activity] = await Promise.all([
     readAllMemory(runtime.memory),
     all("SELECT kind, subject, content, created_at, updated_at FROM plans ORDER BY updated_at DESC"),
-    runtime.briefs.list({ limit: 1000 }).catch(() => []),
+    runtime.briefs.list({ unreadOnly: false, limit: 1000 }).catch(() => []),
     runtime.activity.list({ limit: 200 }),
   ]);
   const data = {

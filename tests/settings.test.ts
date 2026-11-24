@@ -17,6 +17,8 @@ const current: AppSettings = {
   gmailDomains: [],
   gmailAllowlist: [],
   disabledSources: [],
+  addedSources: ["ed", "moodle", "canvas", "gmail"],
+  gradeScale: "percent",
 };
 
 describe("settings", () => {
@@ -169,7 +171,7 @@ describe("settings", () => {
     expect(html).not.toContain("Never run");
   });
 
-  it("offers only Connect on an unconfigured source card — nothing to test or remove yet", async () => {
+  it("offers only Connect and Remove on a source that is added but not connected", async () => {
     const response = await handleSettings(
       new Request("https://unicorn.example/settings", { headers: { authorization: basic("admin-secret") } }),
       runtime(), // default credentialStoreStub() reports every source as status "none"
@@ -177,7 +179,7 @@ describe("settings", () => {
     const html = await response.text();
 
     expect(html).not.toContain("Test connection");
-    expect(html).not.toContain("/disconnect");
+    expect(html).toContain('action="/settings/sources/canvas/disconnect"');
     expect(html).not.toContain('role="switch" aria-checked');
   });
 
@@ -215,7 +217,7 @@ describe("settings", () => {
     const response = await handleSettings(new Request("https://unicorn.example/settings", { headers: { authorization: basic("admin-secret") } }), withError);
     const html = await response.text();
 
-    expect(html).toContain("Never synced · 0 items");
+    expect(html).toContain("Not synced yet · 0 items");
     expect(html).toContain("Last sync failed");
     expect(html).toContain('<p class="src-error">canvas_api_401</p>');
   });

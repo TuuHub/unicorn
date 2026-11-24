@@ -159,7 +159,7 @@ export async function buildEdFixture(): Promise<ItemInput[]> {
               number: 2,
               course_id: 200,
               user_id: 2,
-              user: { course_role: "tutor" },
+              user: { id: 2, course_role: "tutor" },
               title: "Week 5 content released",
               category: "General", // no matching assessment -> course/FIT2004/general
               document: "Lecture recording for week 5 is up.",

@@ -7,7 +7,7 @@ import { DeclarativePlugin, pluginBindings } from "../plugins/declarative/plugin
 import { D1ManifestStore } from "../plugins/declarative/store";
 import { buildGmailQuery, defaultUniversityDomains, loadKnownCourseCodes, withGmailQuery } from "../plugins/gmail-query";
 import type { Plugin } from "../plugins/plugin";
-import { D1RetentionRepository, runRetention } from "../retention";
+import { archiveMissing, D1RetentionRepository, runRetention } from "../retention";
 import type { BrowserRunBinding } from "../moodle-browser";
 import { buildSourcePlugins, D1SourceCredentialStore, PLUGIN_ID } from "../sources";
 import { D1SettingsRepository, type AppSettings } from "../settings";
@@ -26,6 +26,10 @@ export interface Env {
   // Optional Cloudflare Access login for the human pages (src/access.ts).
   MOODLE_BASE_URL: string;
   MOODLE_SESSION?: string;
+  // Optional: the Worker signs in to Moodle through Okta by itself (src/moodle-okta.ts).
+  OKTA_USERNAME?: string;
+  OKTA_PASSWORD?: string;
+  OKTA_TOTP_SECRET?: string;
   CANVAS_BASE_URL?: string;
   PLUGIN_SECRET_CANVAS_TOKEN?: string;
   SCHEDULER: DurableObjectNamespace;
@@ -234,6 +238,12 @@ async function syncSources(env: Env, settings: AppSettings): Promise<SourceCycle
 
     try {
       const result = await kernel.ingest(items);
+      const complete = plugin.complete?.() ?? [];
+      if (complete.length > 0) {
+        await archiveMissing(env.DB, plugin.id, complete, items.map((item) => item.id), new Date().toISOString()).catch((error) => {
+          console.error(JSON.stringify({ event: "archive_missing_failed", plugin: plugin.id, message: errorMessage(error) }));
+        });
+      }
       results.push({
         plugin: plugin.id,
         lastSyncAt,

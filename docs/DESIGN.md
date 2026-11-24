@@ -54,21 +54,23 @@ Use sentence case everywhere. Don't use all-caps labels.
 
 ## Controls
 
-- **Status dot.** 7px. Ink when a thing works, a hollow faint ring when it is off or not set up, `--danger` when it is broken. A green dot is never used for "fine": fine is the default and stays greyscale.
+- **Status dot.** 8px, traffic-light: `--success` when a thing works, `--warning` when it is degraded or stale (a failing source, a sync older than two hours), `--danger` when it is broken, a hollow faint ring when it is off or not set up. A colour never stands alone: the sentence next to it says the same thing.
 - **Switch.** 40×24. Off is a `--default` track with a faint ring and a small faint knob. On is an ink track with a `--surface` knob, so it reads in both themes. On the server it is a `<button role="switch" aria-checked>` inside a form, because the CSP allows no fetch.
 - **Destructive actions** are quiet text buttons in `--danger-text` that confirm first. They never get a red fill until hovered.
 - **Ask chip.** A line to say to the user's agent, with a spark icon. Clicking opens a menu: open it as a new chat in Claude or ChatGPT, or copy it. unicorn has no agent of its own, so empty states that the agent fills (plans, profile) offer the line that fills them instead of explaining how.
 - **Optical alignment.** Columns of values share one grid so they start on the same line. An icon-only button at a card's edge takes a negative margin so its glyph, not its hit area, lines up with the content.
+- **Sources come from a catalog.** /settings lists only the sources the user added, each with its switch. Everything else, built in or a custom manifest, waits under Add source. A sign-in method is offered only where it works: the Okta form leads only when the school's Moodle sends sign-in to Okta.
 - **Errors sit where they happened.** A form that fails puts its message inside its own card and scrolls there, not only at the top of the page.
 - **Inline edit.** A list the user can correct (memory entries) shows plain rows. Clicking a row swaps it for a textarea in place, with Delete, Cancel and Save. ⌘↩ saves and Escape cancels. Delete doesn't confirm, because the change lands in a feed with Undo.
 - **Confirmations are toasts.** "Saved", "Removed Ed" and the like float in at the bottom right, show for four seconds and leave. The flag that triggered one is dropped from the address so a reload doesn't repeat it.
+- **A result answers where it was asked.** Test connection, an Okta sign-in and other per-card actions show their outcome inside that card, with a dot, and the page scrolls back to it. Toasts are only for page-wide confirmations.
 
 ## Motion
 
 The design skills in `.agents/skills` (from `../site`) set the rules; these are the ones the panel uses.
 
 - Two curves, both tokens in `:root`: `--ease-out` (`cubic-bezier(.23,1,.32,1)`) for anything entering or responding to a press, `--ease-in-out` for movement on screen. Never `ease-in`, never `transition: all`.
-- Under 300ms. Press feedback 160ms, menus 160ms, reveals 200ms, toasts 260ms in and 200ms out.
+- Under 300ms. Press feedback 160ms, menus 160ms, reveals 200ms, toasts 260ms in and 200ms out. Rearranging the board (resize, move, add, hide) glides each widget with a 240ms view transition on `--ease-out`.
 - Buttons scale to `.96` on press. The switch knob slides as its form submits.
 - Menus scale from `.97` at their trigger. `<details>` content fades down 4px.
 - Charts grow once on load, staggered 30–40ms per bar. Nothing else animates on load.

@@ -7,13 +7,15 @@
 //   /panel/plans            weekly and assignment plans; tick items off
 //   /panel/search           full-text search over every synced item
 //
-// Read-only on the sources like everything else. The two writes here (marking briefs read,
-// ticking a plan item) touch unicorn's own tables and are CSRF-checked by the router.
+// Read-only on the sources like everything else. The writes here (marking briefs read or unread,
+// ticking a plan item, moving an item to another group) touch unicorn's own tables and are CSRF-checked by the router.
 
 import type { ItemSummary, BucketGroup } from "./mcp/door-contracts";
 import { EVENT_LABELS, eventIcon, icon, sourceDot, sourceMark, sourceTile } from "./marks";
 import type { PanelRuntime } from "./panel";
-import { dayKey, empty, emptyAsk, formatIn, isHandedIn, PANEL_SCRIPT, PANEL_STYLE, relative, safeZone, shortAgo, SOURCE_NAMES } from "./panel-kit";
+import { dayKey, empty, emptyAsk, formatIn, isHandedIn, itemLinkAttrs, itemTitleLink, PANEL_SCRIPT, PANEL_STYLE, relative, safeZone, shortAgo, SOURCE_NAMES } from "./panel-kit";
+import type { EdPost } from "./plugins/campus/ed-plugin";
+import { HttpStatusError } from "./plugins/http-error";
 import { computeCsrfToken } from "./settings";
 import { loadTermCourses, type TermCourse } from "./term";
 import { escapeHtml, renderPage } from "./ui";
@@ -133,7 +135,7 @@ export function renderChangeDays(rows: ChangeRow[], zone: string, at: Date): str
 }
 
 function renderChangeRow(row: ChangeRow, zone: string): string {
-  const title = row.url ? `<a class="plain" href="${escapeHtml(row.url)}" target="_blank" rel="noopener">${escapeHtml(row.title)}</a>` : escapeHtml(row.title);
+  const title = itemTitleLink({ source: row.source, itemId: row.item_id, url: row.url, title: row.title });
   const detail = changeDetail(row, zone);
   return `<li>
     <span class="grow change-row">${eventIcon(row.type)}<span class="change-text">
@@ -177,10 +179,13 @@ export async function renderDeadlines(runtime: PanelRuntime, url: URL): Promise<
   const zone = safeZone(runtime.timezone);
   const days = [14, 30, 60].includes(Number(url.searchParams.get("days"))) ? Number(url.searchParams.get("days")) : 30;
   const course = (url.searchParams.get("course") ?? "").trim().toUpperCase() || undefined;
-  const [items, courses] = await Promise.all([
+  const [allItems, courses] = await Promise.all([
     runtime.repo.upcoming({ days, course, includeOverdue: true, now: at }).catch((): ItemSummary[] => []),
     loadTermCourses(runtime.db).catch((): TermCourse[] => []),
   ]);
+  // Work from a unit outside this term's set (last semester's leftovers) is not on the board.
+  const termCodes = new Set(courses.map((entry) => entry.code));
+  const items = allItems.filter((item) => termCodes.size === 0 || !item.course || termCodes.has(item.course));
   const overdue = items.filter((item) => item.dueAt && Date.parse(item.dueAt) < at.getTime() && !isHandedIn(item.state));
   const ahead = items.filter((item) => !item.dueAt || Date.parse(item.dueAt) >= at.getTime());
   const weeks = new Map<string, ItemSummary[]>();
@@ -255,21 +260,22 @@ function dueAgenda(items: ItemSummary[], zone: string, at: Date, inUnit = false)
 function taskCard(item: ItemSummary, zone: string, at: Date): string {
   const when = item.dueAt ? `${formatIn(item.dueAt, zone, { weekday: "short", day: "numeric", month: "short" })}, ${formatIn(item.dueAt, zone, { hour: "2-digit", minute: "2-digit", hour12: false })}` : "no date";
   const state = item.state ? `<span class="chip${/submit|done|complete|graded/i.test(item.state) ? " success" : ""}">${escapeHtml(item.state)}</span>` : "";
-  const tag = item.url ? "a" : "div";
-  return `<${tag} class="task-card plain"${item.url ? ` href="${escapeHtml(item.url)}" target="_blank" rel="noopener"` : ""}>
+  const attrs = itemLinkAttrs(item);
+  const tag = attrs ? "a" : "div";
+  return `<${tag} class="task-card plain"${attrs}>
     <div class="task-top">${item.course ? `<span class="badge course">${escapeHtml(item.course)}</span>` : "<span></span>"}<span class="task-when">${icon("clock")}${escapeHtml(when)}</span></div>
     <p class="task-title">${escapeHtml(item.title)}</p>
     <div class="task-meta">${sourceDot(item.source)}${escapeHtml(SOURCE_NAMES[item.source] ?? sourceMark(item.source)?.name ?? item.source)} · ${escapeHtml(item.kind)}${item.dueAt ? ` · ${escapeHtml(relative(item.dueAt, at))}` : ""}${state ? ` ${state}` : ""}</div>
   </${tag}>`;
 }
 
-function itemRow(item: ItemSummary, zone: string, at: Date, withTime: boolean, inUnit = false): string {
-  const title = item.url ? `<a class="plain" href="${escapeHtml(item.url)}" target="_blank" rel="noopener">${escapeHtml(item.title)}</a>` : escapeHtml(item.title);
+function itemRow(item: ItemSummary, zone: string, at: Date, withTime: boolean, inUnit = false, move = ""): string {
+  const title = itemTitleLink(item);
   const state = item.state ? `<span class="badge${/submit|done|complete|graded/i.test(item.state) ? " ok" : ""}">${escapeHtml(item.state)}</span>` : "";
   const end = withTime && item.dueAt ? formatIn(item.dueAt, zone, { hour: "2-digit", minute: "2-digit", hour12: false }) : shortAgo(item.timestamp, at);
   return `<li>
     <span class="grow due-row">${sourceDot(item.source)}${item.course && !inUnit ? `<a class="badge course" href="/panel/units/${encodeURIComponent(item.course)}">${escapeHtml(item.course)}</a>` : ""}<span class="truncate" title="${escapeHtml(item.title)}">${title}</span>${item.staff ? '<span class="badge">staff</span>' : ""}${state}</span>
-    <span class="end">${escapeHtml(end)}</span>
+    ${move}<span class="end">${escapeHtml(end)}</span>
   </li>`;
 }
 
@@ -364,26 +370,37 @@ async function countBy(db: D1Database, sql: string, ...binds: unknown[]): Promis
   }
 }
 
-export async function renderUnit(runtime: PanelRuntime, code: string): Promise<string | null> {
+export async function renderUnit(runtime: PanelRuntime, code: string, url?: URL): Promise<string | null> {
   const at = now(runtime);
   const zone = safeZone(runtime.timezone);
   const view = await runtime.repo.course(code).catch(() => null);
   if (!view || !view.code) return null;
-  const [upcoming, changes] = await Promise.all([
+  const [upcoming, changes, csrf] = await Promise.all([
     runtime.repo.upcoming({ days: 60, course: view.code, includeOverdue: true, now: at }).catch((): ItemSummary[] => []),
     recentChanges(runtime.db, { course: view.code, limit: 12 }).catch((): ChangeRow[] => []),
+    computeCsrfToken(runtime.adminToken),
   ]);
-  const buckets = view.buckets.filter((bucket) => bucket.items.length).map((bucket) => renderBucket(bucket, zone, at)).join("");
+  const unitCode = view.code;
+  const general = `course/${unitCode}/general`;
+  const targets: Array<[string, string]> = [
+    ...view.buckets.filter((bucket) => bucket.bucket !== general).map((bucket): [string, string] => [bucket.bucket, bucket.label]),
+    [general, "General"],
+    ["life/other", "Not this unit"],
+  ];
+  const move = (item: ItemSummary) => moveControl(item, targets, csrf, unitCode);
+  const buckets = view.buckets.filter((bucket) => bucket.items.length).map((bucket) => renderBucket(bucket, zone, at, move)).join("");
   const unlabeled = view.unlabeled.length
     ? `<section class="card"><div class="card-head row"><div class="card-title">${icon("spark")}<h2>Not grouped yet</h2></div><span class="muted small tabular">${view.unlabeled.length}</span></div><div class="card-body"><p class="small muted" style="margin:0 0 8px">Your agent's triage playbook files these under an assignment or General.</p><ul class="list">${view.unlabeled
         .slice(0, 12)
-        .map((item) => itemRow(item, zone, at, false, true))
+        .map((item) => itemRow(item, zone, at, false, true, move(item)))
         .join("")}</ul></div></section>`
     : "";
+  const moved = url?.searchParams.get("moved");
   const sources = view.sources
     .map((source) => `<span class="src-chip">${sourceTile(source, "sm")}${escapeHtml(SOURCE_NAMES[source] ?? sourceMark(source)?.name ?? source)}</span>`)
     .join("");
   const body = `
+    ${moved ? `<p class="notice" role="status">${moved === "1" ? "Moved. Your agents see it there from now on." : "Couldn't move that item. Reload and try again."}</p>` : ""}
     <div class="unit-sources-row">${sources}</div>
     <div class="split">
       <div class="col">${buckets || `<section class="card"><div class="card-body" style="padding-top:18px">${empty("units", "No items in this unit yet.")}</div></section>`}${unlabeled}</div>
@@ -392,7 +409,7 @@ export async function renderUnit(runtime: PanelRuntime, code: string): Promise<s
         <section class="card"><div class="card-head row"><div class="card-title">${icon("changes")}<h2>Latest changes</h2></div><a class="more" href="/panel/changes?course=${encodeURIComponent(view.code)}">All${icon("arrow")}</a></div><div class="card-body">${changes.length ? `<ul class="list changes compact">${changes.map((row) => renderChangeRow(row, zone)).join("")}</ul>` : empty("changes", "No changes yet.")}</div></section>
       </div>
     </div>
-    ${PANEL_STYLE}${CAMPUS_STYLE}${PANEL_SCRIPT}`;
+    ${PANEL_STYLE}${CAMPUS_STYLE}${PANEL_SCRIPT}${MOVE_SCRIPT}`;
   return renderPage({
     title: `unicorn — ${view.code}`,
     active: "/panel/units",
@@ -404,14 +421,41 @@ export async function renderUnit(runtime: PanelRuntime, code: string): Promise<s
   });
 }
 
-function renderBucket(bucket: BucketGroup, zone: string, at: Date): string {
+function renderBucket(bucket: BucketGroup, zone: string, at: Date, move: (item: ItemSummary) => string): string {
   const due = bucket.dueAt
     ? `<span class="muted small">due ${escapeHtml(formatIn(bucket.dueAt, zone, { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hour12: false }))} · ${escapeHtml(relative(bucket.dueAt, at))}</span>`
     : "";
   const state = bucket.state ? `<span class="badge${/submit|done|complete|graded/i.test(bucket.state) ? " ok" : ""}">${escapeHtml(bucket.state)}</span>` : "";
   const shown = bucket.items.slice(0, 8);
   return `<section class="card"><div class="card-head row"><div><h2>${escapeHtml(bucket.label)}</h2>${due}</div><span class="bucket-end">${state}<span class="muted small tabular">${bucket.items.length}</span></span></div>
-    <div class="card-body"><ul class="list">${shown.map((item) => itemRow(item, zone, at, false, true)).join("")}</ul>${bucket.items.length > shown.length ? `<p class="muted small" style="margin:8px 0 0">${bucket.items.length - shown.length} more — ask your agent for the full bucket.</p>` : ""}</div></section>`;
+    <div class="card-body"><ul class="list">${shown.map((item) => itemRow(item, zone, at, false, true, move(item))).join("")}</ul>${bucket.items.length > shown.length ? `<p class="muted small" style="margin:8px 0 0">${bucket.items.length - shown.length} more — ask your agent for the full bucket.</p>` : ""}</div></section>`;
+}
+
+// A wrong group is fixed here rather than by asking an agent. The label is saved as "client", which
+// the structure pass and the triage playbook (it only files unlabelled items) both leave alone.
+function moveControl(item: ItemSummary, targets: Array<[string, string]>, csrf: string, code: string): string {
+  const options = targets.map(([bucket, label]) => `<option value="${escapeHtml(bucket)}"${bucket === item.bucket ? " selected" : ""}>${escapeHtml(label)}</option>`).join("");
+  const placeholder = item.bucket ? "" : `<option value="" selected disabled>Move to…</option>`;
+  return `<form method="post" action="/panel/label" class="move">
+    <input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><input type="hidden" name="source" value="${escapeHtml(item.source)}"><input type="hidden" name="itemId" value="${escapeHtml(item.itemId)}"><input type="hidden" name="code" value="${escapeHtml(code)}">
+    <select name="bucket" aria-label="Group for ${escapeHtml(item.title)}">${placeholder}${options}</select><noscript><button type="submit" class="ghost sm">Move</button></noscript>
+  </form>`;
+}
+
+const MOVE_SCRIPT = `<script>
+document.addEventListener("change", function (event) {
+  var select = event.target;
+  if (select.matches && select.matches(".move select")) select.form.requestSubmit();
+});
+</script>`;
+
+/** POST /panel/label — move one item to another group of its unit, or out of the unit. */
+export async function moveItem(runtime: PanelRuntime, form: FormData, url: URL): Promise<Response> {
+  const code = String(form.get("code") ?? "");
+  const input = { source: String(form.get("source") ?? ""), itemId: String(form.get("itemId") ?? ""), bucket: String(form.get("bucket") ?? "") };
+  const result = input.source && input.itemId && input.bucket ? await runtime.repo.labelItems([input], "client").catch(() => null) : null;
+  const moved = result?.updated === 1 ? "1" : "0";
+  return new Response(null, { status: 303, headers: { location: new URL(`/panel/units/${encodeURIComponent(code)}?moved=${moved}`, url).toString() } });
 }
 
 // --- briefs -------------------------------------------------------------------------------------
@@ -420,13 +464,13 @@ export async function renderBriefs(runtime: PanelRuntime, url: URL): Promise<str
   const at = now(runtime);
   const zone = safeZone(runtime.timezone);
   const csrf = await computeCsrfToken(runtime.adminToken);
-  const briefs = await runtime.briefs.list({ limit: 60 }).catch(() => []);
+  const briefs = await runtime.briefs.list({ unreadOnly: false, limit: 60 }).catch(() => []);
   const unread = briefs.filter((brief) => !brief.readAt);
   const read = briefs.filter((brief) => brief.readAt);
   const card = (brief: (typeof briefs)[number], open: boolean) => {
     const meta = `<span class="badge">${escapeHtml(brief.kind)}</span><span class="muted small">${escapeHtml(formatIn(brief.createdAt, zone, { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hour12: false }))} · ${escapeHtml(relative(brief.createdAt, at))}</span>`;
     const markRead = brief.readAt
-      ? ""
+      ? `<span class="muted small">Read ${escapeHtml(relative(brief.readAt, at))}</span><form method="post" action="/panel/briefs/unread" style="margin:0"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><input type="hidden" name="id" value="${escapeHtml(brief.id)}"><button type="submit" class="secondary sm">Mark unread</button></form>`
       : `<form method="post" action="/panel/briefs/read" style="margin:0"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><input type="hidden" name="id" value="${escapeHtml(brief.id)}"><button type="submit" class="secondary sm">${icon("check")}Mark read</button></form>`;
     return `<article class="card brief${brief.readAt ? " is-read" : ""}">
       <details${open ? " open" : ""}><summary class="brief-head"><span class="brief-title"><h2>${escapeHtml(brief.title)}</h2><span class="brief-meta">${meta}</span></span></summary>
@@ -434,8 +478,10 @@ export async function renderBriefs(runtime: PanelRuntime, url: URL): Promise<str
     </article>`;
   };
   const notice = url.searchParams.get("marked");
+  const restored = url.searchParams.get("unread");
   const body = `
     ${notice ? `<p class="notice" role="status">Marked ${escapeHtml(notice)} read. Your agents skip read briefs.</p>` : ""}
+    ${restored ? `<p class="notice" role="status">Marked unread. Your agent shows it again next session.</p>` : ""}
     ${unread.length ? `<div class="section-label"><h2>Unread · ${unread.length}</h2><form method="post" action="/panel/briefs/read" style="margin:0"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><input type="hidden" name="all" value="1"><button type="submit" class="secondary sm">${icon("check")}Mark all read</button></form></div>${unread.map((brief) => card(brief, true)).join("")}` : ""}
     ${read.length ? `<div class="section-label"><h2>Read</h2></div>${read.map((brief) => card(brief, false)).join("")}` : ""}
     ${briefs.length ? "" : `<section class="card"><div class="card-body" style="padding-top:18px">${empty("brief", "No briefs yet. The daily digest and scheduled playbooks file them here.")}</div></section>`}
@@ -444,7 +490,7 @@ export async function renderBriefs(runtime: PanelRuntime, url: URL): Promise<str
     title: "unicorn — briefs",
     active: "/panel/briefs",
     heading: "Briefs",
-    subtitle: "What the daily digest and scheduled playbooks filed. An agent reads unread briefs at the start of a session, then marks them read.",
+    subtitle: "What the daily digest and scheduled playbooks filed. An agent reads unread briefs at the start of a session, then marks them read. Missed one? Mark it unread.",
     body,
     wide: false,
   });
@@ -457,6 +503,12 @@ export async function markBriefsRead(runtime: PanelRuntime, form: FormData, url:
   }
   const marked = ids.length ? await runtime.briefs.markRead(ids) : 0;
   return new Response(null, { status: 303, headers: { location: new URL(`/panel/briefs?marked=${marked}`, url).toString() } });
+}
+
+export async function markBriefsUnread(runtime: PanelRuntime, form: FormData, url: URL): Promise<Response> {
+  const ids = form.getAll("id").map(String).filter(Boolean);
+  const marked = ids.length ? await runtime.briefs.markUnread(ids) : 0;
+  return new Response(null, { status: 303, headers: { location: new URL(`/panel/briefs?unread=${marked}`, url).toString() } });
 }
 
 // --- plans --------------------------------------------------------------------------------------
@@ -614,7 +666,7 @@ export async function renderSearch(runtime: PanelRuntime, url: URL): Promise<str
   }
   const rows = results
     .map((item) => {
-      const title = item.url ? `<a class="plain" href="${escapeHtml(item.url)}" target="_blank" rel="noopener">${escapeHtml(item.title)}</a>` : escapeHtml(item.title);
+      const title = itemTitleLink(item);
       return `<li class="result">${sourceTile(item.source, "sm")}<div class="grow">
         <div class="result-title">${item.course ? `<a class="badge course" href="/panel/units/${encodeURIComponent(item.course)}">${escapeHtml(item.course)}</a>` : ""}<span>${title}</span>${item.staff ? '<span class="badge">staff</span>' : ""}</div>
         ${item.snippet ? `<p class="snippet">${escapeHtml(item.snippet)}</p>` : ""}
@@ -712,6 +764,9 @@ tr.linked{cursor:pointer}
 @media (max-width:760px){.units-table th:nth-child(2),.units-table td:nth-child(2),.units-table th:nth-child(3),.units-table td:nth-child(3),.units-table th:nth-child(4),.units-table td:nth-child(4),.units-table th:nth-child(6),.units-table td:nth-child(6){display:none}.u-title{max-width:180px}}
 .unit-sources-row{display:flex;gap:8px;flex-wrap:wrap;margin:-8px 0 16px}
 .bucket-end{display:inline-flex;gap:8px;align-items:center}
+.move{flex:none;margin:0}
+.move select{height:28px;max-width:150px;padding:0 6px;font-size:12.5px;color:var(--muted);background:transparent;border-color:transparent}
+.move select:hover,.move select:focus{color:var(--fg);border-color:var(--separator)}
 /* deadlines: a status board */
 .board{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(260px,100%),1fr));gap:16px;align-items:start}
 .lane{background:var(--surface-2);border-radius:20px;padding:12px 6px 6px}
@@ -738,7 +793,7 @@ a.task-card:hover{box-shadow:var(--shadow-lg)}
 .brief .card-body{border-top:1px solid var(--separator);margin:0 16px;padding:14px 0 16px}
 .brief.is-read{background:transparent;box-shadow:inset 0 0 0 1px var(--separator)}
 .brief.is-read h2{color:var(--muted);font-weight:500}
-.brief-actions{display:flex;justify-content:flex-end;margin-top:10px}
+.brief-actions{display:flex;justify-content:flex-end;align-items:center;gap:10px;margin-top:10px}
 .brief-actions:empty{display:none}
 .prose{font-size:14px;line-height:1.65;color:var(--fg)}
 .prose h1,.prose h2,.prose h3,.prose h4{font-size:14px;font-weight:600;margin:16px 0 6px}
@@ -772,4 +827,78 @@ a.task-card:hover{box-shadow:var(--shadow-lg)}
 .result-title{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:14px;font-weight:500}
 .snippet{margin:4px 0 0;color:var(--muted);font-size:13px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .result-meta{margin:4px 0 0;color:var(--faint);font-size:12px}
+</style>`;
+
+// --- Ed thread reader ----------------------------------------------------------------------------
+//
+// /panel/ed/<thread id>: the question, its answers and the comments under each, read live from Ed
+// with the stored token, so a post opens here instead of on edstem.org. Ed's plain-text `document`
+// is shown as written; "Open in Ed" is there for images, code formatting and replying.
+
+export async function renderEdThread(runtime: PanelRuntime, threadId: number): Promise<string> {
+  const at = now(runtime);
+  const known = await runtime.db
+    .prepare("SELECT title, url, course FROM items WHERE source = 'campus-ed' AND item_id = ?")
+    .bind(`thread:${threadId}`)
+    .first<{ title: string; url: string | null; course: string | null }>()
+    .catch(() => null);
+  let problem: string | null = null;
+  let view = null;
+  if (!runtime.edThread) {
+    problem = 'Ed isn\'t connected. Add an Ed token in <a href="/settings#source-ed">Settings</a> to read threads here.';
+  } else {
+    try {
+      view = await runtime.edThread(threadId);
+    } catch (error) {
+      problem =
+        error instanceof HttpStatusError && (error.status === 404 || error.status === 403)
+          ? "Ed doesn't show this thread to your token any more. It may have been deleted or made private."
+          : "Couldn't reach Ed just now. Try again in a minute.";
+    }
+  }
+  const edUrl = view?.url ?? known?.url ?? null;
+  const course = known?.course ? `<a class="badge course" href="/panel/units/${encodeURIComponent(known.course)}">${escapeHtml(known.course)}</a> ` : "";
+  const post = (entry: EdPost, kind: "question" | "answer" | "comment"): string => {
+    const role = entry.role && entry.role !== "student" ? `<span class="badge">${escapeHtml(entry.role === "admin" ? "staff" : entry.role)}</span>` : "";
+    const endorsed = entry.endorsed ? `<span class="badge ok">${icon("check")}Endorsed</span>` : "";
+    const votes = entry.votes > 0 ? `<span class="muted small tabular">${entry.votes} vote${entry.votes === 1 ? "" : "s"}</span>` : "";
+    const replies = entry.replies.length ? `<ol class="ed-replies">${entry.replies.map((reply) => `<li>${post(reply, "comment")}</li>`).join("")}</ol>` : "";
+    return `<article class="ed-post ed-${kind}">
+      <header class="ed-by"><strong>${escapeHtml(entry.author)}</strong>${role}${endorsed}<span class="muted small">${entry.at ? escapeHtml(shortAgo(entry.at, at)) : ""}</span>${votes}</header>
+      <div class="ed-body">${escapeHtml(entry.body.trim()) || '<span class="muted">(no text)</span>'}</div>
+      ${replies}
+    </article>`;
+  };
+  const section = (kind: "answer" | "comment", posts: EdPost[]) => {
+    if (!posts.length) return "";
+    const heading = `${posts.length} ${kind}${posts.length === 1 ? "" : "s"}`;
+    return `<section class="card ed-thread-part" aria-label="${heading}"><div class="card-head"><h2>${heading}</h2></div><div class="card-body">${posts.map((entry) => post(entry, kind)).join("")}</div></section>`;
+  };
+  const body = view
+    ? `<section class="card"><div class="card-body">${post(view.post, "question")}</div></section>
+       ${section("answer", view.answers)}
+       ${section("comment", view.comments)}
+       ${view.answers.length + view.comments.length === 0 ? `<p class="muted ed-quiet">No replies yet.</p>` : ""}`
+    : `<section class="card"><div class="card-body"><p class="ed-problem" role="alert">${problem}</p></div></section>`;
+  return renderPage({
+    title: `unicorn — ${view?.title ?? known?.title ?? "Ed thread"}`,
+    active: "/panel/changes",
+    heading: escapeHtml(view?.title ?? known?.title ?? "Ed thread"),
+    subtitle: `${course}${view?.category ? `${escapeHtml(view.category)} · ` : ""}Ed Discussion, read live.`,
+    body: `${body}${PANEL_STYLE}${ED_STYLE}`,
+    actions: edUrl ? `<a class="button secondary" href="${escapeHtml(edUrl)}" target="_blank" rel="noopener">Open in Ed${icon("external")}</a>` : "",
+  });
+}
+
+const ED_STYLE = `<style>
+.ed-post{display:flex;flex-direction:column;gap:8px}
+.ed-thread-part .ed-post+.ed-post{margin-top:20px;padding-top:20px;box-shadow:0 -1px 0 var(--border)}
+.ed-by{display:flex;align-items:center;flex-wrap:wrap;gap:8px;font-size:14px}
+.ed-body{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.6;color:var(--fg)}
+.ed-question .ed-body{font-size:15px}
+.ed-replies{list-style:none;margin:8px 0 0;padding:0 0 0 16px;display:flex;flex-direction:column;gap:14px;box-shadow:inset 2px 0 0 var(--default)}
+.ed-replies .ed-body{font-size:14px;color:var(--fg-2)}
+.ed-quiet{margin:4px 4px 16px}
+.ed-problem{margin:0;padding:10px 12px;border-radius:10px;background:var(--danger-soft);color:var(--danger-text);font-size:14px}
+.ed-problem a{color:inherit;text-decoration:underline;text-underline-offset:3px}
 </style>`;
